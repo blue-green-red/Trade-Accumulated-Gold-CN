@@ -571,12 +571,29 @@ function modelControls(d) {
       c.available === false ? "分析后端暂不可用" : running ? "正在分析 · 串行运行" : queued ? "排队中 · 等待前一个模型完成" : "已开启，按调度分析；重新开启后先获取新判断");
     if (c.daily_cap) message.appendChild(el("div",{},`今日调用 ${c.runs_today || 0} / ${c.daily_cap} 轮 · 其中 ${c.urgent_reserve} 轮预留重大事件`));
     if (c.enabled && c.pending_events) message.appendChild(el("div", {}, `待覆盖 ${c.pending_events} 个新事件 · 冷却期间保留，成功分析后确认`));
+    const manual=c.manual || {}, manualPending=["queued","running"].includes(manual.status);
+    const normalCap=(c.daily_cap || 120)-Math.min((c.daily_cap || 120)-1,c.urgent_reserve || 0);
+    const manualButton=el("button",{class:"chip-btn",type:"button","aria-label":`${c.name} 立即分析并操盘`,
+      disabled:!c.enabled || c.available!==true || manualPending || (c.runs_today || 0)>=normalCap,
+      onclick:async()=>{
+        manualButton.disabled=true;
+        try {
+          const response=await fetch(`/api/models/${c.key}/analyze`,{method:"POST",credentials:"same-origin",
+            headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:"{}"});
+          const result=await response.json();
+          if(!response.ok) throw new Error(result.error || "提交失败 HTTP "+response.status);
+          await load();
+        } catch(error) {message.textContent=error.message;manualButton.disabled=false;}
+      }},manualPending ? (manual.status==="running" ? "手动分析中" : "手动请求已排队") : running || queued ? "排队分析并操盘" : "立即分析并操盘");
+    if(manual.message) message.appendChild(el("div",{},`${manualPending ? "手动请求" : "上次手动"}：${manual.message}`));
     grid.appendChild(el("div", {}, el("div", { class: "row" }, el("strong", { class: "grow" }, c.name),
       el("span", { class: "tag" }, c.enabled ? "已开启" : "已关闭"), button),
+      el("div",{class:"row",style:"margin-top:8px"},manualButton),
       (() => { const m = ((d.comparison || {}).models || []).find((x) => x.key === c.key);
         return m ? el("div", { class: "sub", style: "margin:6px 0" }, `收益 ${pct(m.return)} · 胜率 ${rate(m.win_rate)} · 已平仓 ${m.trades} 次`) : null; })(), message));
   });
   box.appendChild(grid);
+  box.appendChild(el("p",{class:"sub"},"手动触发一次六账户分析并按条件操盘，不保证成交；在下一个监控周期处理，休市或无有效报价时等待。不改变自动分析频率。"));
   return box;
 }
 function renderComparison(d) {

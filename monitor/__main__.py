@@ -79,6 +79,8 @@ class Monitor:
         for name in settings.ai_analysts:
             self.store.set_state(f"ai_status:{name}", {"available": name in self.analysts})
             self.store.set_state(f"ai_runtime:{name}", {"running": False})
+            from .manual_ai import recover
+            recover(self.store.conn,name)
         if self.analysts:
             log.info("AI 独立操盘已启用：%s", "、".join(a.model_label for a in self.analysts.values()))
 
@@ -173,7 +175,13 @@ class Monitor:
             self.start_jin10_triage(snap)
         if self.ai_running():
             return events
-        due = {name: ("手动" if force else a.due()) for name, a in self.enabled_analysts().items()}
+        from .manual_ai import ready,TRIGGER
+        due={}
+        for name,analyst in self.enabled_analysts().items():
+            if force:due[name]="手动"
+            elif ready(self.store.conn,self.settings,name):
+                due[name]=TRIGGER if snap.get("market_open") and execution_quote(snap) else None
+            else:due[name]=analyst.due()
         due = {name: trigger for name, trigger in due.items() if trigger}
         if self.portfolios:
             due = {name:trigger for name,trigger in due.items() if self.store.conn.execute(
@@ -274,18 +282,27 @@ class Monitor:
 
         def run_one(name: str):
             store = Store(self.settings.db_path)      # 每个线程自己的 SQLite 连接
+            manual,result=None,None
             try:
                 if not active(store.conn, name):
                     return name, None
+                from .manual_ai import claim,TRIGGER
+                if due[name]==TRIGGER:
+                    manual=claim(store.conn,name,run_id)
+                    if not manual:return name,None
                 store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
                 model_context = deepcopy(context)
                 if name in portfolio_inputs:
                     model_context["trading_accounts"] = deepcopy(portfolio_inputs[name])
-                return name, self.analysts[name].analyze(model_context, due[name], store=store, run_id=run_id)
+                result=self.analysts[name].analyze(model_context, due[name], store=store, run_id=run_id)
+                return name,result
             except Exception:
                 log.exception("%s 分析线程异常", name)
                 return name, None
             finally:
+                if manual:
+                    from .manual_ai import finish
+                    finish(store.conn,name,manual,result)
                 store.set_state(f"ai_runtime:{name}", {"running": False, "queued": False, "finished_at": utc_now().isoformat()})
                 store.conn.close()
 

@@ -284,13 +284,14 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                     "decision_json":json.dumps({"analyst":identity(r["account"])[0],"version":view.get("_trading_version","autonomous-six-v1"),"view":brief,
                         "order":action,"execution_quote":json.loads(r["quote_json"])})})
             fills.sort(key=lambda f:f["ts"],reverse=True)
+        from .manual_ai import status as manual_status
         controls = []
         for name in settings.ai_analysts:
             if name not in ("claude", "codex"):
                 continue
             status = get_state(conn, f"ai_status:{name}") or {}
             controls.append({"key": name, "name": name.title(), **control(conn, name), **status,
-                             "runtime": get_state(conn, f"ai_runtime:{name}") or {},
+                             "runtime": get_state(conn, f"ai_runtime:{name}") or {}, "manual":manual_status(conn,name),
                              "runs_today": ai_run_usage(conn,name,datetime.now(timezone.utc)), "daily_cap": settings.ai_max_runs_per_day,
                              "urgent_reserve": settings.ai_urgent_reserve, "pending_events": len(read_events(conn, name)["pending"])})
         return {
@@ -461,8 +462,9 @@ class Handler(BaseHTTPRequestHandler):
                 (origin and urlsplit(origin).netloc != self.headers.get("Host"))):
             self._send(403, b"invalid request origin", "text/plain")
             return
-        name = self.path.removeprefix("/api/models/")
-        if self.path != f"/api/models/{name}" or name not in self.settings.ai_analysts or name not in ("claude", "codex"):
+        manual_route=self.path.endswith("/analyze")
+        name = self.path.removeprefix("/api/models/").removesuffix("/analyze")
+        if self.path != f"/api/models/{name}"+("/analyze" if manual_route else "") or name not in self.settings.ai_analysts or name not in ("claude", "codex"):
             self._send(404, b"not found", "text/plain")
             return
         try:
@@ -470,20 +472,24 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0 or length > 1024:
                 raise ValueError("invalid body length")
             data = json.loads(self.rfile.read(length))
-            if not isinstance(data, dict) or set(data) != {"enabled"} or type(data["enabled"]) is not bool:
+            if manual_route and data!={}:raise ValueError("manual request body must be an empty object")
+            if not manual_route and (not isinstance(data, dict) or set(data) != {"enabled"} or type(data["enabled"]) is not bool):
                 raise ValueError("enabled must be boolean")
-            # Only the explicit switch endpoint opens a writable connection.
+            # Explicit, authenticated control endpoints alone open writable connections.
             conn = sqlite3.connect(str(self.settings.db_path), timeout=10)
             try:
-                result = set_enabled(conn, name, data["enabled"])
+                if manual_route:
+                    from .manual_ai import request
+                    result=request(conn,self.settings,name)
+                else:result = set_enabled(conn, name, data["enabled"])
             finally:
                 conn.close()
-            self._send(200, json.dumps(result).encode(), "application/json")
+            self._send(202 if manual_route else 200, json.dumps(result,ensure_ascii=False).encode(), "application/json")
         except (ValueError, json.JSONDecodeError) as exc:
-            self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
+            self._send(getattr(exc,"status",400), json.dumps({"error": str(exc)}).encode(), "application/json")
         except Exception:
-            log.exception("model switch failed")
-            self._send(503, b'{"error":"model switch unavailable"}', "application/json")
+            log.exception("model control failed")
+            self._send(503, b'{"error":"model control unavailable"}', "application/json")
 
     def do_GET(self):
         ip = self.client_address[0]
