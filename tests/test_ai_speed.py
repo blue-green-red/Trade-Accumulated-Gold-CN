@@ -30,9 +30,10 @@ class SpeedTests(unittest.TestCase):
             self.calls.append((cmd,kwargs))
             self.assertNotIn('CLAWX_JR_API_KEY',kwargs['env'])
             out=Path(cmd[cmd.index('-o')+1]);out.write_text(response().model_dump_json())
+            turn=len(self.calls) if 'resume' in cmd else 1
             records=[{'type':'thread.started','thread_id':'11111111-1111-1111-1111-111111111111'},
                 {'type':'item.started','item':{'id':'a','type':'agent_message'}},
-                {'type':'turn.completed','usage':{'input_tokens':1000,'cached_input_tokens':800,'output_tokens':120}}]
+                {'type':'turn.completed','usage':{'input_tokens':1000*turn,'cached_input_tokens':800*turn,'output_tokens':120*turn,'reasoning_output_tokens':20*turn}}]
             stdout='\n'.join(json.dumps(r) for r in records)+'\n'
             kwargs['on_stdout'](stdout)
             return SimpleNamespace(stdout=stdout,stderr='',returncode=0)
@@ -58,6 +59,7 @@ class SpeedTests(unittest.TestCase):
         self.assertIn('resume',b[0]);self.assertIn('11111111-1111-1111-1111-111111111111',b[0]);self.assertNotIn('--last',b[0])
         self.assertIn('-s',b[0]);self.assertIn('read-only',b[0]);self.assertIn('--output-schema',b[0])
         self.assertEqual(second['cached'],800);self.assertEqual(second['input'],1000)
+        self.assertEqual(second['output'],120)  # reasoning is included, not added again
         self.assertEqual(second['performance']['session_turn'],2)
         self.assertIn('previously_provided',b[0][-1])
         self.assertLess(second['performance']['input_chars_after'],second['performance']['input_chars_before'])
