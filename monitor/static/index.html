@@ -647,6 +647,12 @@ function viewBlock(v) {
       `3 日 涨>0.4% ${pc(v.p_up_3d)} · 跌>0.4% ${pc(v.p_down_3d)}　｜　3 个月 涨>4% ${pc(v.p_up_3m)} · 跌>4% ${pc(v.p_down_3m)}`));
   }
   box.appendChild(el("p", { style: "margin:12px 0 0;font-size:14px" }, v.summary));
+  const perf=v._performance;
+  if(perf) box.appendChild(el("details",{class:"more","data-detail-key":"ai-performance:"+v.analyst},el("summary",{},"本轮分析效率"),
+    el("div",{class:"sub"},`总耗时 ${num(perf.wall_seconds,1)} 秒${perf.queue_seconds ? " · 排队 "+num(perf.queue_seconds,1)+" 秒" : ""} · ${perf.mode==="resume" ? "续接第"+perf.session_turn+"轮" : "独立新会话"}`),
+    el("div",{class:"sub"},`输入 ${num(perf.input_tokens,0)} Token · 缓存 ${num(perf.cached_input_tokens,0)}${perf.cached_input_tokens!=null && perf.input_tokens ? "（"+num(100*perf.cached_input_tokens/perf.input_tokens,1)+"%）" : ""} · 输出 ${num(perf.output_tokens,0)} Token`),
+    el("div",{class:"sub"},`上下文 ${num(perf.input_chars_before,0)} → ${num(perf.input_chars_after,0)} 字符 · 补搜 ${perf.searches || 0} 次`),
+    perf.first_event_seconds!=null ? el("div",{class:"sub"},`首个模型事件 ${num(perf.first_event_seconds,1)} 秒（不是首Token）${perf.search_seconds!=null ? " · 搜索事件耗时 "+num(perf.search_seconds,1)+" 秒" : ""}`) : null));
   if (v._completed_at) box.appendChild(el("div", { class: "sub", style: "margin-top:8px" },
     `行情快照 ${fmtTs(v._snapshot_at)} · 开始 ${fmtTs(v._started_at)} · 完成 ${fmtTs(v._completed_at)}`));
   if (v.hard_risk_event) box.appendChild(el("div", { class: "notice warn", style: "margin-top:10px" }, "⚠️ " + v.hard_risk_note));
@@ -1022,6 +1028,7 @@ function renderRecords(d) {
     if(recordKind==="analysis") {const v=r.view || {};return el("li",{},heading(`${label} · ${r.error ? "失败" : "成功"}`),el("div",{class:"sub"},r.trigger || ""),
       el("div",{},r.error ? "失败："+r.error : v.summary || ""),
       el("div",{class:"sub"},r.error ? "" : `短期${BIAS[v.bias_short] || "—"} · 中长期${BIAS[v.bias_long] || "—"}`),
+      v._performance ? el("div",{class:"sub"},`耗时 ${num(v._performance.wall_seconds,1)} 秒 · 输入 ${num(v._performance.input_tokens,0)} / 缓存 ${num(v._performance.cached_input_tokens,0)} / 输出 ${num(v._performance.output_tokens,0)} Token · ${v._performance.mode==="resume" ? "续接第"+v._performance.session_turn+"轮" : "新会话"}`) : null,
       r.outcomes ? el("div",{class:"sub"},Object.entries(r.outcomes).map(([k,o])=>`${k}：${o.status==="done" ? (o.hit ? "命中 " : "未命中 ")+pct(o.ret) : o.status==="pending" ? "待到期" : "缺数据"}`).join(" · ")) : null);}
     return el("li",{},heading(r.title),el("div",{class:"sub"},r.delivered ? "已推送" : "仅记录"));
   });

@@ -84,6 +84,10 @@ class Settings:
     ai_backend: str = os.environ.get("GOLD_AI_BACKEND", "auto")          # Claude 分析师后端：auto / api / claude_code
     ai_analysts: tuple = tuple(s.strip() for s in os.environ.get("GOLD_AI_ANALYSTS", "claude,codex").split(",") if s.strip())
     ai_strategy_source: str = os.environ.get("GOLD_AI_STRATEGY_SOURCE", "claude")   # 策略用谁的判断：claude / codex / consensus
+    ai_optimize: bool = os.environ.get("GOLD_AI_OPTIMIZE", "1") != "0"
+    codex_resume_enabled: bool = os.environ.get("GOLD_CODEX_RESUME", "0") != "0"
+    codex_session_max_turns: int = max(1, int(_env_float("GOLD_CODEX_SESSION_MAX_TURNS", 6)))
+    codex_session_max_minutes: float = _env_float("GOLD_CODEX_SESSION_MAX_MINUTES", 240)
     codex_cli: str = os.environ.get("GOLD_CODEX_CLI", "codex")
     codex_model: str = os.environ.get("GOLD_CODEX_MODEL", "").strip()      # 留空用 Codex 默认模型
     claude_cli: str = os.environ.get("GOLD_CLAUDE_CLI", "claude")
