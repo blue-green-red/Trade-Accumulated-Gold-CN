@@ -311,6 +311,9 @@ class AIAnalyst:
                 return None
             attempt = store.conn.execute("INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status) VALUES(?,?,?,?,?)",
                 (self.analyst,started_at,trigger,run_id,"running")).lastrowid
+            if context.get("trading_accounts"):
+                from .price_guard import register
+                register(store.conn,self.analyst,attempt,context,self.settings)
         usage = {"input": 0, "output": 0, "searches": 0}
         run_clock=time.monotonic()
         self._active_run_id=run_id
@@ -387,6 +390,11 @@ class AIAnalyst:
             store.conn.execute("UPDATE ai_runs SET status='cancelled',completed_at=? WHERE id=?",(utc_now().isoformat(),attempt))
             store.conn.commit()
             return None
+        guard={}
+        if context.get("trading_accounts"):
+            from .price_guard import finish
+            guard=finish(store.conn,self.analyst,attempt)
+            data["_price_guard"]=guard
         view_ts = utc_now().isoformat(timespec="microseconds")
         data["_performance"]=metrics
         data.update({"_snapshot_at": snapshot_at, "_started_at": started_at,
@@ -399,8 +407,11 @@ class AIAnalyst:
              json.dumps(sources, ensure_ascii=False), price, usage["input"], usage["output"], usage["searches"],
              self.analyst, run_id, snapshot_at, started_at, view_ts))
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
-        acknowledge(store.conn, self.analyst, covered_ids)
+        if not guard.get("invalidated_at"):acknowledge(store.conn, self.analyst, covered_ids)
         store.conn.commit()
+        if guard.get("invalidated_at"):
+            from .price_guard import request_refresh
+            request_refresh(store.conn,self.analyst,guard)
         log.info("%s 分析完成（%s）：短期 %s / 中长期 %s，置信 %s，tokens in=%d out=%d，搜索 %d 次",
                  self.display_name, trigger, data["bias_short"], data["bias_long"], data["confidence"],
                  usage["input"], usage["output"], usage["searches"])

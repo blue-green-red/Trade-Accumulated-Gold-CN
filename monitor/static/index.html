@@ -471,7 +471,7 @@ function renderOverview(d) {
   const plans=((d.autonomous || {}).plans || []).filter((p)=>p.status==="pending");
   const fills=d.fills.filter((f)=>f.strategy.includes(":" )).slice(0,4);
   panel.appendChild(card("最新操作与待成交委托",el("button",{class:"link-btn",onclick:()=>showTab("records")},"操盘记录 →"),
-    plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · 等待条件`,el("div",{class:"sub"},`限价 ${num(p.decision.limit_price_cny)} 元/克 · 有效至 ${fmtTs(p.expires_at)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
+    plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · 等待条件`,el("div",{class:"sub"},`限价 ${num(p.decision.limit_price_cny)} 元/克 · ${executionRange(p.decision)} · 有效至 ${fmtTs(p.expires_at)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
     fills.length ? el("ul",{class:"list"},fills.map((f)=>el("li",{},`${d.strategy_names[f.strategy]} · ${f.side==="buy"?"买入":"卖出"} ${num(f.grams,4)} 克 @ ${num(f.price)} 元/克`,el("div",{class:"sub"},`${fmtTs(f.ts)} · ${f.reason}`)))) : el("div",{class:"empty"},"暂无 AI 账户成交")));
   const events=hardEvents(d);
   panel.appendChild(card("近期重要事件",el("button",{class:"link-btn",onclick:()=>showTab("market")},"行情与日历 →"),
@@ -647,6 +647,7 @@ function viewBlock(v) {
       `3 日 涨>0.4% ${pc(v.p_up_3d)} · 跌>0.4% ${pc(v.p_down_3d)}　｜　3 个月 涨>4% ${pc(v.p_up_3m)} · 跌>4% ${pc(v.p_down_3m)}`));
   }
   box.appendChild(el("p", { style: "margin:12px 0 0;font-size:14px" }, v.summary));
+  if(v._price_guard?.invalidated_at) box.appendChild(el("div",{class:"notice warn"},`${v._price_guard.reason}；等待最新快照复查。已有持仓保护继续有效。`));
   const perf=v._performance;
   if(perf) box.appendChild(el("details",{class:"more","data-detail-key":"ai-performance:"+v.analyst},el("summary",{},"本轮分析效率"),
     el("div",{class:"sub"},`总耗时 ${num(perf.wall_seconds,1)} 秒${perf.queue_seconds ? " · 排队 "+num(perf.queue_seconds,1)+" 秒" : ""} · ${perf.mode==="resume" ? "续接第"+perf.session_turn+"轮" : "独立新会话"}`),
@@ -666,6 +667,9 @@ function viewBlock(v) {
   return box;
 }
 const ACCOUNT_LABELS = {short_full:"短线 · 初始满仓",short_empty:"短线 · 初始空仓",medium_full:"中线 · 初始满仓",medium_empty:"中线 · 初始空仓",long_full:"长线 · 初始满仓",long_empty:"长线 · 初始空仓"};
+function executionRange(d) {
+  return d.min_execution_price_cny!=null && d.max_execution_price_cny!=null ? `可接受成交价 ${num(d.min_execution_price_cny)}–${num(d.max_execution_price_cny)} 元/克` : "缺少成交价格区间，买卖委托将被拒绝";
+}
 const TRADE_ACTIONS = {buy:"买入",sell:"卖出",hold:"持有",wait:"观望",cancel:"撤单"};
 const PLAN_STATUS = {pending:"等待条件",executed:"已执行",rejected:"已拒绝",expired:"已到期",cancelled:"已撤销"};
 let accountModel = "active", accountPeriod = "all", accountStart = "all";
@@ -697,6 +701,7 @@ function autonomousAccounts(d) {
         el("div",{class:"sub"},decision.action==="buy"?`金额 ${num(decision.amount_cny)} 元`:decision.action==="sell"?`数量 ${num(decision.grams,4)} 克`:""),
         el("div",{class:"sub"},`${["buy","sell"].includes(decision.action) ? (decision.execution==="limit"?`限价 ${num(decision.limit_price_cny)} 元/克`:"最新京东报价执行") : "已设置的持仓保护继续有效"} · 委托到期 ${fmtTs(plan.expires_at)}`),
         plan.reason?el("div",{class:"sub"},plan.reason):null));
+      if(["buy","sell"].includes(decision.action)) box.appendChild(el("div",{class:"sub"},executionRange(decision)));
       if(decision.invalidation) box.appendChild(el("details",{class:"more"},el("summary",{},"计划失效条件"),el("div",{class:"sub"},decision.invalidation)));
     } else box.appendChild(el("div",{class:"sub",style:"margin-top:10px"},a.started?"等待本模式首次六账户决策":"模型开启、后端可用且京东报价有效后，统一初始化六个账户"));
     grid.appendChild(box);
@@ -1021,6 +1026,7 @@ function renderRecords(d) {
       ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},`${v.execution==="limit" ? "限价 "+num(v.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · 有效至 ${fmtTs(r.expires_at)}`) : null,
       el("div",{class:"sub"},`止损 ${v.clear_stop_loss ? "移除" : v.stop_loss_cny==null ? "保留原设置" : num(v.stop_loss_cny)+" 元/克"} · 止盈 ${v.clear_take_profit ? "移除" : v.take_profit_cny==null ? "保留原设置" : num(v.take_profit_cny)+" 元/克"}`),
       r.reason ? el("div",{class:"sub"},r.reason):null,
+      ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},executionRange(v)) : null,
       el("details",{class:"more","data-detail-key":"plan:"+r.id},el("summary",{},"决策详情"),el("div",{class:"sub"},`判断 #${r.view_id} · 计划 #${r.id}${v.invalidation ? " · 失效条件："+v.invalidation : ""}`)));}
     if(recordKind==="cycles") return el("li",{},heading(`${label} · #${r.id} · ${r.closed_at ? "已平仓" : "持仓中"}`),
       el("div",{class:"sub"},`开仓 ${fmtTs(r.opened_at)}${r.closed_at ? " · 平仓 "+fmtTs(r.closed_at) : ""}`),

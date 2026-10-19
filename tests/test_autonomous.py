@@ -25,7 +25,7 @@ def snapshot(price=1000):
 
 def decisions(**overrides):
     rows={key:dict(horizon=PERIODS[key.split('_')[0]][1],action="hold",execution="market",amount_cny=None,grams=None,
-        limit_price_cny=None,stop_loss_cny=None,take_profit_cny=None,valid_for_minutes=120,reason="独立账户测试",invalidation="市场条件变化") for key in LABELS}
+        limit_price_cny=None,min_execution_price_cny=1,max_execution_price_cny=100000,stop_loss_cny=None,take_profit_cny=None,valid_for_minutes=120,reason="独立账户测试",invalidation="市场条件变化") for key in LABELS}
     for key,values in overrides.items(): rows[key].update(values)
     return rows
 
@@ -39,7 +39,7 @@ def response(**overrides):
 class AutonomousTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
-        self.settings=replace(Settings(),ai_trading_mode="six_account",db_path=Path(self.temp.name)/"test.db",ai_schedule_bj=(),
+        self.settings=replace(Settings(),ai_trading_mode="six_account",db_path=Path(self.temp.name)/"test.db",ai_schedule_bj=(),ai_inflight_max_move_pct=100,
             ai_analysts=("claude","codex"),anthropic_api_key="",claude_cli="missing-claude",codex_cli="missing-codex",clawx_api_key="")
         self.m=Monitor(self.settings,True)
         self.store=self.m.store

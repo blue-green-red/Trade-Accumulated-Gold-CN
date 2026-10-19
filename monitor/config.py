@@ -72,6 +72,7 @@ class Settings:
     ai_review_max_idle_minutes: float = _env_float("GOLD_AI_REVIEW_MAX_IDLE_MINUTES", 240)
     ai_max_runs_per_day: int = int(_env_float("GOLD_AI_MAX_RUNS_PER_DAY", 120))
     ai_urgent_reserve: int = int(_env_float("GOLD_AI_URGENT_RESERVE", 2))
+    ai_inflight_max_move_pct: float = max(0.01, _env_float("GOLD_AI_INFLIGHT_MAX_MOVE_PCT", 0.4))
     ai_decision_max_age_minutes: float = _env_float("GOLD_AI_DECISION_MAX_AGE_MINUTES", 15)
     account_budget: float = _env_float("GOLD_MONITOR_ACCOUNT_BUDGET", 100_000)   # 每个日线策略账户的虚拟本金
     weekly_report_bj: tuple = (5, 10)   # 每周六 10 点推送战绩榜（周几, 小时）
