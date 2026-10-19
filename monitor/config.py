@@ -90,7 +90,7 @@ class Settings:
     ai_effort: str = os.environ.get("GOLD_AI_EFFORT", "").strip()          # 留空用模型默认；low/medium/high/xhigh/max
     ai_max_budget_usd: float = _env_float("GOLD_AI_MAX_BUDGET_USD", 3)   # claude_code 单次调用上限（按官网价折算）
     ai_schedule_bj: tuple = tuple(s.strip() for s in os.environ.get("GOLD_AI_SCHEDULE", "08:40,20:45").split(",") if s.strip())
-    jd_research_max_requests_per_day: int = int(_env_float("GOLD_JD_RESEARCH_MAX_REQUESTS_PER_DAY", 40))
+    jd_research_max_requests_per_day: int = int(_env_float("GOLD_JD_RESEARCH_MAX_REQUESTS_PER_DAY", 10))
     clawx_api_key: str = field(default=os.environ.get("CLAWX_JR_API_KEY", ""), repr=False)
     ai_max_searches: int = int(_env_float("GOLD_AI_MAX_SEARCHES", 2))
     ai_view_max_age_hours: float = _env_float("GOLD_AI_VIEW_MAX_AGE_HOURS", 13)  # 短线用的 AI 判断有效期：覆盖 08:40→20:45 的间隔

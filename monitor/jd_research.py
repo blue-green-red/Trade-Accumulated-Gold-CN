@@ -174,7 +174,7 @@ def _claim(store,kind,endpoint,now,daily_cap):
         return cur.lastrowid
 
 
-def snapshot(store, api_key, now=None, daily_cap=40):
+def snapshot(store, api_key, now=None, daily_cap=10):
     now = now or datetime.now(timezone.utc)
     store.conn.executescript(SCHEMA)
     for kind,endpoint in (("funds","bomb"),("orders","order-book")):
