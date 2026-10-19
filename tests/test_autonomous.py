@@ -162,6 +162,15 @@ class AutonomousTests(unittest.TestCase):
             self.m.portfolios.on_tick(snapshot())
         self.assertEqual(self.plan()['status'],'expired')
         self.assertEqual(self.account('long_empty')['grams'],10)
+        expired_id=self.plan()['id']
+        # Newer unrelated history must not hide an expired order from the overview.
+        for i in range(101):
+            self.store.conn.execute("INSERT INTO ai_plans(account,view_id,generation,created_at,expires_at,decision_json,status,reason) "
+                "SELECT account,?,generation,created_at,expires_at,decision_json,'cancelled','newer history' FROM ai_plans WHERE id=?",(100000+i,expired_id))
+        self.store.conn.commit()
+        result=dashboard(self.settings)['autonomous']
+        self.assertNotIn(expired_id,[p['id'] for p in result['plans']])
+        self.assertIn(expired_id,[p['id'] for p in result['recent_expired']])
 
     def test_stale_input_or_missing_quote_never_executes(self):
         ctx=self.context();ctx['snapshot_at']=(utc_now()-timedelta(minutes=16)).isoformat()

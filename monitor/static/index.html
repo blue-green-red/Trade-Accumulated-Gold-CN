@@ -469,9 +469,14 @@ function renderOverview(d) {
   panel.appendChild(renderMarketSummary(d));
   panel.appendChild(modelSummary(d));
   const plans=((d.autonomous || {}).plans || []).filter((p)=>effectivePlanStatus(p)==="pending");
+  const expiredCandidates=[...((d.autonomous || {}).recent_expired || []),...((d.autonomous || {}).plans || []).filter(p=>effectivePlanStatus(p)==="expired" || (p.status==="executed" && ["hold","wait","cancel"].includes(p.decision?.action) && planPastDeadline(p)))];
+  const expired=[...new Map(expiredCandidates.map(p=>[p.id,p])).values()].sort((a,b)=>new Date(b.expires_at)-new Date(a.expires_at) || b.id-a.id).slice(0,6);
   const fills=d.fills.filter((f)=>f.strategy.includes(":" )).slice(0,4);
   panel.appendChild(card("最新操作与待成交委托",el("button",{class:"link-btn",onclick:()=>showTab("records")},"操盘记录 →"),
-    plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · 等待条件`,el("div",{class:"sub"},`限价 ${num(p.decision.limit_price_cny)} 元/克 · ${executionRange(p.decision)} · 有效至 ${fmtTs(p.expires_at)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
+    el("strong",{class:"sub"},"待成交委托"),
+    plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · ${planStatusLabel(p)}`,el("div",{class:"sub"},`${p.decision.execution==="limit" ? "限价 "+num(p.decision.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · ${executionRange(p.decision)} · ${planValidityText(p)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
+    el("strong",{class:"sub"},"最近到期"),
+    expired.length ? el("ul",{class:"list"},expired.map((p)=>el("li",{},`${d.strategy_names[p.account] || p.account} · ${TRADE_ACTIONS[p.decision.action]} · ${planStatusLabel(p)}`,el("div",{class:"sub"},planValidityText(p))))) : el("div",{class:"sub"},"暂无已到期委托或决策参考"),
     fills.length ? el("ul",{class:"list"},fills.map((f)=>el("li",{},`${d.strategy_names[f.strategy]} · ${f.side==="buy"?"买入":"卖出"} ${num(f.grams,4)} 克 @ ${num(f.price)} 元/克`,el("div",{class:"sub"},`${fmtTs(f.ts)} · ${f.reason}`)))) : el("div",{class:"empty"},"暂无 AI 账户成交")));
   const events=hardEvents(d);
   panel.appendChild(card("近期重要事件",el("button",{class:"link-btn",onclick:()=>showTab("market")},"行情与日历 →"),
@@ -1098,7 +1103,7 @@ function preservePanel(panel,fn) {
 }
 function renderPage(id,force=false) {
   if(!DATA) return;
-  const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.macro?.hard_events_24h],
+  const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
     strategies:[DATA.leaderboard,DATA.equity,DATA.short,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
     ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],

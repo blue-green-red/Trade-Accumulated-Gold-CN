@@ -309,6 +309,11 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "autonomous": {"accounts": portfolio_summaries(conn,settings,price),
                 "plans": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute("SELECT * FROM ai_plans ORDER BY id DESC LIMIT 100")]
                     if portfolios_exist(conn) else [],
+                "recent_expired": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute(
+                    "SELECT * FROM ai_plans WHERE (status='expired' OR (status='pending' AND julianday(expires_at)<=julianday(?)) OR "
+                    "(status='executed' AND json_extract(decision_json,'$.action') IN ('hold','wait','cancel') AND julianday(expires_at)<=julianday(?))) "
+                    "ORDER BY julianday(expires_at) DESC,id DESC LIMIT 6",(datetime.now(timezone.utc).isoformat(),datetime.now(timezone.utc).isoformat()))]
+                    if portfolios_exist(conn) else [],
                 "fills": [dict(r) for r in conn.execute("SELECT * FROM ai_portfolio_fills ORDER BY id DESC LIMIT 200")]
                     if portfolios_exist(conn) else []},
             "prices": price_history(conn),
