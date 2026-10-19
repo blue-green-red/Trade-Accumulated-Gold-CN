@@ -305,7 +305,13 @@ class AutonomousPortfolio:
         if d["action"] in ("hold","wait"):
             c.execute("UPDATE ai_plans SET status='executed',reason='已记录持有/观望及保护价' WHERE id=?",(plan_id,))
 
+    def expire_plans(self):
+        """Expiry is a clock transition; it must not depend on a tradable quote."""
+        with self.store.conn:
+            self.store.conn.execute("UPDATE ai_plans SET status='expired',reason='计划到期' WHERE status='pending' AND julianday(expires_at)<=julianday(?)",(utc_now().isoformat(),))
+
     def on_tick(self, snap):
+        self.expire_plans()
         from .price_guard import observe,request_refresh
         with self.store.conn:
             self.store.conn.execute("BEGIN IMMEDIATE")

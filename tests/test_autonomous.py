@@ -327,4 +327,36 @@ class AutonomousTests(unittest.TestCase):
         self.assertEqual(shared[0],shared[1])
 
 
+    def test_expiry_updates_without_quote_and_keeps_executed_decisions(self):
+        self.publish(short_empty=dict(action='buy',execution='limit',amount_cny=1000,limit_price_cny=990,valid_for_minutes=1),
+                     short_full=dict(stop_loss_cny=950,valid_for_minutes=1))
+        self.m.portfolios.on_tick(snapshot())
+        no_quote=snapshot();no_quote.pop('execution_quote')
+        with patch('monitor.autonomous.utc_now',return_value=utc_now()+timedelta(minutes=2)):
+            self.m.portfolios.on_tick(no_quote)
+        self.assertEqual(self.plan()['status'],'expired')
+        self.assertEqual(self.plan('short_full')['status'],'executed')
+        self.assertEqual(self.account('short_full')['stop_price'],950)
+        self.assertEqual(self.account('short_full')['grams'],100)
+
+    def test_expiry_updates_during_closed_market(self):
+        self.publish(short_empty=dict(action='buy',execution='limit',amount_cny=1000,limit_price_cny=990,valid_for_minutes=1))
+        self.m.portfolios.on_tick(snapshot())
+        closed=snapshot();closed['market_open']=False
+        with patch('monitor.autonomous.utc_now',return_value=utc_now()+timedelta(minutes=2)):
+            self.m.portfolios.on_tick(closed)
+        self.assertEqual(self.plan()['status'],'expired')
+        self.assertEqual(self.account()['cash'],100000)
+
+    def test_monitor_expires_before_all_market_sources_fail(self):
+        self.publish(short_empty=dict(action='buy',execution='limit',amount_cny=1000,limit_price_cny=990,valid_for_minutes=1))
+        self.m.portfolios.on_tick(snapshot())
+        self.m.market.refresh_fx_if_due=Mock()
+        self.m.market.snapshot=Mock(return_value={'xauusd':None,'errors':['offline']})
+        self.m.weekly_report_if_due=Mock(return_value=[])
+        with patch('monitor.autonomous.utc_now',return_value=utc_now()+timedelta(minutes=2)):
+            self.m.tick()
+        self.assertEqual(self.plan()['status'],'expired')
+
+
 if __name__=='__main__':unittest.main()

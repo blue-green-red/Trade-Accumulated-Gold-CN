@@ -440,6 +440,7 @@ class Monitor:
 
     def tick(self, force_bank: bool = False, force_ai: bool = False):
         events: List[Dict[str, str]] = []
+        if self.portfolios:self.portfolios.expire_plans()
         self.market.refresh_fx_if_due()
         snap = self.market.snapshot()
         if snap.get("xauusd") is None:

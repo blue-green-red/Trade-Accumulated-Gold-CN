@@ -468,7 +468,7 @@ function renderOverview(d) {
   const panel=clear(document.getElementById("panel-overview"));
   panel.appendChild(renderMarketSummary(d));
   panel.appendChild(modelSummary(d));
-  const plans=((d.autonomous || {}).plans || []).filter((p)=>p.status==="pending");
+  const plans=((d.autonomous || {}).plans || []).filter((p)=>effectivePlanStatus(p)==="pending");
   const fills=d.fills.filter((f)=>f.strategy.includes(":" )).slice(0,4);
   panel.appendChild(card("最新操作与待成交委托",el("button",{class:"link-btn",onclick:()=>showTab("records")},"操盘记录 →"),
     plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · 等待条件`,el("div",{class:"sub"},`限价 ${num(p.decision.limit_price_cny)} 元/克 · ${executionRange(p.decision)} · 有效至 ${fmtTs(p.expires_at)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
@@ -689,6 +689,17 @@ function executionRange(d) {
 }
 const TRADE_ACTIONS = {buy:"买入",sell:"卖出",hold:"持有",wait:"观望",cancel:"撤单"};
 const PLAN_STATUS = {pending:"等待条件",executed:"已执行",rejected:"已拒绝",expired:"已到期",cancelled:"已撤销"};
+function planPastDeadline(plan) {return !!plan?.expires_at && new Date(plan.expires_at).getTime()<=Date.now();}
+function effectivePlanStatus(plan) {return plan.status==="pending" && planPastDeadline(plan) ? "expired" : plan.status;}
+function planStatusLabel(plan) {const status=effectivePlanStatus(plan);return PLAN_STATUS[status] || status;}
+function planValidityText(plan) {
+  const action=plan.decision?.action, deadline=fmtTs(plan.expires_at), status=effectivePlanStatus(plan);
+  if(["hold","wait","cancel"].includes(action) && status==="executed")
+    return `决策参考${planPastDeadline(plan)?"已到期":"有效"} · 截止 ${deadline} · 持仓保护不随参考有效期撤销`;
+  if(status==="expired") return `委托已到期，不再执行 · 截止 ${deadline}`;
+  return `${status==="pending" ? "委托有效至" : "原有效至"} ${deadline}`;
+}
+
 let accountModel = "active", accountPeriod = "all", accountStart = "all";
 function autonomousAccounts(d) {
   if (accountModel === "active") accountModel = ((d.model_controls || []).find(c=>c.enabled) || {}).key || "all";
@@ -713,10 +724,10 @@ function autonomousAccounts(d) {
     if(a.started && a.grams > 0 && a.stop_price == null) box.appendChild(el("div",{class:"notice warn",style:"margin-top:8px"},"未设置止损：程序不会按固定亏损比例自动平仓"));
     if(decision) {
       box.appendChild(el("div",{class:`notice ${plan.status==="rejected"?"warn":"info"}`,style:"margin-top:10px"},
-        el("strong",{},`${TRADE_ACTIONS[decision.action]} · ${PLAN_STATUS[plan.status] || plan.status}`),
+        el("strong",{},`${TRADE_ACTIONS[decision.action]} · ${planStatusLabel(plan)}`),
         el("div",{style:"font-size:13px;margin-top:4px"},decision.reason),
         el("div",{class:"sub"},decision.action==="buy"?`金额 ${num(decision.amount_cny)} 元`:decision.action==="sell"?`数量 ${num(decision.grams,4)} 克`:""),
-        el("div",{class:"sub"},`${["buy","sell"].includes(decision.action) ? (decision.execution==="limit"?`限价 ${num(decision.limit_price_cny)} 元/克`:"最新京东报价执行") : "已设置的持仓保护继续有效"} · 委托到期 ${fmtTs(plan.expires_at)}`),
+        el("div",{class:"sub"},`${["buy","sell"].includes(decision.action) ? (decision.execution==="limit"?`限价 ${num(decision.limit_price_cny)} 元/克`:"最新京东报价执行") : "已设置的持仓保护继续有效"} · ${planValidityText(plan)}`),
         plan.reason?el("div",{class:"sub"},plan.reason):null));
       if(["buy","sell"].includes(decision.action)) box.appendChild(el("div",{class:"sub"},executionRange(decision)));
       if(decision.invalidation) box.appendChild(el("details",{class:"more"},el("summary",{},"计划失效条件"),el("div",{class:"sub"},decision.invalidation)));
@@ -1038,9 +1049,10 @@ function renderRecords(d) {
     if(recordKind==="fills") return el("li",{},heading(`${label} · ${r.side==="buy" ? "买入" : "卖出"} ${num(r.grams,4)} 克 @ ${num(r.price)} 元/克`),
       el("div",{class:"sub"},`成交金额 ${num(r.grams*r.price)} 元 · 手续费 ${num(r.fee)} 元${r.side==="sell" && r.pnl != null ? " · 已实现盈亏 "+signed(r.pnl)+" 元" : ""}`),
       el("div",{},r.reason),decisionDetails(r.decision));
-    if(recordKind==="plans") {const v=r.decision;return el("li",{},heading(`${label} · ${TRADE_ACTIONS[v.action]} · ${PLAN_STATUS[r.status] || r.status}`),
+    if(recordKind==="plans") {const v=r.decision;return el("li",{},heading(`${label} · ${TRADE_ACTIONS[v.action]} · ${planStatusLabel(r)}`),
       el("div",{},v.reason),el("div",{class:"sub"},v.action==="buy" ? `买入金额 ${num(v.amount_cny)} 元` : v.action==="sell" ? `卖出 ${num(v.grams,4)} 克` : ""),
-      ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},`${v.execution==="limit" ? "限价 "+num(v.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · 有效至 ${fmtTs(r.expires_at)}`) : null,
+      ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},`${v.execution==="limit" ? "限价 "+num(v.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · ${planValidityText(r)}`) : null,
+      !["buy","sell"].includes(v.action) ? el("div",{class:"sub"},planValidityText(r)) : null,
       el("div",{class:"sub"},`止损 ${v.clear_stop_loss ? "移除" : v.stop_loss_cny==null ? "保留原设置" : num(v.stop_loss_cny)+" 元/克"} · 止盈 ${v.clear_take_profit ? "移除" : v.take_profit_cny==null ? "保留原设置" : num(v.take_profit_cny)+" 元/克"}`),
       r.reason ? el("div",{class:"sub"},r.reason):null,
       ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},executionRange(v)) : null,
@@ -1091,7 +1103,8 @@ function renderPage(id,force=false) {
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
     ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
     market:[DATA.snapshot,DATA.execution,DATA.macro,DATA.jd_research,DATA.jin10,DATA.prices],records:[DATA.strategy_names]};
-  const signature=JSON.stringify(dependencies[id]);
+  const expiryPlans=[...(DATA.autonomous?.accounts || []).map(a=>a.plan).filter(Boolean),...(DATA.autonomous?.plans || []),...(id==="records" && recordKind==="plans" ? historyItems : [])];
+  const signature=JSON.stringify([dependencies[id],["ai","overview","records","strategies"].includes(id) ? expiryPlans.map(p=>[p.id,planPastDeadline(p)]) : null]);
   if(force || panelSignatures.get(id)!==signature) {
     const fn={overview:renderOverview,strategies:renderStrategies,compare:renderComparison,ai:renderAI,market:renderMarket,records:renderRecords}[id];
     preservePanel(document.getElementById("panel-"+id),()=>fn(DATA));panelSignatures.set(id,signature);
