@@ -675,6 +675,7 @@ function viewBlock(v) {
     el("div",{class:"sub"},`总耗时 ${num(perf.wall_seconds,1)} 秒${perf.queue_seconds ? " · 排队 "+num(perf.queue_seconds,1)+" 秒" : ""} · ${perf.mode==="resume" ? "续接第"+perf.session_turn+"轮" : "独立新会话"}`),
     el("div",{class:"sub"},`输入 ${num(perf.input_tokens,0)} Token · 缓存 ${num(perf.cached_input_tokens,0)}${perf.cached_input_tokens!=null && perf.input_tokens ? "（"+num(100*perf.cached_input_tokens/perf.input_tokens,1)+"%）" : ""} · 输出 ${num(perf.output_tokens,0)} Token`),
     el("div",{class:"sub"},`上下文 ${num(perf.input_chars_before,0)} → ${num(perf.input_chars_after,0)} 字符 · 补搜 ${perf.searches || 0} 次`),
+    perf.history_queries!=null ? el("div",{class:"sub"},`账户历史查询 ${perf.history_queries} 次 · 返回 ${perf.history_rows || 0} 条记录`) : null,
     perf.first_event_seconds!=null ? el("div",{class:"sub"},`首个模型事件 ${num(perf.first_event_seconds,1)} 秒（不是首Token）${perf.search_seconds!=null ? " · 搜索事件耗时 "+num(perf.search_seconds,1)+" 秒" : ""}`) : null));
   if (v._completed_at) box.appendChild(el("div", { class: "sub", style: "margin-top:8px" },
     `行情快照 ${fmtTs(v._snapshot_at)} · 开始 ${fmtTs(v._started_at)} · 完成 ${fmtTs(v._completed_at)}`));

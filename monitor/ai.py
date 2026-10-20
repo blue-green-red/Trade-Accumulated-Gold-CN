@@ -338,6 +338,8 @@ class AIAnalyst:
             if context.get("trading_accounts"):
                 PortfolioDecisions.model_validate(view.model_dump()["account_decisions"])
         except Exception as exc:
+            from .history_access import archive
+            archive(store,run_id,self.analyst,usage)
             usage.setdefault("performance",{})["wall_seconds"]=round(time.monotonic()-run_clock,3)
             store.conn.execute("UPDATE ai_runs SET metrics_json=? WHERE id=?",(json.dumps({**usage.get("performance",{}),"input_tokens":usage["input"],"cached_input_tokens":usage.get("cached"),"output_tokens":usage["output"],"searches":usage["searches"]}),attempt))
             if not active(store.conn, self.analyst, self._generation):
@@ -355,6 +357,8 @@ class AIAnalyst:
             store.conn.commit()
             return None
 
+        from .history_access import archive
+        archive(store,run_id,self.analyst,usage)
         metrics={**usage.get("performance",{}),"wall_seconds":round(time.monotonic()-run_clock,3),
             "input_tokens":usage["input"],"cached_input_tokens":usage.get("cached"),"output_tokens":usage["output"],"searches":usage["searches"]}
         store.conn.execute("UPDATE ai_runs SET metrics_json=? WHERE id=?",(json.dumps(metrics),attempt))
@@ -508,21 +512,23 @@ class AIAnalyst:
 
     def research_system(self):
         if self.settings.ai_max_searches <= 0:
-            policy = "本轮禁止联网搜索或抓取网页，仅允许结构化提交工具；只根据共同上下文独立判断；缺失数据注明未知并降低置信度。"
+            policy = "本轮禁止联网搜索或抓取网页，仅允许结构化提交及只读账户历史查询工具；只根据共同上下文独立判断；缺失数据注明未知并降低置信度。"
         else:
             policy = f"本轮最多搜索 {self.settings.ai_max_searches} 次，仅补充上下文缺失的事实；数据缺失、过期或出现重大突发事件线索时优先核实。优先官方/一手来源，保留发布日期与网址；无新增可靠信息时停止搜索，不必用满次数。"
         return RESEARCH_SYSTEM + "\n" + policy
 
     def result_instructions(self):
         if self.settings.ai_optimize:
-            return "按 JSON schema 输出全部字段和六账户决策。不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；持有/观望理由一句话，不超过60字；买卖理由不超过120字。不复述六账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
+            return "按 JSON schema 输出全部字段和六账户决策。只允许通过专用账户历史工具按需查历史；不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；持有/观望理由一句话，不超过60字；买卖理由不超过120字。不复述六账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
         return "按给定 JSON schema 输出；research_notes 最多 1000 字，sources 仅列实际引用来源，不编造网址。"
 
     def result_type(self, context):
         return AutonomousResult if context.get("trading_accounts") else ClaudeCodeResult
 
     def trading_system(self, context):
-        return ("\n\n" + TRADING_PROMPT) if context.get("trading_accounts") else ""
+        if not context.get("trading_accounts"):return ""
+        from .history_access import instructions
+        return "\n\n"+TRADING_PROMPT+(instructions(self.settings) if self.settings.ai_history_max_queries>0 else "")
 
     def _run_codex(self, context: Dict[str, Any], usage: Dict[str, int]):
         from .codex_runtime import run
@@ -551,7 +557,11 @@ class AIAnalyst:
             cmd += ["--effort", self.settings.ai_effort]
         env = {k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"}
         env.setdefault("HOME", os.path.expanduser("~"))   # systemd 下也要能找到 Claude Code 的登录凭据
-        with tempfile.TemporaryDirectory(prefix="gold-ai-") as workdir:   # 空目录：读不到项目文件与 CLAUDE.md
+        from .history_access import session as history_session,CLAUDE_NAME
+        with tempfile.TemporaryDirectory(prefix="gold-ai-") as workdir, history_session(self,context,usage) as history:
+            if history:
+                cmd+=['--mcp-config',json.dumps(history['claude'])]
+                cmd.insert(cmd.index('--disallowedTools'),CLAUDE_NAME)
             proc = self._run_process(cmd, cwd=workdir, env=env, capture_output=True, text=True,
                                   timeout=CLAUDE_CODE_TIMEOUT_SECONDS)
         try:
@@ -589,25 +599,36 @@ class AIAnalyst:
             usage["searches"] += getattr(stu, "web_search_requests", 0) or 0
 
     def _run_api_autonomous(self, context, usage):
-        """一个会话包含六账户；最终结构化工具仅返回决策，不执行交易。"""
-        system = self.research_system() + "\n" + STRUCTURE_SYSTEM + "\n" + TRADING_PROMPT + "\n最终必须调用 submit_portfolio_decisions 提交六个账户的决策。"
-        user = json.dumps(context, ensure_ascii=False, separators=(",", ":"))
-        messages = [{"role": "user", "content": user}]
-        tools = [{"name": "submit_portfolio_decisions", "description": "返回完整研究和六账户操作，由程序校验执行",
-                  "input_schema": strict_schema(AutonomousResult.model_json_schema())}]
-        if self.settings.ai_max_searches > 0:
-            tools.append({"type": "web_search_20260209", "name": "web_search", "max_uses": self.settings.ai_max_searches})
-        for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
-            self._check_active()
-            response = self._create(max_tokens=6000, system=system, messages=messages, tools=tools)
-            self._add_usage(usage, response)
-            for block in response.content:
-                if block.type == "tool_use" and block.name == "submit_portfolio_decisions":
-                    parsed = AutonomousResult.model_validate(block.input)
-                    return parsed.research_notes, [s.model_dump() for s in parsed.sources], parsed
-            if response.stop_reason != "pause_turn":
-                break
-            messages.append({"role": "assistant", "content": response.content})
+        """History tool calls remain in one conversation before the final six-account submission."""
+        from .history_access import session as history_session
+        from .history_tool import NAME,DESCRIPTION,SCHEMA
+        system=self.research_system()+"\n"+STRUCTURE_SYSTEM+self.trading_system(context)+"\n"+self.result_instructions()+"\n最终必须调用 submit_portfolio_decisions 提交六个账户的决策。先读取历史工具结果，再单独提交，不要在同一响应中同时查历史和提交。"
+        messages=[{"role":"user","content":json.dumps(context,ensure_ascii=False,separators=(",",":"))}]
+        tools=[{"name":"submit_portfolio_decisions","description":"返回完整研究和六账户操作，由程序校验执行","input_schema":strict_schema(AutonomousResult.model_json_schema())}]
+        if self.settings.ai_max_searches>0:tools.append({"type":"web_search_20260209","name":"web_search","max_uses":self.settings.ai_max_searches})
+        with history_session(self,context,usage) as history:
+            if history:tools.append({"name":NAME,"description":DESCRIPTION,"input_schema":SCHEMA})
+            pauses=0
+            for _ in range(MAX_PAUSE_CONTINUATIONS+self.settings.ai_history_max_queries+2):
+                self._check_active()
+                response=self._create(max_tokens=6000,system=system,messages=messages,tools=tools)
+                self._add_usage(usage,response)
+                calls=[b for b in response.content if b.type=='tool_use']
+                if len(calls)==1 and calls[0].name=='submit_portfolio_decisions':
+                    parsed=AutonomousResult.model_validate(calls[0].input)
+                    return parsed.research_notes,[s.model_dump() for s in parsed.sources],parsed
+                results=[]
+                for block in calls:
+                    if block.name==NAME and history:
+                        result=history['reader'].call(block.input)
+                    else:result={'error':'请先读取历史查询结果，再单独调用submit_portfolio_decisions提交'}
+                    results.append({'type':'tool_result','tool_use_id':block.id,'content':json.dumps(result,ensure_ascii=False,separators=(",",":")),'is_error':'error' in result})
+                if results:
+                    messages.append({'role':'assistant','content':response.content})
+                    messages.append({'role':'user','content':results})
+                elif response.stop_reason=='pause_turn' and pauses<MAX_PAUSE_CONTINUATIONS:
+                    pauses+=1;messages.append({'role':'assistant','content':response.content})
+                else:break
         raise RuntimeError("API 未提交完整六账户决策")
 
     def _research(self, context: Dict[str, Any], usage: Dict[str, int]):

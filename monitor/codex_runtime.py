@@ -142,7 +142,7 @@ def run_locked(analyst,context,usage):
             generation=control(conn,name)['generation'];previous=read_state(conn,key)
     schema=strict_schema(analyst.result_type(context).model_json_schema())
     system=analyst.research_system()+'\n\n'+STRUCTURE_SYSTEM+analyst.trading_system(context)+'\n\n'+analyst.result_instructions()
-    fingerprint=hashlib.sha256(dumps([system,schema,analyst.model,settings.ai_max_searches]).encode()).hexdigest()
+    fingerprint=hashlib.sha256(dumps([system,schema,analyst.model,settings.ai_max_searches,settings.ai_history_max_queries]).encode()).hexdigest()
     session,reset=choose_session(previous,fingerprint,generation,settings,now) if persistent else (None,'disabled')
     if session and not isinstance(session.get('usage_totals'),dict):session,reset=None,'usage_state_missing'
     packed=compact_context(context) if optimized else context
@@ -167,17 +167,20 @@ def run_locked(analyst,context,usage):
             out_path.unlink(missing_ok=True)  # never parse the previous round's output
             cmd=[settings.codex_cli,*(['--search'] if settings.ai_max_searches>0 else []),'exec',
                  '-s','read-only','--ignore-user-config','--ignore-rules','--color','never','-C',str(work)]
+            from .history_access import session as history_session
             if analyst.model:cmd+=['-m',analyst.model]
             if settings.ai_max_searches<=0:cmd+=['-c','web_search="disabled"']
             if session:cmd+=['resume']
             cmd+=['--json','--skip-git-repo-check','--output-schema',str(schema_path),'-o',str(out_path)]
             if not persistent:cmd+=['--ephemeral']
-            if session:cmd+=[session['id']]
-            cmd.append(prompt)
-            env={k:v for k,v in os.environ.items() if k!='CLAWX_JR_API_KEY'}
-            env.setdefault('HOME',os.path.expanduser('~'))
-            proc=analyst._run_process(cmd,cwd=str(work),env=env,stdin=subprocess.DEVNULL,
-                capture_output=True,text=True,timeout=CODEX_TIMEOUT_SECONDS,on_stdout=events.feed)
+            with history_session(analyst,context,usage) as history:
+                if history:cmd+=history['codex']
+                if session:cmd+=[session['id']]
+                cmd.append(prompt)
+                env={k:v for k,v in os.environ.items() if k!='CLAWX_JR_API_KEY'}
+                env.setdefault('HOME',os.path.expanduser('~'))
+                proc=analyst._run_process(cmd,cwd=str(work),env=env,stdin=subprocess.DEVNULL,
+                    capture_output=True,text=True,timeout=CODEX_TIMEOUT_SECONDS,on_stdout=events.feed)
             events.feed(proc.stdout,final=True)
             if proc.returncode!=0 or not out_path.exists():raise RuntimeError(f'Codex exit {proc.returncode}: no valid final output')
             parsed=analyst.result_type(context).model_validate_json(out_path.read_text())
