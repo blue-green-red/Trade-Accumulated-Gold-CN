@@ -232,6 +232,9 @@ td.wrap, th.wrap { white-space: normal; text-align: left; }
 @media(max-width:800px) { .market-quotes,.macro-quotes { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:450px) { .quote-tile { padding:12px; } .quote-value { font-size:22px; } .event-row { grid-template-columns:76px minmax(0,1fr); gap:8px; } }
 .record-controls { position:sticky;top:60px;z-index:5; background:var(--surface); }
+.trade-section{margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
+.trade-heading{flex-wrap:wrap;gap:8px}.trade-heading strong{min-width:150px;overflow-wrap:anywhere}
+.trade-amount{font-size:16px;font-weight:650;margin:7px 0}.trade-record{overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -494,13 +497,16 @@ function renderOverview(d) {
   const plans=((d.autonomous || {}).plans || []).filter((p)=>effectivePlanStatus(p)==="pending");
   const expiredCandidates=[...((d.autonomous || {}).recent_expired || []),...((d.autonomous || {}).plans || []).filter(p=>effectivePlanStatus(p)==="expired" || (p.status==="executed" && ["hold","wait","cancel"].includes(p.decision?.action) && planPastDeadline(p)))];
   const expired=[...new Map(expiredCandidates.map(p=>[p.id,p])).values()].sort((a,b)=>new Date(b.expires_at)-new Date(a.expires_at) || b.id-a.id).slice(0,6);
-  const fills=d.fills.filter((f)=>f.strategy.includes(":" )).slice(0,4);
-  panel.appendChild(card("最新操作与待成交委托",el("button",{class:"link-btn",onclick:()=>showTab("records")},"操盘记录 →"),
-    el("strong",{class:"sub"},"待成交委托"),
-    plans.length ? el("ul",{class:"list"},plans.slice(0,6).map((p)=>el("li",{},`${d.strategy_names[p.account]} · ${TRADE_ACTIONS[p.decision.action]} · ${planStatusLabel(p)}`,el("div",{class:"sub"},`${p.decision.execution==="limit" ? "限价 "+num(p.decision.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · ${executionRange(p.decision)} · ${planValidityText(p)}`)))) : el("div",{class:"sub"},"暂无待成交委托"),
-    el("strong",{class:"sub"},"最近到期"),
-    expired.length ? el("ul",{class:"list"},expired.map((p)=>el("li",{},`${d.strategy_names[p.account] || p.account} · ${TRADE_ACTIONS[p.decision.action]} · ${planStatusLabel(p)}`,el("div",{class:"sub"},planValidityText(p))))) : el("div",{class:"sub"},"暂无已到期委托或决策参考"),
-    fills.length ? el("ul",{class:"list"},fills.map((f)=>el("li",{},`${d.strategy_names[f.strategy]} · ${f.side==="buy"?"买入":"卖出"} ${num(f.grams,4)} 克 @ ${num(f.price)} 元/克`,el("div",{class:"sub"},`${fmtTs(f.ts)} · ${f.reason}`)))) : el("div",{class:"empty"},"暂无 AI 账户成交")));
+  const fills=d.fills.filter((f)=>f.strategy.includes(":" ) && !(f.reason || "").startsWith("实验初始化")).slice(0,4).map(f=>({...f,pnl:(d.autonomous?.fills || []).find(x=>x.account===f.strategy && x.ts===f.ts)?.pnl}));
+  const openRecords=(kind)=>{recordKind=kind;recordModel="all";recordDays="all";fillFilter="all";resetHistory();showTab("records");};
+  const section=(title,count,kind,...children)=>el("section",{class:"trade-section"},el("div",{class:"row"},el("strong",{class:"grow"},`${title} · ${count}`),el("button",{class:"link-btn",onclick:()=>openRecords(kind)},"查看记录 →")),...children);
+  panel.appendChild(card("最新操作与待成交委托",null,
+    el("div",{class:"sub"},"实际成交会改变资产；委托只是交易计划，持有与观望不会产生买卖。"),
+    section("最近实际成交",fills.length,"fills",fills.length ? el("ul",{class:"list"},fills.map(f=>fillRecord(f,d))) : el("div",{class:"empty"},"暂无 AI 账户成交")),
+    section("待成交委托",plans.length,"plans",plans.length ? el("ul",{class:"list"},plans.slice(0,6).map(p=>planRecord(p,d))) : el("div",{class:"sub"},"暂无待成交委托，当前没有等待执行的买卖计划。")),
+    el("details",{class:"more","data-detail-key":"overview-expired"},el("summary",{},`最近到期 · ${expired.length} 条（展开查看）`),
+      el("div",{class:"sub"},"委托到期后不再成交；持有、观望的参考到期不会卖出持仓。"),
+      expired.length ? el("ul",{class:"list"},expired.map(p=>planRecord(p,d))) : el("div",{class:"sub"},"暂无已到期委托或决策参考"))));
   const events=hardEvents(d);
   panel.appendChild(card("近期重要事件",el("button",{class:"link-btn",onclick:()=>showTab("market")},"行情与日历 →"),
     events.length ? el("ul",{class:"list"},events.map((v)=>el("li",{},v))) : el("div",{class:"sub"},"未来24小时暂无已识别重大事件")));
@@ -750,7 +756,34 @@ const TRADE_ACTIONS = {buy:"买入",sell:"卖出",hold:"持有",wait:"观望",ca
 const PLAN_STATUS = {pending:"等待条件",executed:"已执行",rejected:"已拒绝",expired:"已到期",cancelled:"已撤销"};
 function planPastDeadline(plan) {return !!plan?.expires_at && new Date(plan.expires_at).getTime()<=Date.now();}
 function effectivePlanStatus(plan) {return plan.status==="pending" && planPastDeadline(plan) ? "expired" : plan.status;}
-function planStatusLabel(plan) {const status=effectivePlanStatus(plan);return PLAN_STATUS[status] || status;}
+function planStatusLabel(plan) {
+  const status=effectivePlanStatus(plan),action=plan.decision?.action;
+  if(status==="executed" && ["hold","wait","cancel"].includes(action))return action==="cancel" ? "撤单指令已处理（无成交）" : planPastDeadline(plan) ? "参考已到期（无成交）" : "已记录（无成交）";
+  return ({pending:"待成交",executed:"已成交",rejected:"已拒绝（未成交）",expired:"已到期（未成交）",cancelled:"已撤销（未成交）"})[status] || status;
+}
+function fillRecord(r,d) {
+  const key=r.account || r.strategy,initial=(r.reason || "").startsWith("实验初始化"),label=d.strategy_names[key] || key;
+  return el("li",{class:"trade-record"},el("div",{class:"row trade-heading"},el("strong",{class:"grow"},label),el("span",{class:"tag"},initial ? "初始化建仓" : r.side==="buy" ? "买入已成交" : "卖出已成交")),
+    el("div",{class:"trade-amount"},`${num(r.grams,4)} 克 × ${num(r.price)} 元/克`),
+    el("div",{class:"sub"},`成交时间 ${fmtTs(r.stamp || r.ts)}`),
+    el("div",{class:"sub"},`成交金额 ${num(r.grams*r.price)} 元 · 手续费 ${num(r.fee)} 元${r.side==="sell" && r.pnl!=null ? " · 本笔已实现盈亏 "+signed(r.pnl)+" 元" : ""}`),
+    el("div",{class:"sub"},initial ? `${r.reason} · 用于建立满仓起点，不是 AI 主动买入。` : r.reason || ""),
+    r.decision ? decisionDetails(r.decision):null);
+}
+function planRecord(r,d) {
+  const v=r.decision || {},trade=["buy","sell"].includes(v.action),status=effectivePlanStatus(r),label=d.strategy_names[r.account] || r.account;
+  const amount=v.action==="buy" ? `计划买入 ${num(v.amount_cny)} 元` : v.action==="sell" ? `计划卖出 ${num(v.grams,4)} 克` : "不产生买卖成交";
+  return el("li",{class:"trade-record"},el("div",{class:"row trade-heading"},el("strong",{class:"grow"},label),el("span",{class:"tag"},`${TRADE_ACTIONS[v.action] || v.action} · ${planStatusLabel(r)}`)),
+    el("div",{class:"trade-amount"},amount),
+    el("div",{class:"sub"},`决策时间 ${fmtTs(r.stamp || r.created_at)}`),
+    trade ? el("div",{class:"sub"},`${v.execution==="limit" ? "委托限价 "+num(v.limit_price_cny)+" 元/克" : "市价委托，以实际成交报价为准"} · ${executionRange(v)}`):null,
+    el("div",{class:"sub"},planValidityText(r)),
+    el("div",{},v.reason || "未提供决策理由"),
+    status!=="pending" && r.reason ? el("div",{class:"sub"},`处理结果：${r.reason}`):null,
+    el("details",{class:"more","data-detail-key":"plan:"+r.id},el("summary",{},"保护设置与决策详情"),
+      el("div",{class:"sub"},`止损 ${v.clear_stop_loss ? "移除" : v.stop_loss_cny==null ? "保留原设置" : num(v.stop_loss_cny)+" 元/克"} · 止盈 ${v.clear_take_profit ? "移除" : v.take_profit_cny==null ? "保留原设置" : num(v.take_profit_cny)+" 元/克"}`),
+      el("div",{class:"sub"},`判断 #${r.view_id} · 计划 #${r.id}${v.invalidation ? " · 失效条件："+v.invalidation : ""}`)));
+}
 function planValidityText(plan) {
   const action=plan.decision?.action, deadline=fmtTs(plan.expires_at), status=effectivePlanStatus(plan);
   if(["hold","wait","cancel"].includes(action) && status==="executed")
@@ -1095,27 +1128,20 @@ function renderRecords(d) {
   const keys=Object.entries(d.strategy_names).filter(([k])=>recordModel==="all" || (recordModel==="rules" ? !k.includes(":") : k.startsWith(recordModel+":")));
   const controls=card("筛选交易记录",null,
     el("div",{class:"chips"},kinds.map(([v,t])=>el("button",{class:"filter-btn",type:"button","aria-pressed":String(recordKind===v),onclick:()=>{recordKind=v;fillFilter="all";resetHistory();}},t))),
-    el("div",{class:"row",style:"flex-wrap:wrap;position:relative"},
+    el("div",{class:"asset-filters"},
       chooser("筛选模型",[["all","全部模型"],["claude","Claude"],["codex","Codex"],["rules","对照账户"]],recordModel,(v)=>{recordModel=v;fillFilter="all";}),
       chooser("筛选时间",[["all","全部历史"],["1","最近24小时"],["7","最近7天"],["30","最近30天"]],recordDays,(v)=>recordDays=v),
       !["analysis","alerts"].includes(recordKind) ? chooser("筛选账户",[["all","全部账户"],...keys],fillFilter,(v)=>fillFilter=v) : null));
   controls.classList.add("record-controls");panel.appendChild(controls);
   const title=({fills:"实际成交",plans:"AI 操盘决策",cycles:"交易周期",analysis:"分析历史",alerts:"系统提醒"})[recordKind];
+  const descriptions={fills:"按成交时间倒序。这里才是实际发生的买卖；初始化建仓单独标注。",plans:"按决策时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮可以包含六个账户决策，不代表已经成交。",alerts:"系统监控提醒，不代表 AI 已下单。"};
+  panel.appendChild(el("div",{class:"notice info"},descriptions[recordKind]));
   const items=historyItems;
   const list=items.map((r)=>{
     const label=d.strategy_names[r.account] || ANALYST[r.account] || r.account;
     const heading=(text)=>el("div",{class:"row",style:"flex-wrap:wrap"},el("strong",{class:"grow"},text),el("span",{class:"sub"},fmtTs(r.stamp)));
-    if(recordKind==="fills") return el("li",{},heading(`${label} · ${r.side==="buy" ? "买入" : "卖出"} ${num(r.grams,4)} 克 @ ${num(r.price)} 元/克`),
-      el("div",{class:"sub"},`成交金额 ${num(r.grams*r.price)} 元 · 手续费 ${num(r.fee)} 元${r.side==="sell" && r.pnl != null ? " · 已实现盈亏 "+signed(r.pnl)+" 元" : ""}`),
-      el("div",{},r.reason),decisionDetails(r.decision));
-    if(recordKind==="plans") {const v=r.decision;return el("li",{},heading(`${label} · ${TRADE_ACTIONS[v.action]} · ${planStatusLabel(r)}`),
-      el("div",{},v.reason),el("div",{class:"sub"},v.action==="buy" ? `买入金额 ${num(v.amount_cny)} 元` : v.action==="sell" ? `卖出 ${num(v.grams,4)} 克` : ""),
-      ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},`${v.execution==="limit" ? "限价 "+num(v.limit_price_cny)+" 元/克" : "按最新京东报价执行"} · ${planValidityText(r)}`) : null,
-      !["buy","sell"].includes(v.action) ? el("div",{class:"sub"},planValidityText(r)) : null,
-      el("div",{class:"sub"},`止损 ${v.clear_stop_loss ? "移除" : v.stop_loss_cny==null ? "保留原设置" : num(v.stop_loss_cny)+" 元/克"} · 止盈 ${v.clear_take_profit ? "移除" : v.take_profit_cny==null ? "保留原设置" : num(v.take_profit_cny)+" 元/克"}`),
-      r.reason ? el("div",{class:"sub"},r.reason):null,
-      ["buy","sell"].includes(v.action) ? el("div",{class:"sub"},executionRange(v)) : null,
-      el("details",{class:"more","data-detail-key":"plan:"+r.id},el("summary",{},"决策详情"),el("div",{class:"sub"},`判断 #${r.view_id} · 计划 #${r.id}${v.invalidation ? " · 失效条件："+v.invalidation : ""}`)));}
+    if(recordKind==="fills") return fillRecord(r,d);
+    if(recordKind==="plans") return planRecord(r,d);
     if(recordKind==="cycles") return el("li",{},heading(`${label} · #${r.id} · ${r.closed_at ? "已平仓" : "持仓中"}`),
       el("div",{class:"sub"},`开仓 ${fmtTs(r.opened_at)}${r.closed_at ? " · 平仓 "+fmtTs(r.closed_at) : ""}`),
       el("div",{},r.closed_at ? `已实现盈亏 ${signed(r.pnl ?? r.realized_cny)} 元` : `已回收金额 ${num(r.proceeds)} 元，完整周期尚未结束`));
@@ -1127,7 +1153,7 @@ function renderRecords(d) {
     return el("li",{},heading(r.title),el("div",{class:"sub"},r.delivered ? "已推送" : "仅记录"));
   });
   list.forEach((n,i)=>n.dataset.recordKey=`${recordKind}:${items[i].account}:${items[i].id || items[i].stamp}`);
-  const box=card(title,el("span",{class:"sub"},`已加载 ${items.length} 条 · 数据库分页，每页50条`),
+  const box=card(title,el("span",{class:"sub"},`已显示 ${items.length} 条${historyMore ? " · 还有更多" : ""}`),
     list.length ? el("ul",{class:"list"},list) : el("div",{class:"empty"},historyBusy ? "正在加载历史…" : historyError || "暂无匹配记录"));
   if(historyError) box.appendChild(el("div",{class:"notice warn",role:"status"},historyError));
   if(historyMore || historyError) box.appendChild(el("button",{class:"link-btn",disabled:historyBusy,onclick:()=>fetchHistory()},historyBusy ? "加载中…" : historyError ? "重试" : "加载更多"));
