@@ -72,7 +72,7 @@ a { color: var(--brand); }
 .tab svg { width: 22px; height: 22px; }
 .tab[aria-selected="true"] { color: var(--brand); font-weight: 600; }
 main { max-width: 1120px; margin: 0 auto; padding: 16px 16px calc(84px + env(safe-area-inset-bottom)); }
-@media (min-width: 820px) {
+@media (min-width: 1024px) {
   .tabbar { display: none; }
   .tabs-top { display: flex; gap: 4px; margin-left: 20px; }
   .tabs-top .tab { flex: none; flex-direction: row; font-size: 14px; padding: 7px 14px; gap: 6px; white-space: nowrap; }
@@ -256,6 +256,7 @@ td.wrap, th.wrap { white-space: normal; text-align: left; }
   <section class="panel stack" id="panel-compare" role="tabpanel" aria-label="AI 操盘对比" hidden></section>
   <section class="panel stack" id="panel-ai" role="tabpanel" aria-label="AI" hidden></section>
   <section class="panel stack" id="panel-market" role="tabpanel" aria-label="行情" hidden></section>
+  <section class="panel stack" id="panel-notifications" role="tabpanel" aria-label="通知" hidden></section>
   <section class="panel stack" id="panel-records" role="tabpanel" aria-label="记录" hidden></section>
   <div class="foot">模拟盘为虚拟交易，不构成投资建议 · 每 60 秒自动刷新</div>
 </main>
@@ -276,6 +277,7 @@ const ICONS = {
   compare: '<path d="M5 20V10m7 10V4m7 16V7M2 20h20"/>',
   ai: '<path d="M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5-2 2m-7 7-2 2m11 0-2-2m-7-7-2-2"/><circle cx="12" cy="12" r="3.2"/>',
   market: '<path d="M3 17l5-6 4 3 6-8 3 4"/><path d="M3 21h18"/>',
+  notifications: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
   records: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 11h7M9 15h7M9 7h3"/>',
 };
 const EVENT_CN = {
@@ -290,7 +292,7 @@ const EVENT_CN = {
 };
 const eventName = (t) => EVENT_CN[t] || (/^Fed Chair (.+) Speech$/.test(t) ? `美联储主席${t.replace(/^Fed Chair (.+) Speech$/, " $1 ")}讲话` : t);
 const COUNTRY_CN = { US: "美国", CN: "中国" };
-const TABS = [["overview", "总览"], ["strategies", "账户"], ["compare", "操盘对比"], ["ai", "AI"], ["market", "行情"], ["records", "操盘记录"]];
+const TABS = [["overview", "总览"], ["strategies", "账户"], ["compare", "操盘对比"], ["ai", "AI"], ["market", "行情"], ["records", "操盘记录"], ["notifications", "通知"]];
 
 const bjFmt = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 const bjTime = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -845,10 +847,13 @@ function notificationControls(d) {
     grid.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
   });box.appendChild(grid);return box;
 }
+function renderNotifications(d) {
+  const panel=clear(document.getElementById("panel-notifications"));
+  panel.appendChild(notificationControls(d));
+}
 function renderAI(d) {
   const panel = clear(document.getElementById("panel-ai"));
   panel.appendChild(modelControls(d));
-  panel.appendChild(notificationControls(d));
   const ai = d.ai || {};
 
   const inputHost=el("details",{class:"more card"},el("summary",{},"本轮分析输入详情"));
@@ -1201,12 +1206,13 @@ function renderPage(id,force=false) {
   const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
     strategies:[DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
-    ai:[DATA.ai,DATA.model_controls,DATA.notifications,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
+    notifications:[DATA.notifications],
+    ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
     market:[DATA.snapshot,DATA.execution,DATA.macro,DATA.jd_research,DATA.jin10,DATA.prices],records:[DATA.strategy_names]};
   const expiryPlans=[...(DATA.autonomous?.accounts || []).map(a=>a.plan).filter(Boolean),...(DATA.autonomous?.plans || []),...(id==="records" && recordKind==="plans" ? historyItems : [])];
   const signature=JSON.stringify([dependencies[id],["ai","overview","records","strategies"].includes(id) ? expiryPlans.map(p=>[p.id,planPastDeadline(p)]) : null]);
   if(force || panelSignatures.get(id)!==signature) {
-    const fn={overview:renderOverview,strategies:renderStrategies,compare:renderComparison,ai:renderAI,market:renderMarket,records:renderRecords}[id];
+    const fn={overview:renderOverview,strategies:renderStrategies,compare:renderComparison,ai:renderAI,market:renderMarket,records:renderRecords,notifications:renderNotifications}[id];
     preservePanel(document.getElementById("panel-"+id),()=>fn(DATA));panelSignatures.set(id,signature);
   }
 }
