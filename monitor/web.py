@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from .config import BANK_NAMES, Settings
 from .scorecard import evaluate as evaluate_scorecard
 from .strategies import REGISTRY
+from .notification_control import subscriptions
 from .controls import control, set_enabled, identity, short_labels, daily_keys
 from .performance import comparison, autonomous_comparison
 from .autonomous import summaries as portfolio_summaries, enabled as autonomous_enabled, keys as portfolio_keys, exists as portfolios_exist
@@ -299,6 +300,9 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "bank": settings.paper_bank, "bank_name": EXECUTION_NAME,
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
                           "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
+            "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
+                "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
+                "subscriptions": subscriptions(conn)},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,
             "trading_mode": settings.ai_trading_mode,
@@ -466,6 +470,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.headers.get("Content-Type", "").split(";")[0] != "application/json" or
                 (origin and urlsplit(origin).netloc != self.headers.get("Host"))):
             self._send(403, b"invalid request origin", "text/plain")
+            return
+        if self.path == "/api/notifications":
+            try:
+                length=int(self.headers.get("Content-Length","0"))
+                if not 0 < length <= 1024: raise ValueError("invalid body length")
+                data=json.loads(self.rfile.read(length))
+                if not isinstance(data,dict) or set(data)!={"topic","enabled"}: raise ValueError("invalid notification settings")
+                from .notification_control import set_subscription
+                with closing(sqlite3.connect(str(self.settings.db_path),timeout=10)) as conn:
+                    result=set_subscription(conn,data["topic"],data["enabled"])
+                self._send(200,json.dumps(result).encode(),"application/json")
+            except (ValueError,TypeError):
+                self._send(400,b'{"error":"invalid notification settings"}',"application/json")
+            except Exception:
+                log.exception("notification control failed")
+                self._send(503,b'{"error":"notification settings unavailable"}',"application/json")
             return
         manual_route=self.path.endswith("/analyze")
         name = self.path.removeprefix("/api/models/").removesuffix("/analyze")

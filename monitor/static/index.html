@@ -831,9 +831,24 @@ function autonomousAccounts(d) {
   return panel;
 }
 
+function notificationControls(d) {
+  const n=d.notifications || {},message=el("div",{class:"sub",role:"status"},n.configured ? `已配置 ${n.channel} · 修改后即时生效` : "尚未配置推送密钥，请在服务器配置后重启监控服务。"),
+    box=card("微信操作通知",null,message,el("p",{class:"sub"},"默认关闭。各周期包含初始满仓与初始空仓两户，仅通知实际买卖成交及止损止盈；观望、分析、挂单和初始化不推送。通知开关不改变 AI 操盘开关。")),grid=el("div",{class:"grid-2"});
+  (n.subscriptions || []).forEach(c=>{
+    const button=el("button",{class:"chip-btn",type:"button",role:"switch","aria-checked":String(c.enabled),"aria-label":`${c.name} 通知`,onclick:async()=>{
+      button.disabled=true;
+      try {
+        const response=await fetch("/api/notifications",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:JSON.stringify({topic:c.key,enabled:!c.enabled})});
+        if(!response.ok)throw new Error("通知设置保存失败");await load();
+      }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+    }},c.enabled ? "已开启通知" : "已关闭通知");
+    grid.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
+  });box.appendChild(grid);return box;
+}
 function renderAI(d) {
   const panel = clear(document.getElementById("panel-ai"));
   panel.appendChild(modelControls(d));
+  panel.appendChild(notificationControls(d));
   const ai = d.ai || {};
 
   const inputHost=el("details",{class:"more card"},el("summary",{},"本轮分析输入详情"));
@@ -1186,7 +1201,7 @@ function renderPage(id,force=false) {
   const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
     strategies:[DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
-    ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
+    ai:[DATA.ai,DATA.model_controls,DATA.notifications,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
     market:[DATA.snapshot,DATA.execution,DATA.macro,DATA.jd_research,DATA.jin10,DATA.prices],records:[DATA.strategy_names]};
   const expiryPlans=[...(DATA.autonomous?.accounts || []).map(a=>a.plan).filter(Boolean),...(DATA.autonomous?.plans || []),...(id==="records" && recordKind==="plans" ? historyItems : [])];
   const signature=JSON.stringify([dependencies[id],["ai","overview","records","strategies"].includes(id) ? expiryPlans.map(p=>[p.id,planPastDeadline(p)]) : null]);

@@ -345,10 +345,11 @@ class AutonomousPortfolio:
                     stop = a["stop_price"]
                     reason = "持仓止损" if stop is not None and quote["price"] <= stop else "持仓止盈" if a["target_price"] and quote["price"] >= a["target_price"] else None
                     if reason:
-                        fill_id = self._fill(a,"sell",a["grams"],quote,reason)
+                        sold_grams = a["grams"]
+                        fill_id = self._fill(a,"sell",sold_grams,quote,reason)
                         c.execute("UPDATE ai_plans SET status='cancelled',reason='持仓保护已触发' WHERE account=? AND status='pending'",(a["key"],))
                         refreshes.append((a["model"],f"portfolio-fill:{fill_id}",f"{LABELS[a['start_mode']]}{reason}"))
-                        emitted.append({"key":f"autonomous:{fill_id}","title":a["key"]+reason,"body":f"京东报价 {quote['price']:.2f} 元/克，保护已执行"})
+                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {LABELS[a['start_mode']]} {reason}","body":f"模拟卖出 {sold_grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克，保护已执行；卖出手续费 {sold_grams*quote['price']*self.settings.sell_fee_rate:.2f} 元"})
                 latest = c.execute("SELECT rowid,* FROM ai_views WHERE analyst=? AND error IS NULL ORDER BY rowid DESC LIMIT 1",(a["model"],)).fetchone() if has_views else None
                 if latest and latest["rowid"] > a["last_view_id"] and can_trade:
                     data = json.loads(latest["view_json"])
@@ -393,7 +394,7 @@ class AutonomousPortfolio:
                             a["stop_price"] = None if d.get("clear_stop_loss") else d.get("stop_loss_cny") or a["stop_price"]
                             a["target_price"] = None if d.get("clear_take_profit") else d.get("take_profit_cny") or a["target_price"]
                         c.execute("UPDATE ai_plans SET status='executed',reason='按AI委托成交' WHERE id=?",(plan["id"],))
-                        emitted.append({"key":f"autonomous:{fill_id}","title":a["key"]+" AI模拟"+("买入" if d["action"]=="buy" else "卖出"),"body":f"{grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克；{d['reason']}"})
+                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {LABELS[a['start_mode']]} 模拟"+("买入" if d["action"]=="buy" else "卖出"),"body":f"{grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克；{d['reason']}"})
                     except (ValueError,TypeError) as exc:
                         self._reject(plan["id"],str(exc))
                 value = a["cash"] + a["grams"]*net_price(self.settings,quote["price"])

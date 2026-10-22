@@ -534,11 +534,15 @@ class Monitor:
         """同一轮多条提醒合并为一条推送，节省额度。"""
         if not events:
             return
-        title = events[0]["title"] if len(events) == 1 else f"{events[0]['title']} 等{len(events)}条"
-        body = "\n\n---\n\n".join(f"### {e['title']}\n\n{e['body']}" for e in events)
-        delivered = self.notifier.send(title, body)
+        from .notification_control import selected_events
+        selected = selected_events(self.store.conn, events)
+        delivered = False
+        if selected:
+            title = selected[0]["title"] if len(selected) == 1 else f"{selected[0]['title']} 等{len(selected)}条"
+            body = "\n\n---\n\n".join(f"### {e['title']}\n\n{e['body']}" for e in selected)
+            delivered = self.notifier.send(title, body)
         for e in events:
-            self.store.add_alert(e["key"], e["title"], e["body"], delivered)
+            self.store.add_alert(e["key"], e["title"], e["body"], delivered and e in selected)
 
     def run_forever(self) -> None:
         log.info("监控启动：推送通道=%s，每 %ss 一轮，模拟盘=%s", self.notifier.channel,
