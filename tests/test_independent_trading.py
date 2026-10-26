@@ -366,7 +366,7 @@ class TradingTests(unittest.TestCase):
     def test_weekly_report_runs_when_market_closed(self):
         monitor = Monitor(self.settings, True)
         try:
-            with patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=dict(snap(), market_open=False)), patch.object(monitor, "poll_jin10_if_due"), patch.object(monitor, "weekly_report_if_due", return_value=[{"key": "weekly"}]):
+            with patch("monitor.__main__.trading_session", return_value={"is_open":False}), patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=dict(snap(), market_open=False)), patch.object(monitor, "poll_jin10_if_due"), patch.object(monitor, "weekly_report_if_due", return_value=[{"key": "weekly"}]):
                 _, _, events = monitor.tick()
             self.assertEqual(events, [{"key": "weekly"}])
         finally:

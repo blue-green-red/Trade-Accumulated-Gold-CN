@@ -34,6 +34,7 @@ from .store import Store, utc_now
 from .strategy import build_plan
 from .controls import active, control, identity, short_labels
 from .execution import execution_quote
+from .trading_hours import trading_session
 from .autonomous import AutonomousPortfolio, VERSION as TRADING_VERSION, enabled as autonomous_enabled
 
 log = logging.getLogger("monitor")
@@ -123,6 +124,7 @@ class Monitor:
             "signals_tradingview": snap.get("signals"),
             "usdcny": (snap.get("fx") or {}).get("rate"),
             "jd_accumulation_quote": snap.get("execution_quote"),
+            "jd_trading_session": trading_session(),
         }
         from .jd_research import snapshot as jd_snapshot
         store = Store(self.settings.db_path)
@@ -332,7 +334,7 @@ class Monitor:
 
     def publish_for_web(self, snap, plan, plan_base=None, plan_source: str = "base", ai_plans=None) -> None:
         """网页端只读数据库：把本轮行情与计划存一份，网页不自己联网。"""
-        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "market_open", "fx", "execution_quote", "jd_last_quote")
+        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "market_open", "jd_session", "international_market_open", "fx", "execution_quote", "jd_last_quote")
         payload = {k: snap.get(k) for k in keep}
         payload["ts"] = snap["ts"].isoformat()
         payload["plan"] = plan
@@ -443,6 +445,15 @@ class Monitor:
         if self.portfolios:self.portfolios.expire_plans()
         self.market.refresh_fx_if_due()
         snap = self.market.snapshot()
+        snap["jd_session"] = trading_session()
+        snap["market_open"] = snap["jd_session"]["is_open"]
+        if not snap["market_open"]:
+            self.store.set_state("jd_session_closed", True)
+        elif execution_quote(snap) and self.store.get_state("jd_session_closed", False):
+            from .ai_events import enqueue
+            for name in self.enabled_analysts():
+                enqueue(self.store.conn,name,"京东开盘报价恢复",0,event_id="jd-open:"+utc_now().date().isoformat())
+            self.store.set_state("jd_session_closed", False)
         if snap.get("xauusd") is None:
             log.warning("本轮取价全部失败: %s", snap["errors"])
             events += self.weekly_report_if_due(snap)

@@ -956,8 +956,10 @@ function renderMarketSummary(d) {
     el("div", { class: "sub" }, title), el("div", { class: "quote-value" }, value, el("span", { class: "quote-unit" }, unit)), meta);
   return el("div", { class: "market-quotes", "aria-label": "实时行情摘要" },
     tile("京东积存金", num(q.price), "元/克", el("div", { class: "data-meta" },
-      el("span", { class: `data-state${execution.ready ? "" : " warn"}` }, execution.ready ? "可模拟成交" : "报价不可用 · 暂停成交"),
-      el("span", {}, `报价 ${fmtTs(q.quote_at)} · 每分钟更新`)), true),
+      el("span", { class: `data-state${execution.ready ? "" : " warn"}` }, execution.ready ? "可模拟成交" : s.jd_session?.is_open===false ? "京东休市 · 暂停成交" : "报价不可用 · 暂停成交"),
+      el("span", {}, `报价 ${fmtTs(q.quote_at)} · ${s.jd_session?.is_open===false ? "最近有效报价" : "每分钟更新"}`),
+      el("span",{},"交易时段：周一09:00至周六02:30（北京时间）"),
+      s.jd_session?.next_open ? el("span",{},`下次开盘 ${fmtTs(s.jd_session.next_open)}`):null), true),
     tile("国际现货黄金", num(s.xauusd), "美元/盎司", el("div", {},
       el("div", { class: "sub" }, `日涨跌 ${signed(s.change_pct)}%`), sourceMeta(s.ts, "每分钟", 180, null, s.xauusd == null))),
     tile("美元兑人民币", num(fx.rate, 4), "USD/CNY", sourceMeta(fx.fetched_at, "每15分钟", 1200, null, fx.rate == null)),
