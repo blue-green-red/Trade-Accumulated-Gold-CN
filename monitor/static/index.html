@@ -809,7 +809,7 @@ function autonomousAccounts(d) {
       filter("账户周期",[["all","全部周期"],["short","短线"],["medium","中线"],["long","长线"]],accountPeriod,(v)=>accountPeriod=v),
       filter("初始仓位",[["all","全部起点"],["full","初始满仓"],["empty","初始空仓"]],accountStart,(v)=>accountStart=v)));
   panel.appendChild(el("div",{class:"sub",style:"margin-bottom:10px"},cadence.review_minutes >= 0 ? `周期复查：${cadence.review_minutes > 0 ? `${cadence.review_minutes} 分钟后，` : "无最小时间间隔，"}国际金价较上次分析变化≥${cadence.min_move_pct}%才启动；最长${cadence.max_idle_minutes/60}小时兜底。重大事件另外排队，执行器每分钟检查。` : "定时分析加事件触发，执行器每分钟检查。"));
-  panel.appendChild(el("div",{class:"notice info",style:"margin-bottom:12px"},"AI 自主决定操作、数量及保护价，可设置、放宽或撤销止损止盈，无固定12%止损。概率用于成绩评估。账户间不转账；初始满仓仅在开账时买入一次。未成交委托到期撤销，已有持仓保护继续有效。"));
+  panel.appendChild(el("div",{class:"notice info",style:"margin-bottom:12px"},"短线按数日至一两周的波段运行，以日线和波段价格结构为主，不依赖小时级信号；每周约两次买卖操作为节奏参考，不要求凑次数。AI 自主决定操作、数量及保护价，可设置、放宽或撤销止损止盈，无固定12%止损。概率用于成绩评估。账户间不转账；初始满仓仅在开账时买入一次。未成交委托到期撤销，已有持仓保护继续有效。"));
   const grid=el("div",{class:"grid-2"});
   for(const a of rows) {
     const plan=a.plan, decision=plan && plan.decision;

@@ -55,8 +55,28 @@ class ShortReviewTests(unittest.TestCase):
         # Empty contexts are intentionally not trading requests.
         self.assertEqual(text,'')
         text=self.f.a.trading_system({'trading_accounts':{'accounts':{}}})
-        self.assertIn('30分钟和1小时',text)
+        self.assertIn('以日线和数日至周级别',text)
+        self.assertIn('short_*必须忽略这些指标',text)
+        self.assertIn('不要求补齐小时K线',text)
+        self.assertIn('不是必须完成的配额',text)
+        self.assertNotIn('数小时至3交易日',text)
         self.assertIn('不强制试仓',text)
         self.assertIn('不固定900',text)
         self.assertIn('上次条件是否出现',text)
         self.assertIn('短线reason不超过240字',self.f.a.result_instructions())
+
+    def test_wave_profile_and_trade_count_exclude_initialization_and_future(self):
+        c=self.f.store.conn
+        self.assertEqual(self.f.m.portfolios.input('codex',self.f.snap['execution_quote'])['accounts']['short_full']['short_trade_activity']['filled_operations'],0)
+        original=dict(c.execute("SELECT * FROM ai_portfolio_fills WHERE account='codex:short_full' LIMIT 1").fetchone())
+        for day,side in [(-2,'sell'),(-1,'buy'),(-8,'sell'),(1,'buy')]:
+            stamp=(self.now+timedelta(days=day)).isoformat()
+            c.execute("INSERT INTO ai_portfolio_fills(account,ts,side,grams,price,fee,pnl,reason,quote_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                ('codex:short_full',stamp,side,1,1000,0,0,'策略成交',original['quote_json']))
+        c.commit()
+        value=self.f.m.portfolios.input('codex',self.f.snap['execution_quote'],as_of=self.now.isoformat())
+        self.assertEqual(value['accounts']['short_full']['short_trade_activity']['filled_operations'],2)
+        self.assertNotIn('short_trade_activity',value['accounts']['medium_full'])
+        self.assertEqual(value['short_strategy_profile']['primary_timeframes'],['1D'])
+        self.assertIn('数日至一两周',value['short_strategy_profile']['holding_period'])
+        self.assertEqual(value['short_strategy_profile']['ignored_timeframes'],['30m','1H','4H'])
