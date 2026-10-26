@@ -98,7 +98,7 @@ RESEARCH_SYSTEM = """你是黄金市场研究员，服务对象是中国银行�
 - snapshot_at 是共同基础行情的时刻，now_bj 是准备输入的时间；不得把旧快照当作分析完成时的实时价格。
 - 上下文中的 jin10_flash_recent 是金十数据近 24 小时的实时中文快讯（important=true 为金十标红的重要快讯），覆盖数据公布、美联储官员讲话、地缘局势、央行与资金动向，是主要消息来源，引用时注明「金十快讯 时间」。
 - 优先使用已提供的数据；按本轮搜索预算补查遗漏的重要消息，重点关注突发地缘风险、政策变化、央行购金和黄金 ETF 资金变化；已覆盖的消息不要重复搜索。
-- jd_research 是京东参考统计，不是积存金成交盘口；资金事件的时间不等于当前资金流。stale/cache_stale/unavailable/unconfigured/no_data/quota_exhausted/budget_exhausted/rate_limited/refreshing 表示缺失，不得推测填补。status=fresh 时是仍有效的缓存；refresh_status 仅说明最新刷新失败或暂停，不影响已提供缓存数值的有效性。
+- jd_research 是京东参考统计，不是积存金成交盘口；资金事件的时间不等于当前资金流。stale/cache_stale/unavailable/unconfigured/no_data/quota_exhausted/budget_exhausted/rate_limited/refreshing 表示缺失，不得推测填补。status=fresh 时是仍有效的缓存，可按来源时间引用；只根据有效数值判断，不从缺失状态推测资金方向。
 - 区分短期（1-3 个交易日）与中长期（1-3 个月）的影响。
 - 检索结果之间有矛盾时，列出矛盾而不是选一个。
 - 研究摘要不含具体买卖价位；如有 trading_accounts，买卖限价和保护价由你填写在 account_decisions 中。
@@ -326,6 +326,9 @@ class AIAnalyst:
         if self.settings.ai_optimize:
             from .ai_inputs import compact_context
             context=compact_context(context)
+        else:
+            from .ai_inputs import market_context
+            context=market_context(context)
         after_chars=len(json.dumps(context,ensure_ascii=False,separators=(",",":")))
         usage["performance"]={"input_chars_before":before_chars,"input_chars_after":after_chars}
         if run_id: store.set_state(f"ai_model_input:{run_id}:{self.analyst}",context)
