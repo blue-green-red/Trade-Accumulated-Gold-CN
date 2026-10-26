@@ -143,7 +143,7 @@ def summaries(conn, settings, price):
             "avg_cost": avg, "unrealized_pnl": a["grams"] * net_price(settings, price) - a["cost"] if price else None,
             "position_pct": a["grams"] * price / (a["cash"] + a["grams"] * price) * 100 if price and a["cash"] + a["grams"] * price > 0 else 0,
             "paused": not active(conn, a["model"]), "fills": fills[0], "fees": fills[1],
-            "plan": {**dict(plan), "decision": json.loads(plan["decision_json"])} if plan else None})
+            "plan": {**{k:plan[k] for k in plan.keys() if k!="decision_json"}, "decision": json.loads(plan["decision_json"])} if plan else None})
     return rows
 
 

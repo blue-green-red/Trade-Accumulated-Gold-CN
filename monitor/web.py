@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hmac
 import json
 import logging
@@ -40,6 +41,29 @@ log = logging.getLogger("monitor.web")
 
 STATIC = Path(__file__).resolve().parent / "static"
 SERIES_ORDER = ["hold", "position", "short", "claude:position_ai", "codex:position_ai", "claude:short_ai", "codex:short_ai"] + [f"{m}:{p}_{s}" for m in ("claude","codex") for p in ("short","medium","long") for s in ("full","empty")]
+
+
+# Short shared cache avoids repeating hundreds of SQLite reads during concurrent refreshes.
+_dashboard_lock = threading.Lock()
+_dashboard_cache = {}
+
+
+def invalidate_dashboard(settings):
+    with _dashboard_lock:
+        _dashboard_cache.pop(str(settings.db_path.resolve()), None)
+
+
+def cached_dashboard(settings):
+    key=str(settings.db_path.resolve())
+    with _dashboard_lock:
+        cached=_dashboard_cache.get(key)
+        if cached and time.monotonic()-cached[0]<2:
+            return cached[1]
+        body=json.dumps(dashboard(settings),ensure_ascii=False,default=str,separators=(",",":")).encode()
+        if len(_dashboard_cache)>=4:
+            _dashboard_cache.clear()
+        _dashboard_cache[key]=(time.monotonic(),body)
+        return body
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -270,8 +294,8 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             keys).fetchall() if keys and table_exists(conn, "account_fills") else []
         alerts = conn.execute("SELECT ts, title, delivered FROM alerts ORDER BY ts DESC LIMIT 20").fetchall()
         board = leaderboard(conn, settings, price)
-        if autonomous_enabled(settings):
-            board += portfolio_summaries(conn,settings,price)
+        portfolio_accounts = portfolio_summaries(conn,settings,price) if autonomous_enabled(settings) else []
+        board += portfolio_accounts
         curves = equity_curves(conn, settings)
         shorts = [short_paper(conn, settings.paper_bank, key, price, settings.sell_fee_rate,
                               settings.spread_cny, label) for key, label in short_labels(settings).items()]
@@ -308,10 +332,10 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "trading_mode": settings.ai_trading_mode,
             "cadence": {"review_minutes":settings.ai_short_review_minutes,"min_move_pct":settings.ai_periodic_min_move_pct,
                         "max_idle_minutes":settings.ai_review_max_idle_minutes},
-            "model_controls": controls, "comparison": (autonomous_comparison(conn,settings,board,shorts,curves,price)
+            "model_controls": controls, "comparison": (autonomous_comparison(conn,settings,board,shorts,curves,price,accounts=portfolio_accounts)
                 if autonomous_enabled(settings) else comparison(conn, board, shorts, curves)),
-            "autonomous": {"accounts": portfolio_summaries(conn,settings,price),
-                "plans": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute("SELECT * FROM ai_plans ORDER BY id DESC LIMIT 100")]
+            "autonomous": {"accounts": portfolio_accounts,
+                "plans": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute("SELECT * FROM ai_plans WHERE status='pending' OR id IN (SELECT MAX(id) FROM ai_plans GROUP BY account) ORDER BY id DESC")]
                     if portfolios_exist(conn) else [],
                 "recent_expired": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute(
                     "SELECT * FROM ai_plans WHERE (status='expired' OR (status='pending' AND julianday(expires_at)<=julianday(?)) OR "
@@ -443,16 +467,35 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(given.encode(), self.password.encode())
 
     def _send(self, code: int, body: bytes, content_type: str, extra: Optional[Dict[str, str]] = None) -> None:
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
-        self.end_headers()
-        self.wfile.write(body)
+        headers = dict(extra or {})
+        accepted = self.headers.get("Accept-Encoding", "")
+        gzip_ok = False
+        for part in accepted.split(","):
+            parts=part.strip().lower().split(";")
+            if parts[0].strip() != "gzip": continue
+            try:
+                quality=next((float(p.strip()[2:]) for p in parts[1:] if p.strip().startswith("q=")),1)
+            except ValueError:
+                quality=0
+            gzip_ok=quality>0
+        if gzip_ok and len(body) >= 1024 and (content_type.startswith("application/json") or content_type.startswith("text/")):
+            body = gzip.compress(body, compresslevel=3)
+            headers["Content-Encoding"] = "gzip"
+        headers["Vary"] = "Accept-Encoding"
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Refresh/navigation can close a response; do not attempt a second HTTP response.
+            pass
 
     def do_POST(self):
         ip = self.client_address[0]
@@ -480,6 +523,7 @@ class Handler(BaseHTTPRequestHandler):
                 from .notification_control import set_subscription
                 with closing(sqlite3.connect(str(self.settings.db_path),timeout=10)) as conn:
                     result=set_subscription(conn,data["topic"],data["enabled"])
+                invalidate_dashboard(self.settings)
                 self._send(200,json.dumps(result).encode(),"application/json")
             except (ValueError,TypeError):
                 self._send(400,b'{"error":"invalid notification settings"}',"application/json")
@@ -509,6 +553,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:result = set_enabled(conn, name, data["enabled"])
             finally:
                 conn.close()
+            invalidate_dashboard(self.settings)
             self._send(202 if manual_route else 200, json.dumps(result,ensure_ascii=False).encode(), "application/json")
         except (ValueError, json.JSONDecodeError) as exc:
             self._send(getattr(exc,"status",400), json.dumps({"error": str(exc)}).encode(), "application/json")
@@ -542,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500,b'{"error":"history unavailable"}',"application/json")
         elif path == "/api/dashboard":
             try:
-                body = json.dumps(dashboard(self.settings), ensure_ascii=False, default=str).encode()
+                body = cached_dashboard(self.settings)
                 self._send(200, body, "application/json; charset=utf-8")
             except Exception as exc:
                 log.exception("dashboard 失败")

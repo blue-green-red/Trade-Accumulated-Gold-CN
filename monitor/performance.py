@@ -79,12 +79,13 @@ def comparison(conn, board, short, curves):
             "rules": "仅比较中长线与短线，胜率按扣费后完整平仓周期计，分批卖出合并。旧账户不参与。"}
 
 
-def autonomous_comparison(conn, settings, board, short, curves, price):
+def autonomous_comparison(conn, settings, board, short, curves, price, accounts=None):
     from .autonomous import summaries, VERSION, net_price
-    accounts = summaries(conn,settings,price)
+    if accounts is None:
+        accounts = summaries(conn,settings,price)
     models = []
     for model in MODELS:
-        rows = [dict(a) for a in accounts if a["model"] == model]
+        rows = [{k:v for k,v in a.items() if k!="plan"} for a in accounts if a["model"] == model]
         for row in rows:
             row["baseline_return"] = (net_price(settings,price) / row["initial_price"]-1
                 if row["start_mode"].endswith("_full") and row["initial_price"] and price else

@@ -244,7 +244,7 @@ td.wrap, th.wrap { white-space: normal; text-align: left; }
     <nav class="tabs-top" role="tablist" aria-label="页面" id="tabs-top"></nav>
     <div class="header-meta">
       <span class="chip" id="market-chip"><span class="dot" style="background:var(--text-3)"></span>加载中</span>
-      <span class="updated" id="updated"></span>
+      <button class="link-btn updated" id="updated" type="button" aria-label="刷新数据" title="点击刷新数据">加载中…</button>
       <button class="icon-btn" id="theme-btn" type="button" aria-label="切换深浅色" title="切换深浅色"></button>
     </div>
   </div>
@@ -629,7 +629,7 @@ function modelControls(d) {
           const r = await fetch(`/api/models/${c.key}`, { method: "POST", credentials: "same-origin",
             headers: { "Content-Type": "application/json", "X-Gold-Control": "1" }, body: JSON.stringify({ enabled: !c.enabled }) });
           if (!r.ok) throw new Error("保存失败 HTTP " + r.status);
-          await load();
+          await load(true);
         } catch (e) { message.textContent = e.message; }
         finally { button.disabled = false; }
       } }, c.enabled ? "关闭模型" : "开启模型");
@@ -648,7 +648,7 @@ function modelControls(d) {
             headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:"{}"});
           const result=await response.json();
           if(!response.ok) throw new Error(result.error || "提交失败 HTTP "+response.status);
-          await load();
+          await load(true);
         } catch(error) {message.textContent=error.message;manualButton.disabled=false;}
       }},manualPending ? (manual.status==="running" ? "手动分析中" : "手动请求已排队") : running || queued ? "排队分析并操盘" : "立即分析并操盘");
     if(manual.message) message.appendChild(el("div",{},`${manualPending ? "手动请求" : "上次手动"}：${manual.message}`));
@@ -841,7 +841,7 @@ function notificationControls(d) {
       button.disabled=true;
       try {
         const response=await fetch("/api/notifications",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:JSON.stringify({topic:c.key,enabled:!c.enabled})});
-        if(!response.ok)throw new Error("通知设置保存失败");await load();
+        if(!response.ok)throw new Error("通知设置保存失败");await load(true);
       }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
     }},c.enabled ? "已开启通知" : "已关闭通知");
     grid.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
@@ -1226,17 +1226,30 @@ function render() {
   document.getElementById("updated").textContent=s.ts ? `行情 ${bjTime.format(new Date(s.ts))}` : "";
   renderPage(activeTab);renderActiveCharts();
 }
-async function load() {
-  try {
-    const r = await fetch("/api/dashboard", { cache: "no-store", credentials: "same-origin" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    DATA = await r.json();
-    render();
-    if(activeTab==="records" && !historyBusy) refreshHistory();
-  } catch (e) {
-    document.getElementById("updated").textContent = "加载失败，稍后重试";
-  }
+let loadInFlight = null;
+async function load(force=false) {
+  if (loadInFlight) { if(!force) return loadInFlight; await loadInFlight; }
+  const controller = new AbortController(), updated=document.getElementById("updated");
+  updated.textContent = DATA ? "刷新中…" : "加载中…";
+  const timer=setTimeout(()=>controller.abort(),15000);
+  loadInFlight=(async()=>{
+    try {
+      const r = await fetch("/api/dashboard", { cache: "no-store", credentials: "same-origin", signal:controller.signal });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const next = await r.json();
+      DATA = next;
+      render();
+      updated.title="点击刷新数据";
+      if(activeTab==="records" && !historyBusy) refreshHistory();
+    } catch (e) {
+      updated.textContent = e.name==="AbortError" ? "加载超时，点击重试" : "加载失败，点击重试";
+      updated.title = DATA ? "暂时保留上次数据，点击重新获取" : "点击重新获取数据";
+    } finally { clearTimeout(timer);loadInFlight=null; }
+  })();
+  return loadInFlight;
 }
+document.getElementById("updated").addEventListener("click",()=>load());
+
 buildTabs();
 showTab(activeTab, false);
 let resizeTimer;

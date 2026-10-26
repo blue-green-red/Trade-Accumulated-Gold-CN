@@ -88,6 +88,19 @@ class DashboardBrowserTests(unittest.TestCase):
                         errors = []
                         page.on("pageerror", lambda error: errors.append(str(error)))
                         page.goto(f"http://127.0.0.1:{server.server_port}")
+                        page.wait_for_function('DATA!==null')
+                        retained=page.evaluate("""async()=>{
+                          const previous=DATA,originalFetch=window.fetch,originalTimer=window.setTimeout;
+                          window.fetch=(_url,opts)=>new Promise((_resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError'))));
+                          window.setTimeout=(fn,ms)=>originalTimer(fn,ms===15000 ? 1 : ms);
+                          try{await load();return DATA===previous;}
+                          finally{window.fetch=originalFetch;window.setTimeout=originalTimer;}
+                        }""")
+                        self.assertTrue(retained)
+                        self.assertIn('加载超时',page.locator('#updated').inner_text())
+                        page.get_by_role('button',name='刷新数据',exact=True).click()
+                        page.wait_for_function("document.getElementById('updated').textContent.startsWith('行情')")
+
                         page.get_by_role("tab", name="AI", exact=True).click()
                         page.get_by_role("switch", name="Claude 操盘").wait_for()
                         page.get_by_role("tab", name="操盘对比", exact=True).click()
