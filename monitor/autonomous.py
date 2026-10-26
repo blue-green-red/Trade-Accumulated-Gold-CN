@@ -95,6 +95,12 @@ trading_accounts 含你自己的六个账户：现金、克数、成本、净值
 short_* 的 horizon 必须 intraday（数小时至3交易日）；medium_* 必须 swing（数日至数周）；long_* 必须 position（数周至数月）。
 未发生变化的账户可以用简短理由持有/观望，不必重复长篇解释。
 围绕对应周期制定计划，考虑已有仓位和卖出费用；长线可以保持不动，短线没有扣费后机会也可以观望。
+短线决策要求（只适用于short_*）：
+1. 以30分钟和1小时判断入场，4小时和日线作为风险背景，可影响仓位、保护和持有期限；不能仅因大周期偏空就默认要求所有周期转多后才买。短周期转强也不意味着必须买入，不按信号数量投票。
+2. 每轮比较继续等待与小仓试入的收益机会、下跌风险和踏空代价，自主选择，可在有依据时使用限价单；不强制试仓，不为增加交易次数下单。reason简述选择及主要取舍。
+3. 若以手续费否定机会，必须给拟入场、目标、风险退出依据及扣费后的收益/损失测算；买入价E、卖出价T、费率f时收益为T*(1-f)/E-1（另计输入价差）。无法可靠估计目标或退出位置就明确证据不足，不得笼统用0.4%费用拒绝交易，不得虚构价位或胜率。
+4. wait的invalidation必须写可验证的买回观察条件和复查时点/时间纪律；区分京东人民币价、国际金价、换算参考价及指标周期。数据不足时明确还缺什么，不能只写“等待企稳”。观望后若有short_wait_review，结合last_plan逐项检查上次条件是否出现、行情变化与继续等待的代价，在reason说明本次变化或未变依据；缺少历史信号不能声称已经确认条件成立。
+5. 目标价和持有期限由当轮证据决定，不固定900，不将未达到目标的短线无限延期成长线。价格与指标的语义条件用于后续复查，不会由程序自动买入；实际成交仅按本轮买卖指令执行。
 buy 的 amount_cny 是支出金额；sell 的 grams 是卖出克数。其他动作数量填 null。
 buy/sell 必须指定 min_execution_price_cny 和 max_execution_price_cny，定义本决策可接受的京东成交价格区间（含边界）；其他动作填null。区间由你按周期与判断设置，禁止依赖市价无限追涨杀跌。达到成交条件时若越界，会拒绝委托并复查；尚未达到限价条件时继续等待。限价条件须与区间有交集。
 市价使用最新有效京东报价；限价买入等报价<=限价，限价卖出等报价>=限价。horizon 不创建额外账户。
@@ -163,16 +169,22 @@ class AutonomousPortfolio:
         if not store.get_state("autonomous_since"):
             store.set_state("autonomous_since", utc_now().isoformat())
 
-    def input(self, model, quote, store=None):
+    def input(self, model, quote, store=None, as_of=None):
         conn = (store or self.store).conn
         rows = [a for a in summaries(conn, self.settings, quote["price"] if quote else None) if a["model"] == model]
         if len(rows) != 6 or not all(a["started"] for a in rows):
             raise ValueError("六账户尚未完成初始化，等待有效报价和模型开启")
         accounts = {}
+        as_of = as_of or utc_now().isoformat()
         for a in rows:
             recent = conn.execute("SELECT ts,side,grams,price,fee,reason FROM ai_portfolio_fills WHERE account=? ORDER BY id DESC LIMIT 6", (a["key"],)).fetchall()
             accounts[a["start_mode"]] = {k:a[k] for k in ("key", "revision", "budget", "cash", "grams", "avg_cost", "value", "unrealized_pnl", "realized_pnl", "position_pct", "stop_price", "target_price")}
             accounts[a["start_mode"]].update({"last_plan": {k:a["plan"][k] for k in ("status","reason","decision","expires_at")} if a["plan"] else None, "recent_fills": [dict(r) for r in recent]})
+            if a["start_mode"].startswith("short_") and a["grams"]<=1e-9:
+                from .short_review import wait_review
+                review=wait_review(conn,a["plan"],quote,as_of)
+                if review:accounts[a["start_mode"]]["short_wait_review"]=review
+
         return {"policy_version":VERSION, "reference_quote":quote, "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,
             "spread_cny": self.settings.spread_cny, "max_position_pct": 100, "protection_policy": "model_discretion", "stop_loss_required": False, "can_clear_stop_loss": True,
             "inflight_max_move_pct":self.settings.ai_inflight_max_move_pct, "max_input_age_minutes": self.settings.ai_decision_max_age_minutes, "max_plan_minutes": 1440,

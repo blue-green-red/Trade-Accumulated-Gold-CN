@@ -824,7 +824,7 @@ function autonomousAccounts(d) {
         el("div",{class:"sub"},`${["buy","sell"].includes(decision.action) ? (decision.execution==="limit"?`限价 ${num(decision.limit_price_cny)} 元/克`:"最新京东报价执行") : "已设置的持仓保护继续有效"} · ${planValidityText(plan)}`),
         plan.reason?el("div",{class:"sub"},plan.reason):null));
       if(["buy","sell"].includes(decision.action)) box.appendChild(el("div",{class:"sub"},executionRange(decision)));
-      if(decision.invalidation) box.appendChild(el("details",{class:"more"},el("summary",{},"计划失效条件"),el("div",{class:"sub"},decision.invalidation)));
+      if(decision.invalidation) box.appendChild(el("details",{class:"more"},el("summary",{},a.start_mode.startsWith("short_") && decision.action==="wait" ? "买回观察与复查条件" : "计划失效条件"),el("div",{class:"sub"},decision.invalidation)));
     } else box.appendChild(el("div",{class:"sub",style:"margin-top:10px"},a.started?"等待本模式首次六账户决策":"模型开启、后端可用且京东报价有效后，统一初始化六个账户"));
     grid.appendChild(box);
   }

@@ -242,7 +242,7 @@ class Monitor:
             coverage_store = Store(self.settings.db_path)
             try:
                 pending = {name: read_events(coverage_store.conn, name)["pending"] for name in due}
-                portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store)
+                portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
                 trend = None
                 if self.portfolios:
