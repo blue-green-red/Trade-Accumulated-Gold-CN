@@ -1255,7 +1255,11 @@ showTab(activeTab, false);
 let resizeTimer;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderActiveCharts, 150); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (themeMode === "auto") applyTheme("auto"); });
-load();
+const initialDashboard=document.getElementById("initial-dashboard");
+try {
+  if(initialDashboard) { DATA=JSON.parse(initialDashboard.textContent);render();initialDashboard.remove(); }
+} catch(e) { DATA=null; }
+if(!DATA) load();
 setInterval(() => { if (!document.hidden) load(); }, 60000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 </script>

@@ -89,6 +89,7 @@ class DashboardBrowserTests(unittest.TestCase):
                         page.on("pageerror", lambda error: errors.append(str(error)))
                         page.goto(f"http://127.0.0.1:{server.server_port}")
                         page.wait_for_function('DATA!==null')
+                        self.assertEqual(page.evaluate("performance.getEntriesByType('resource').filter(r=>r.name.includes('/api/dashboard')).length"),0)
                         retained=page.evaluate("""async()=>{
                           const previous=DATA,originalFetch=window.fetch,originalTimer=window.setTimeout;
                           window.fetch=(_url,opts)=>new Promise((_resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError'))));

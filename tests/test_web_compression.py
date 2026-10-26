@@ -45,3 +45,18 @@ class CompressionTests(unittest.TestCase):
             with patch('monitor.web.dashboard',return_value={'data':'new'}) as build,patch('monitor.web.time.monotonic',return_value=103):
                 self.assertIn(b'new',cached_dashboard(s));build.assert_called_once()
             invalidate_dashboard(s)
+
+    def test_bootstrap_json_is_safe_and_keeps_fallback(self):
+        import json
+        from unittest.mock import patch
+        from monitor.config import Settings
+        from monitor.web import dashboard_html
+        payload={'text':'</script><script>alert(1)</script>&'}
+        with patch('monitor.web.cached_dashboard',return_value=json.dumps(payload).encode()):
+            html=dashboard_html(Settings())
+        self.assertIn(b'id="initial-dashboard"',html)
+        data=html.split(b'id="initial-dashboard">',1)[1].split(b'</script>',1)[0]
+        self.assertNotIn(b'<script>',data)
+        self.assertEqual(json.loads(data),payload)
+        with patch('monitor.web.cached_dashboard',side_effect=ValueError('test')),patch('monitor.web.log.exception'):
+            self.assertNotIn(b'id="initial-dashboard"',dashboard_html(Settings()))

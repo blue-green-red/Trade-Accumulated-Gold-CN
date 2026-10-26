@@ -66,6 +66,18 @@ def cached_dashboard(settings):
         return body
 
 
+def dashboard_html(settings):
+    html=(STATIC / "index.html").read_bytes()
+    try:
+        # Escape HTML delimiters even inside JSON strings; all data is authenticated.
+        data=cached_dashboard(settings).replace(b"<",b"\\u003c").replace(b">",b"\\u003e").replace(b"&",b"\\u0026")
+        bootstrap=b'<script type="application/json" id="initial-dashboard">'+data+b'</script>\n'
+        return html.replace(b"<script>",bootstrap+b"<script>",1)
+    except Exception:
+        log.exception("initial dashboard unavailable; client will retry via API")
+        return html
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -575,7 +587,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
-            self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            self._send(200, dashboard_html(self.settings), "text/html; charset=utf-8")
         elif path == "/api/history":
             try:
                 body=json.dumps(history_page(self.settings,parse_qs(urlsplit(self.path).query)),ensure_ascii=False,default=str).encode()
