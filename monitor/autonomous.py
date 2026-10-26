@@ -119,16 +119,32 @@ def decision_type(settings):
 
 
 def trading_prompt(settings):
-    if settings.ai_trading_mode==RISK_MODE:
-        text=TRADING_PROMPT.replace("short_full/short_empty：短线，分别初始满仓/空仓；medium_full/medium_empty：中线；long_full/long_empty：长线。", "low_full/low_empty：低风险；standard_full/standard_empty：标准风险；high_full/high_empty：高风险；每档分别初始满仓/空仓，全部做数日至一两周短线波段。")
-        text=text.replace("short_* 的 horizon 必须 intraday（兼容编码，实际为数日至一两周的短线波段，不是日内交易）；medium_* 必须 swing（数日至数周）；long_* 必须 position（数周至数月）。", "所有账户horizon必须intraday，表示数日至一两周的波段；没有中线或长线。")
-        text=text.replace("short_*", "全部账户").replace("中线重点判断数周持仓逻辑、参与价值与失效条件，配置流或短线趋势确认非统一前提。", "配置流不是交易前提。")
-        return text+"\n风险预算以每户risk_budget为准：单次计划风险为当前净值的1%/2%/4%，阶段历史最大回撤线5%/10%/20%。买入必填risk_exit_cny且低于入场和当前价，按该价卖出全部买入后持仓扣费，相对当前净值的预计损失不得超过trade_risk_cny。加仓合并已有持仓计算；如有实际止损，使用两者更低者计风险。risk_exit_cny仅是计划参考，不自动下止损。触及阶段回撤线后本实验暂停该户新增买入，仍须评估持仓、卖出和保护。初始满仓是实验起点，不受单次买入预算约束；后续决策遵守预算。三档只改变可承受损失，仓位自主决定，不要求高风险一定交易或更高仓位；不能跨户补充预算。"
+    if settings.ai_trading_mode==RISK_MODE:return RISK_TRADING_PROMPT
     if settings.ai_trading_mode!="four_account": return TRADING_PROMPT
     return (TRADING_PROMPT.replace("六个", "四个").replace("六份", "四份")
         .replace("；long_full/long_empty：长线", "")
         .replace("；long_* 必须 position（数周至数月）", "")
         + "\n当前只操盘short_*与medium_*四户；长线账户已删除，不得为其生成新决策、恢复交易或转移其资金。")
+
+
+RISK_TRADING_PROMPT = """操盘目标
+你操盘六个独立模拟账户：low_full/low_empty、standard_full/standard_empty、high_full/high_empty，分别是低/标准/高风险的初始满仓/空仓起点。余额、持仓和历史以trading_accounts为准；一次提交全部六户account_decisions，禁止借款、做空、跨户调拨。
+全部账户做数日至一两周的短线波段，horizon=intraday。目标是争取扣费后的净值增长，同时考虑回撤、成本与踏空代价。行动、仓位和保护由你决定；允许有依据地提前布局、逆势反弹或分批交易，不默认小仓，不要求所有信号转多，也不以研究概率或置信度限制交易。
+
+风险预算
+每户上限以risk_budget为准，不是必须用满的配额。买入必填risk_exit_cny，低于当前及计划入场价；将买入后全部持仓按该参考价退出并扣费，较当前净值的计划损失不得超过trade_risk_cny。实际止损更低时按更低价计算，加仓须包含原有仓位。风险参考不自动设置止损，实际损失可能超预算。
+buy_paused=true时暂停新增买入，仍可持有、卖出或调整保护；回撤暂停不随反弹自动解除。初始满仓只是实验起点，不受单次买入预算约束。高风险账户不必比低风险账户更频繁交易或持仓更多。
+
+决策依据
+- 使用日线和数日至周级别结构、资金与事件，忽略30分钟/1小时/4小时信号。每周约两次买卖操作仅是节奏参考，买卖各计一次，不要求凑次数、日内平仓或三日退出；目标和期限适合波段，不无限延期。
+- 空仓每轮在reason比较买入与等待：自选金额/仓位、入场E、目标T和风险退出R，说明依据并按卖费f计算T*(1-f)/E-1、R*(1-f)/E-1（另计价差）。允许明确标注假设的人民币换算情景，无需证明一定盈利；估计与历史事实分开，不编造价位、形态或胜率。无法估计须说明关键缺口；有持仓则比较持有、加减仓和退出。
+- 结合last_plan及short_wait_review复查上次条件、当轮变化和等待代价。更改门槛说明新增证据或原条件不可验证的原因；旧条件未出现也重估机会。wait的invalidation写现有数据可验证的观察条件与建议复查时点；语义条件不自动下单，复查由程序调度。
+- 有效京东执行报价和账户状态是交易必需信息；京东资金/挂单、ETF与央行配置流属于辅助证据，缺失不单独阻止交易。不能把未提供的完整京东日线或独立技术位设为前提。观望reason以“机会不合适：”（已知机会不值得参与）或“证据不足：”（关键判断或执行缺口）开头，并给依据。
+
+执行语义
+字段类型与范围按JSON Schema。buy/sell的可接受成交区间必须与限价条件有交集；市价用最新有效京东报价，限价买入等报价<=限价，卖出等报价>=限价，越出可接受区间会拒绝并复查。
+新决策替换该户旧未成交委托；hold/wait不成交，cancel撤销旧委托，三者仍可更新保护。保护价null保留原设置，移除须显式clear_stop_loss/clear_take_profit=true，且对应价格null。实际止损止盈可以不设或自主调整，不设时程序不会按固定亏损自动平仓。
+有效期从snapshot_at起算，到期只撤未成交委托，不强制平仓或撤销持仓保护。分析期间行情变动达到constraints.inflight_max_move_pct，或账户版本/模型开关变化，会拒绝过时决策；既有保护继续执行。根据最近拒绝原因修正计划。"""
 
 
 TRADING_PROMPT = """你同时负责六个独立积存金模拟账户，每个账户初始10万元，资金不可混用：

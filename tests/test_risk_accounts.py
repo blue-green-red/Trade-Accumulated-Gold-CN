@@ -43,6 +43,12 @@ class RiskAccountTests(unittest.TestCase):
         context={'snapshot_at':self.snap['ts'].isoformat(),'xauusd':4000,
             'trading_accounts':self.m.portfolios.input('codex',self.snap['execution_quote'])}
         self.assertEqual(set(context['trading_accounts']['accounts']),set(MODES))
+        policy=self.a.trading_system(context)
+        self.assertNotIn('medium_full',policy);self.assertNotIn('不固定900',policy)
+        self.assertIn('risk_exit_cny',policy);self.assertIn('加仓须包含原有仓位',policy)
+        self.assertIn('null保留原设置',policy);self.assertIn('不自动设置止损',policy)
+        self.assertNotIn('1000 字',self.a.research_system())
+        self.assertNotIn('中长线持有',self.a.result_instructions())
         for k,v in context['trading_accounts']['accounts'].items():
             self.assertTrue(v['key'].startswith('codex:'))
             self.assertEqual(v['grams']>0,k.endswith('_full'))
