@@ -17,7 +17,7 @@ from .controls import control,active
 from .store import utc_now
 from .ai_inputs import compact_context,news_key
 
-RESUME_RULE = '本轮是新一轮操盘判断。以本轮完整行情、账户版本、余额和保护价为准，旧行情与旧决策仅作历史，不能假定旧委托成交或重复执行上轮动作。重新独立提交全部六账户决策。已提供过的快讯避免重复检索，但仍应重新判断当前影响。'
+RESUME_RULE = '本轮是新一轮操盘判断。以本轮完整行情、账户版本、余额和保护价为准，旧行情与旧决策仅作历史，不能假定旧委托成交或重复执行上轮动作。重新独立提交全部活动账户决策。已提供过的快讯避免重复检索，但仍应重新判断当前影响。'
 
 
 def dumps(value): return json.dumps(value,ensure_ascii=False,separators=(',',':'))

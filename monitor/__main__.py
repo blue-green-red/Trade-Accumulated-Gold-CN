@@ -35,7 +35,7 @@ from .strategy import build_plan
 from .controls import active, control, identity, short_labels
 from .execution import execution_quote
 from .trading_hours import trading_session
-from .autonomous import AutonomousPortfolio, VERSION as TRADING_VERSION, enabled as autonomous_enabled
+from .autonomous import keys as portfolio_keys, active_modes, policy_version, AutonomousPortfolio, VERSION as TRADING_VERSION, enabled as autonomous_enabled
 
 log = logging.getLogger("monitor")
 
@@ -187,7 +187,7 @@ class Monitor:
         due = {name: trigger for name, trigger in due.items() if trigger}
         if self.portfolios:
             due = {name:trigger for name,trigger in due.items() if self.store.conn.execute(
-                "SELECT COUNT(*) FROM ai_portfolios WHERE model=? AND started_at IS NOT NULL",(name,)).fetchone()[0] == 6}
+                "SELECT COUNT(*) FROM ai_portfolios WHERE model=? AND started_at IS NOT NULL AND key IN ("+",".join("?" for _ in portfolio_keys(self.settings))+")",(name,*portfolio_keys(self.settings))).fetchone()[0] == len(active_modes(self.settings))}
         if not due:
             return events
         if len(due) > 1:
@@ -272,7 +272,7 @@ class Monitor:
                 archive.set_state("ai_inputs", meta)
                 for name, inputs in portfolio_inputs.items():
                     archive.set_state(f"ai_account_input:{run_id}:{name}", inputs)
-                archive.set_state(f"ai_input:{run_id}", {"policy": TRADING_VERSION if portfolio_inputs else "shared-direct-v2",
+                archive.set_state(f"ai_input:{run_id}", {"policy": policy_version(self.settings) if portfolio_inputs else "shared-direct-v2",
                     "max_searches": self.settings.ai_max_searches, "context": context})
             finally:
                 archive.conn.close()

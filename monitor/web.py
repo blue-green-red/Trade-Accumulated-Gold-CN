@@ -307,6 +307,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
         alerts = conn.execute("SELECT ts, title, delivered FROM alerts ORDER BY ts DESC LIMIT 20").fetchall()
         board = leaderboard(conn, settings, price)
         portfolio_accounts = portfolio_summaries(conn,settings,price) if autonomous_enabled(settings) else []
+        archived_clause = " AND account NOT LIKE '%:long_%'" if settings.ai_trading_mode=="four_account" else ""
         board += portfolio_accounts
         curves = equity_curves(conn, settings)
         shorts = [short_paper(conn, settings.paper_bank, key, price, settings.sell_fee_rate,
@@ -338,7 +339,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                           "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
-                "subscriptions": subscriptions(conn)},
+                "subscriptions": [r for r in subscriptions(conn) if settings.ai_trading_mode!="four_account" or not r["key"].endswith(":long")]},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,
             "trading_mode": settings.ai_trading_mode,
@@ -347,12 +348,12 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "model_controls": controls, "comparison": (autonomous_comparison(conn,settings,board,shorts,curves,price,accounts=portfolio_accounts)
                 if autonomous_enabled(settings) else comparison(conn, board, shorts, curves)),
             "autonomous": {"accounts": portfolio_accounts,
-                "plans": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute("SELECT * FROM ai_plans WHERE status='pending' OR id IN (SELECT MAX(id) FROM ai_plans GROUP BY account) ORDER BY id DESC")]
+                "plans": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute("SELECT * FROM ai_plans WHERE (status='pending' OR id IN (SELECT MAX(id) FROM ai_plans GROUP BY account))"+archived_clause+" ORDER BY id DESC")]
                     if portfolios_exist(conn) else [],
                 "recent_expired": [dict(r) | {"decision":json.loads(r["decision_json"])} for r in conn.execute(
                     "SELECT * FROM ai_plans WHERE (status='expired' OR (status='pending' AND julianday(expires_at)<=julianday(?)) OR "
                     "(status='executed' AND json_extract(decision_json,'$.action') IN ('hold','wait','cancel') AND julianday(expires_at)<=julianday(?))) "
-                    "ORDER BY julianday(expires_at) DESC,id DESC LIMIT 6",(datetime.now(timezone.utc).isoformat(),datetime.now(timezone.utc).isoformat()))]
+                    +archived_clause+" ORDER BY julianday(expires_at) DESC,id DESC LIMIT 6",(datetime.now(timezone.utc).isoformat(),datetime.now(timezone.utc).isoformat()))]
                     if portfolios_exist(conn) else [],
                 "fills": [dict(r) for r in conn.execute("SELECT * FROM ai_portfolio_fills ORDER BY id DESC LIMIT 200")]
                     if portfolios_exist(conn) else []},

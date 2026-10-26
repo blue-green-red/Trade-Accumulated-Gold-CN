@@ -66,7 +66,7 @@ class Settings:
     sell_fee_rate: float = _env_float("GOLD_MONITOR_SELL_FEE_RATE", 0.004)  # 卖出手续费 0.4%
     # 同时运行的模拟盘：hold/position 为规则日线，position_ai 按模型拆分；short 为短线基准
     strategies: tuple = tuple(s.strip() for s in os.environ.get("GOLD_MONITOR_STRATEGIES", "hold,position,position_ai,short,short_ai").split(",") if s.strip())
-    ai_trading_mode: str = os.environ.get("GOLD_AI_TRADING_MODE", "six_account")
+    ai_trading_mode: str = os.environ.get("GOLD_AI_TRADING_MODE", "four_account")
     ai_short_review_minutes: float = _env_float("GOLD_AI_SHORT_REVIEW_MINUTES", 0)
     ai_periodic_min_move_pct: float = _env_float("GOLD_AI_PERIODIC_MIN_MOVE_PCT", 0.4)
     ai_review_max_idle_minutes: float = _env_float("GOLD_AI_REVIEW_MAX_IDLE_MINUTES", 240)

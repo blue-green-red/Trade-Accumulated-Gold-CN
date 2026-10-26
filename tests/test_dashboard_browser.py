@@ -357,5 +357,35 @@ class DashboardBrowserTests(unittest.TestCase):
                 server.shutdown();server.server_close();thread.join(3);monitor.store.conn.close()
 
 
+
+    def test_four_account_page_filters_and_comparison(self):
+        import test_four_account as four
+        from playwright.sync_api import sync_playwright
+        fixture=four.FourAccountTests();fixture.setUp()
+        class Local(Handler):
+            password=''
+            def log_message(self,*args):pass
+        Local.settings=fixture.settings
+        server=ThreadingHTTPServer(('127.0.0.1',0),Local)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            with sync_playwright() as p:
+                b=p.chromium.launch(headless=True,args=['--no-sandbox'])
+                page=b.new_page(viewport={'width':390,'height':844});errors=[]
+                page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto(f'http://127.0.0.1:{server.server_port}/#ai')
+                page.get_by_role('heading',name='四账户自主操盘',exact=True).wait_for()
+                self.assertEqual(page.get_by_role('combobox',name='账户周期').locator('option[value="long"]').count(),0)
+                page.get_by_role('tab',name='操盘对比',exact=True).click()
+                self.assertEqual(page.locator('#panel-compare tbody tr').count(),8)
+                self.assertNotIn('长线',page.locator('#panel-compare .compare-mobile').inner_text())
+                page.get_by_role('tab',name='账户',exact=True).click()
+                self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),8)
+                self.assertEqual(page.get_by_role('combobox',name='资产周期').locator('option[value="long"]').count(),0)
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                self.assertEqual(errors,[]);b.close()
+        finally:
+            server.shutdown();server.server_close();thread.join();fixture.tearDown()
+
 if __name__ == "__main__":
     unittest.main()

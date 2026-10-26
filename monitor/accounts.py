@@ -72,7 +72,7 @@ class Accounts:
         store.conn.execute("CREATE TABLE IF NOT EXISTS trade_cycles (id INTEGER PRIMARY KEY, strategy TEXT, "
                            "opened_at TEXT, closed_at TEXT, invested REAL DEFAULT 0, proceeds REAL DEFAULT 0, pnl REAL)")
         store.conn.commit()
-        retired = ("position_ai", "claude:position_ai", "codex:position_ai") if settings.ai_trading_mode == "six_account" else ("position_ai",)
+        retired = ("position_ai", "claude:position_ai", "codex:position_ai") if settings.ai_trading_mode in ("six_account","four_account") else ("position_ai",)
         for legacy in retired:
             if store.conn.execute("SELECT 1 FROM accounts WHERE strategy=?", (legacy,)).fetchone():
                 old = build([legacy], self.params, ai_cfg)[0]

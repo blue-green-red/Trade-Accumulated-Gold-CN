@@ -46,7 +46,7 @@ def claim(conn,model,run_id):
         conn.execute('BEGIN IMMEDIATE')
         item=status(conn,model)
         if item.get('status')!='queued':return None
-        item.update(status='running',started_at=utc_now().isoformat(),run_id=run_id,message='正在分析并提交六账户决策')
+        item.update(status='running',started_at=utc_now().isoformat(),run_id=run_id,message='正在分析并提交活动账户决策')
         save(conn,'ai_manual:'+model,item)
         return item
 
@@ -59,7 +59,7 @@ def finish(conn,model,item,result):
         if not active(conn,model,item['generation']):state,message='cancelled','模型已关闭或重新开启，本次请求已取消'
         elif result is None:state,message='failed','本次分析未完成，请查看分析记录；不会自动重复本次手动请求'
         elif (result.get('_price_guard') or {}).get('invalidated_at'):state,message='completed','分析已完成但行情异动导致决策失效，已排队复查'
-        else:state,message='completed','分析已完成，六账户决策按条件执行；不代表必然成交'
+        else:state,message='completed','分析已完成，活动账户决策按条件执行；不代表必然成交'
         current.update(status=state,message=message,finished_at=utc_now().isoformat(),view_id=(result or {}).get('_view_id'))
         save(conn,'ai_manual:'+model,current)
 

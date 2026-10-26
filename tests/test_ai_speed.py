@@ -19,7 +19,7 @@ from test_autonomous import response,LABELS
 
 class SpeedTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.settings=replace(Settings(),db_path=Path(self.tmp.name)/'speed.db',
+        self.tmp=tempfile.TemporaryDirectory();self.settings=replace(Settings(),ai_trading_mode='six_account',db_path=Path(self.tmp.name)/'speed.db',
             ai_optimize=True,codex_resume_enabled=True,ai_max_searches=0,clawx_api_key='',anthropic_api_key='')
         self.store=Store(self.settings.db_path);self.a=AIAnalyst(self.settings,self.store,'codex','codex')
         self.ctx={'snapshot_at':utc_now().isoformat(),'xauusd':4000,'jin10_flash_recent':[{'time_bj':'10-19 12:00','text':'test'}],

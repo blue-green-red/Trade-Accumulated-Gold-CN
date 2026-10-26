@@ -30,7 +30,7 @@ def allowed(settings, conn, model, now, event_ids=(), manual=False):
 
 def request_periodic(settings, store, analysts, snap, now):
     interval=settings.ai_short_review_minutes
-    if settings.ai_trading_mode!="six_account" or interval<0: return
+    if settings.ai_trading_mode not in ("six_account","four_account") or interval<0: return
     for name,analyst in analysts.items():
         row=store.conn.execute("SELECT rowid,ts,xauusd FROM ai_views WHERE analyst=? AND error IS NULL ORDER BY rowid DESC LIMIT 1",(name,)).fetchone()
         if not row: continue

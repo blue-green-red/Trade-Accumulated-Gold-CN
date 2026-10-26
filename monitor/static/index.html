@@ -476,7 +476,7 @@ function hardEvents(d) {
 function aiAgreement(d) {
   const a = ((d.ai && d.ai.analysts) || []).filter((v)=>{
     const c=(d.model_controls || []).find((x)=>x.key===v.analyst);
-    return (!c || (c.enabled && (!c.changed_at || new Date(v.ts)>new Date(c.changed_at)))) && (d.trading_mode!=="six_account" || v.account_decisions);
+    return (!c || (c.enabled && (!c.changed_at || new Date(v.ts)>new Date(c.changed_at)))) && (!["six_account","four_account"].includes(d.trading_mode) || v.account_decisions);
   });
   if (a.length < 2) return null;
   return { short: a[0].bias_short === a[1].bias_short, long: a[0].bias_long === a[1].bias_long };
@@ -527,6 +527,7 @@ function assetLegendLabel(series) {
   return assetModel==="all" ? `${ANALYST[model]} · ${{short:"短",medium:"中",long:"长"}[match[1]]}/${match[2]==="full"?"满":"空"}` : ACCOUNT_LABELS[mode];
 }
 function renderStrategies(d) {
+  if(fourAccounts(d) && assetPeriod==="long") assetPeriod="all";
   const panel = clear(document.getElementById("panel-strategies"));
   const scopeMatches = (key) => assetMatches(key) && (strategyScope === "all" || (strategyScope === "ai" ? key.includes(":") : !key.includes(":")));
   const series = d.equity.series.filter((s) => scopeMatches(s.key)).map((s) => ({ ...s, color: seriesColor(s.key) }));
@@ -535,7 +536,7 @@ function renderStrategies(d) {
   const chooser=(label,choices,value,set)=>el("label",{},label,el("select",{"aria-label":label,disabled:strategyScope==="rules",onchange:(e)=>{set(e.target.value);renderStrategies(DATA);drawEquity();}},choices.map(([v,t])=>el("option",{value:v,selected:value===v},t))));
   panel.appendChild(card("账户筛选",null,scope,el("div",{class:"asset-filters"},
     chooser("资产模型",[["all","全部模型"],["claude","Claude"],["codex","Codex"]],assetModel,(v)=>assetModel=v),
-    chooser("资产周期",[["all","全部周期"],["short","短线"],["medium","中线"],["long","长线"]],assetPeriod,(v)=>assetPeriod=v),
+    chooser("资产周期",periodChoices(d),assetPeriod,(v)=>assetPeriod=v),
     chooser("资产起点",[["all","全部起点"],["full","初始满仓"],["empty","初始空仓"]],assetStart,(v)=>assetStart=v)),
     el("div",{class:"sub",style:"margin-top:10px"},strategyScope==="rules" ? "对照组按各自规则独立运行，不使用模型、周期或起点筛选。" : "满仓 / 空仓指账户初始状态，当前是否持仓请看账户状态。")));
   const order=Object.keys(ACCOUNT_LABELS), sorted=d.leaderboard.filter(a=>scopeMatches(a.key)).sort((a,b)=>{
@@ -659,15 +660,15 @@ function modelControls(d) {
         return m ? el("div", { class: "sub", style: "margin:6px 0" }, `收益 ${pct(m.return)} · 胜率 ${rate(m.win_rate)} · 已平仓 ${m.trades} 次`) : null; })(), message));
   });
   box.appendChild(grid);
-  box.appendChild(el("p",{class:"sub"},"手动触发一次六账户分析并按条件操盘，不保证成交；在下一个监控周期处理，休市或无有效报价时等待。不改变自动分析频率。"));
+  box.appendChild(el("p",{class:"sub"},`手动触发一次${fourAccounts(d)?"四":"六"}账户分析并按条件操盘，不保证成交；在下一个监控周期处理，休市或无有效报价时等待。不改变自动分析频率。`));
   return box;
 }
 function renderComparison(d) {
   const panel = clear(document.getElementById("panel-compare"));
   const cmp = d.comparison || { models: [] };
-  const autonomous = d.trading_mode === "six_account";
-  const accountOrder = autonomous ? Object.keys(ACCOUNT_LABELS) : ["position_ai", "short_ai"];
-  const comparisonNote=el("details",{class:"more card"},el("summary",{},"比较口径"),el("p",{class:"sub"},"每模型6个独立账户，每户10万元。满仓起点基准为开账时持有不动，空仓基准为现金。完整平仓计胜率，关闭期间继续计入盈亏。旧版概率账户不参与本实验。"));
+  const autonomous = ["six_account","four_account"].includes(d.trading_mode);
+  const accountOrder = autonomous ? Object.keys(ACCOUNT_LABELS).filter(k=>!fourAccounts(d) || !k.startsWith("long_")) : ["position_ai", "short_ai"];
+  const comparisonNote=el("details",{class:"more card"},el("summary",{},"比较口径"),el("p",{class:"sub"},`每模型${fourAccounts(d)?4:6}个独立账户，每户10万元。满仓起点基准为开账时持有不动，空仓基准为现金。完整平仓计胜率，关闭期间继续计入盈亏。${fourAccounts(d)?"已移除长线，不计入当前成绩。":""}旧版概率账户不参与本实验。`));
   const started=cmp.models.filter((m)=>m.started_at);
   if(started.length !== cmp.models.length || new Set(started.map((m)=>m.started_at)).size>1) panel.appendChild(el("div",{class:"notice warn"},"实验起点不同或有模型尚未开始，请结合运行时间、同起点基准与平仓样本比较，不按收益直接排名。"));
   panel.appendChild(el("div", { class: "grid-2" }, cmp.models.map((m) => card(m.name,
@@ -750,6 +751,8 @@ function viewBlock(v) {
       el("a", { href: /^https?:\/\//i.test(s.url) ? s.url : "#", target: "_blank", rel: "noopener noreferrer nofollow" }, s.title || s.url))))));
   return box;
 }
+const fourAccounts = d => d.trading_mode==="four_account";
+const periodChoices = d => [["all","全部周期"],["short","短线"],["medium","中线"],...(!fourAccounts(d) ? [["long","长线"]]:[])];
 const ACCOUNT_LABELS = {short_full:"短线 · 初始满仓",short_empty:"短线 · 初始空仓",medium_full:"中线 · 初始满仓",medium_empty:"中线 · 初始空仓",long_full:"长线 · 初始满仓",long_empty:"长线 · 初始空仓"};
 function executionRange(d) {
   return d.min_execution_price_cny!=null && d.max_execution_price_cny!=null ? `可接受成交价 ${num(d.min_execution_price_cny)}–${num(d.max_execution_price_cny)} 元/克` : "缺少成交价格区间，买卖委托将被拒绝";
@@ -796,6 +799,7 @@ function planValidityText(plan) {
 
 let accountModel = "active", accountPeriod = "all", accountStart = "all";
 function autonomousAccounts(d) {
+  if(fourAccounts(d) && accountPeriod==="long") accountPeriod="all";
   if (accountModel === "active") accountModel = ((d.model_controls || []).find(c=>c.enabled) || {}).key || "all";
   const rows = ((d.autonomous || {}).accounts || []).filter((a) =>
     (accountModel === "all" || a.model === accountModel) && (accountPeriod === "all" || a.start_mode.startsWith(accountPeriod+"_")) &&
@@ -803,10 +807,10 @@ function autonomousAccounts(d) {
   const filter = (label,choices,value,set) => el("label", {class:"sub"},label+" ",el("select",{"aria-label":label,onchange:(e)=>{set(e.target.value);renderAI(DATA);}},
     choices.map(([key,text])=>el("option",{value:key,selected:value===key},text))));
   const cadence = d.cadence || {};
-  const panel = card("六账户自主操盘",el("span",{class:"sub"},"每模型6户 · 每户10万元 · 一轮统一决策"),
+  const panel = card(fourAccounts(d)?"四账户自主操盘":"六账户自主操盘",el("span",{class:"sub"},`每模型${fourAccounts(d)?4:6}户 · 每户10万元 · 一轮统一决策`),
     el("div",{class:"row",style:"flex-wrap:wrap;margin-bottom:12px"},
       filter("账户模型",[["all","全部"],["claude","Claude"],["codex","Codex"]],accountModel,(v)=>accountModel=v),
-      filter("账户周期",[["all","全部周期"],["short","短线"],["medium","中线"],["long","长线"]],accountPeriod,(v)=>accountPeriod=v),
+      filter("账户周期",periodChoices(d),accountPeriod,(v)=>accountPeriod=v),
       filter("初始仓位",[["all","全部起点"],["full","初始满仓"],["empty","初始空仓"]],accountStart,(v)=>accountStart=v)));
   panel.appendChild(el("div",{class:"sub",style:"margin-bottom:10px"},cadence.review_minutes >= 0 ? `周期复查：${cadence.review_minutes > 0 ? `${cadence.review_minutes} 分钟后，` : "无最小时间间隔，"}国际金价较上次分析变化≥${cadence.min_move_pct}%才启动；最长${cadence.max_idle_minutes/60}小时兜底。重大事件另外排队，执行器每分钟检查。` : "定时分析加事件触发，执行器每分钟检查。"));
   panel.appendChild(el("div",{class:"notice info",style:"margin-bottom:12px"},"短线按数日至一两周的波段运行，以日线和波段价格结构为主，不依赖小时级信号；每周约两次买卖操作为节奏参考，不要求凑次数。AI 自主决定操作、数量及保护价，可设置、放宽或撤销止损止盈，无固定12%止损。概率用于成绩评估。账户间不转账；初始满仓仅在开账时买入一次。未成交委托到期撤销，已有持仓保护继续有效。"));
@@ -825,7 +829,7 @@ function autonomousAccounts(d) {
         plan.reason?el("div",{class:"sub"},plan.reason):null));
       if(["buy","sell"].includes(decision.action)) box.appendChild(el("div",{class:"sub"},executionRange(decision)));
       if(decision.invalidation) box.appendChild(el("details",{class:"more"},el("summary",{},a.start_mode.startsWith("short_") && decision.action==="wait" ? "买回观察与复查条件" : "计划失效条件"),el("div",{class:"sub"},decision.invalidation)));
-    } else box.appendChild(el("div",{class:"sub",style:"margin-top:10px"},a.started?"等待本模式首次六账户决策":"模型开启、后端可用且京东报价有效后，统一初始化六个账户"));
+    } else box.appendChild(el("div",{class:"sub",style:"margin-top:10px"},a.started?"等待活动账户首次决策":"模型开启、后端可用且京东报价有效后，统一初始化活动账户"));
     grid.appendChild(box);
   }
   panel.appendChild(el("button", {class:"link-btn",type:"button",style:"margin-bottom:12px",onclick:()=>{recordModel=accountModel === "all" ? "all" : accountModel;fillFilter="all";recordKind="fills";resetHistory();showTab("records");}}, "查看操盘记录 →"));
@@ -881,8 +885,8 @@ function renderAI(d) {
       const p = ((d.snapshot || {}).ai_plans || {})[v.analyst];
       if (c && !c.enabled) box.appendChild(el("div", { class: "notice" }, "模型已关闭；以上为历史判断，持仓仅保留风控"));
       else if (c && c.changed_at && new Date(v.ts) <= new Date(c.changed_at)) box.appendChild(el("div", { class: "notice" }, "已重新开启，等待新判断；以上判断不用于开仓"));
-      else if (v.account_decisions) box.appendChild(el("div", {class:"sub"}, "本轮已统一提交6份账户决策，执行状态见下方六账户卡片。"));
-      else if (d.trading_mode === "six_account") box.appendChild(el("div", {class:"sub"}, "旧版概率判断，仅作历史参考；等待本模式首轮六账户决策。"));
+      else if (v.account_decisions) box.appendChild(el("div", {class:"sub"}, `本轮已统一提交${Object.keys(v.account_decisions).length}份账户决策，当前活动账户执行状态见下方卡片。`));
+      else if (["six_account","four_account"].includes(d.trading_mode)) box.appendChild(el("div", {class:"sub"}, "旧版概率判断，仅作历史参考；等待本模式首轮活动账户决策。"));
       else if (p && p.ok) box.appendChild(el("div", { class: "notice info", style: "margin-top:12px" },
         el("strong", {}, "本模型交易计划"), el("p", {}, p.summary),
         p.buy && p.buy.zone_cny ? el("div", { class: "sub" }, `低吸 ${num(p.buy.zone_cny[0])}–${num(p.buy.zone_cny[1])} · 止损 ${num(p.buy.stop_cny)} · T1 ${num(p.buy.t1_cny)} · 扣费 R:R ${num(p.buy.rr1)}`) : null));
@@ -890,7 +894,7 @@ function renderAI(d) {
       return box;
     })));
   }
-  if(d.trading_mode === "six_account") panel.appendChild(autonomousAccounts(d));
+  if(["six_account","four_account"].includes(d.trading_mode)) panel.appendChild(autonomousAccounts(d));
   if(inputs) panel.appendChild(inputHost);
   panel.appendChild(el("details",{class:"more card"},el("summary",{},"预测准确度（区别于交易胜率）"),scorecardCard(d)));
   panel.appendChild(card("分析历史",el("button",{class:"link-btn",onclick:()=>{recordKind="analysis";recordModel="all";fillFilter="all";resetHistory();showTab("records");}},"查看完整分析历史 →"),
@@ -1156,7 +1160,7 @@ function renderRecords(d) {
       !["analysis","alerts"].includes(recordKind) ? chooser("筛选账户",[["all","全部账户"],...keys],fillFilter,(v)=>fillFilter=v) : null));
   controls.classList.add("record-controls");panel.appendChild(controls);
   const title=({fills:"实际成交",plans:"AI 操盘决策",cycles:"交易周期",analysis:"分析历史",alerts:"系统提醒"})[recordKind];
-  const descriptions={fills:"按成交时间倒序。这里才是实际发生的买卖；初始化建仓单独标注。",plans:"按决策时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮可以包含六个账户决策，不代表已经成交。",alerts:"系统监控提醒，不代表 AI 已下单。"};
+  const descriptions={fills:"按成交时间倒序。这里才是实际发生的买卖；初始化建仓单独标注。",plans:"按决策时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮包含全部活动账户决策，不代表已经成交。",alerts:"系统监控提醒，不代表 AI 已下单。"};
   panel.appendChild(el("div",{class:"notice info"},descriptions[recordKind]));
   const items=historyItems;
   const list=items.map((r)=>{

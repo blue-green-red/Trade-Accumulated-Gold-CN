@@ -80,7 +80,7 @@ def comparison(conn, board, short, curves):
 
 
 def autonomous_comparison(conn, settings, board, short, curves, price, accounts=None):
-    from .autonomous import summaries, VERSION, net_price
+    from .autonomous import summaries, VERSION, policy_version, net_price
     if accounts is None:
         accounts = summaries(conn,settings,price)
     models = []
@@ -93,7 +93,7 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
             row["excess_return"] = row["return"]-row["baseline_return"] if row["return"] is not None and row["baseline_return"] is not None else None
         budget = sum(a["budget"] for a in rows)
         value = sum(a["value"] for a in rows) if rows and all(a["value"] is not None for a in rows) else None
-        pnls = [r[0] for r in conn.execute("SELECT pnl FROM ai_portfolio_cycles WHERE account LIKE ? AND closed_at IS NOT NULL",(model+":%",))] if rows else []
+        pnls = [r[0] for r in conn.execute("SELECT pnl FROM ai_portfolio_cycles WHERE account IN ("+",".join("?" for _ in rows)+") AND closed_at IS NOT NULL",tuple(a["key"] for a in rows))] if rows else []
         owned = [s for s in curves["series"] if s["key"] in {a["key"] for a in rows}]
         events = sorted((ts,s["key"],ret) for s in owned for ts,ret in s["points"])
         weights = {a["key"]:a["budget"] for a in rows}
@@ -106,7 +106,7 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
         for _,ret in points + ([["now",value/budget-1]] if value is not None and budget else []):
             peak=max(peak,1+ret);mdd=max(mdd,1-(1+ret)/peak)
         stats = conn.execute("SELECT max_drawdown FROM ai_portfolio_model_stats WHERE model=?",(model,)).fetchone() if rows else None
-        if stats: mdd=stats[0]
+        if stats and settings.ai_trading_mode!="four_account": mdd=stats[0]
         starts=[a["started_at"] for a in rows if a["started_at"]]
         baseline = sum(a["baseline_return"]*a["budget"] for a in rows)/budget if budget and all(a["baseline_return"] is not None for a in rows) else None
         models.append({"key":model,"name":model.title(),"budget":budget,"value":value,
@@ -115,5 +115,5 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
             "started_at":min(starts) if starts else None,"accounts":rows,"points":points,**pnl_stats(pnls)})
     baselines = [r for r in board if not r.get("analyst")]
     baselines += [dict(r,name=r["label"]) for r in short if not r.get("analyst")]
-    return {"models":models,"baselines":baselines,"version":VERSION,
-        "rules":"每模型六个独立账户：短中长各满仓/空仓，各10万元；同轮统一返回六份决策。胜率按完整平仓周期扣费统计。"}
+    return {"models":models,"baselines":baselines,"version":policy_version(settings),
+        "rules":("每模型四个独立账户：短中各满仓/空仓，各10万元；长线已移除，不计入当前对比。" if settings.ai_trading_mode=="four_account" else "每模型六个独立账户：短中长各满仓/空仓，各10万元；同轮统一返回六份决策。")+"胜率按完整平仓周期扣费统计。"}

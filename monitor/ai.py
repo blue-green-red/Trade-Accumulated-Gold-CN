@@ -12,7 +12,7 @@ api 后端两步调用（联网搜索结果自带引用，而结构化输出不�
   1. research：默认解读共同上下文，可选 web_search 补充，输出带来源的中文研究笔记
   2. structure：不联网，把笔记 + 行情上下文整理成 MarketView（Pydantic 校验）
 
-六账户模式由 AI 统一提交六份自主决策，包含数量、委托、止损止盈；程序校验并执行。旧概率模式只输出方向等预测，价位由规则计算。
+自主账户模式由 AI 统一提交全部活动账户决策，包含数量、委托、止损止盈；程序校验并执行。旧概率模式只输出方向等预测，价位由规则计算。
 每次判断（含笔记、来源、token 用量）存入 ai_views 表，供事后评估 AI 准确率。
 """
 
@@ -36,7 +36,7 @@ from .config import BJ, Settings
 from .store import Store, iso, utc_now
 from .controls import control, active
 from .ai_events import enqueue, read as read_events, acknowledge
-from .autonomous import PortfolioDecisions, TRADING_PROMPT, VERSION as TRADING_VERSION
+from .autonomous import PortfolioDecisions, FourPortfolioDecisions, decision_type, policy_version, trading_prompt, TRADING_PROMPT, VERSION as TRADING_VERSION
 
 log = logging.getLogger("monitor.ai")
 
@@ -109,7 +109,7 @@ STRUCTURE_SYSTEM = """你把黄金研究笔记整理成结构化判断，供程�
 - confidence=high 只用于多条独立、近期、同向的证据。
 - hard_risk_event 只标记经济日历之外的突发风险；日历内的硬事件程序已判定。upcoming_events 中的日历事件必须使用程序提供的北京时间。
 - 概率要校准：没有明确证据时接近基准（3 日：涨/跌各约 0.35；3 个月：涨/跌各约 0.3），证据越强越偏离；
-  不要因为谨慎就一律给基准值——成绩单会按实际走势检验概率是否准确；六账户模式直接执行 account_decisions，不按概率阈值下单。
+  不要因为谨慎就一律给基准值——成绩单会按实际走势检验概率是否准确；自主账户模式直接执行 account_decisions，不按概率阈值下单。
 - summary 用中文，不含具体买卖价位。"""
 
 
@@ -143,6 +143,10 @@ class ClaudeCodeResult(MarketView):
 
 class AutonomousResult(ClaudeCodeResult):
     account_decisions: PortfolioDecisions
+
+
+class FourAccountResult(ClaudeCodeResult):
+    account_decisions: FourPortfolioDecisions
 
 
 CLAUDE_CODE_TIMEOUT_SECONDS = 900
@@ -337,7 +341,7 @@ class AIAnalyst:
             else:
                 notes, sources, view = self._run_claude_code(context, usage)
             if context.get("trading_accounts"):
-                PortfolioDecisions.model_validate(view.model_dump()["account_decisions"])
+                decision_type(self.settings).model_validate(view.model_dump()["account_decisions"])
         except Exception as exc:
             from .history_access import archive
             archive(store,run_id,self.analyst,usage)
@@ -370,10 +374,10 @@ class AIAnalyst:
             return None
         data = MarketView.model_validate(view.model_dump(include=set(MarketView.model_fields))).model_dump()
         if context.get("trading_accounts"):
-            data["account_decisions"] = PortfolioDecisions.model_validate(view.model_dump()["account_decisions"]).model_dump()
+            data["account_decisions"] = decision_type(self.settings).model_validate(view.model_dump()["account_decisions"]).model_dump()
             data["_account_inputs"] = {mode: {"key": a["key"], "revision": a["revision"]}
                 for mode,a in context["trading_accounts"]["accounts"].items()}
-            data["_trading_version"] = TRADING_VERSION
+            data["_trading_version"] = policy_version(self.settings)
         data["_control_generation"] = self._generation
         for up, down in (("p_up_3d", "p_down_3d"), ("p_up_3m", "p_down_3m")):   # 截断到 0~1，两者之和不超过 1
             data[up], data[down] = (min(max(float(data[k]), 0.0), 1.0) for k in (up, down))
@@ -520,16 +524,16 @@ class AIAnalyst:
 
     def result_instructions(self):
         if self.settings.ai_optimize:
-            return "按 JSON schema 输出全部字段和六账户决策。只允许通过专用账户历史工具按需查历史；不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；中长线持有/观望理由不超过60字；短线reason不超过240字，包含等待与试仓的取舍、上次条件复查，引用费用时给扣费测算或明确证据不足；买卖理由不超过240字。短线wait的invalidation不超过300字，写可验证买回条件及复查时点，勿仅重复通用失效条款。不复述六账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
+            return "按 JSON schema 输出全部字段和全部活动账户决策。只允许通过专用账户历史工具按需查历史；不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；中长线持有/观望理由不超过60字；短线reason不超过240字，包含等待与试仓的取舍、上次条件复查，引用费用时给扣费测算或明确证据不足；买卖理由不超过240字。短线wait的invalidation不超过300字，写可验证买回条件及复查时点，勿仅重复通用失效条款。不复述账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
         return "按给定 JSON schema 输出；research_notes 最多 1000 字，sources 仅列实际引用来源，不编造网址。"
 
     def result_type(self, context):
-        return AutonomousResult if context.get("trading_accounts") else ClaudeCodeResult
+        return (FourAccountResult if self.settings.ai_trading_mode=="four_account" else AutonomousResult) if context.get("trading_accounts") else ClaudeCodeResult
 
     def trading_system(self, context):
         if not context.get("trading_accounts"):return ""
         from .history_access import instructions
-        return "\n\n"+TRADING_PROMPT+(instructions(self.settings) if self.settings.ai_history_max_queries>0 else "")
+        return "\n\n"+trading_prompt(self.settings)+(instructions(self.settings) if self.settings.ai_history_max_queries>0 else "")
 
     def _run_codex(self, context: Dict[str, Any], usage: Dict[str, int]):
         from .codex_runtime import run
@@ -603,9 +607,9 @@ class AIAnalyst:
         """History tool calls remain in one conversation before the final six-account submission."""
         from .history_access import session as history_session
         from .history_tool import NAME,DESCRIPTION,SCHEMA
-        system=self.research_system()+"\n"+STRUCTURE_SYSTEM+self.trading_system(context)+"\n"+self.result_instructions()+"\n最终必须调用 submit_portfolio_decisions 提交六个账户的决策。先读取历史工具结果，再单独提交，不要在同一响应中同时查历史和提交。"
+        system=self.research_system()+"\n"+STRUCTURE_SYSTEM+self.trading_system(context)+"\n"+self.result_instructions()+"\n最终必须调用 submit_portfolio_decisions 提交全部活动账户的决策。先读取历史工具结果，再单独提交，不要在同一响应中同时查历史和提交。"
         messages=[{"role":"user","content":json.dumps(context,ensure_ascii=False,separators=(",",":"))}]
-        tools=[{"name":"submit_portfolio_decisions","description":"返回完整研究和六账户操作，由程序校验执行","input_schema":strict_schema(AutonomousResult.model_json_schema())}]
+        tools=[{"name":"submit_portfolio_decisions","description":"返回完整研究和活动账户操作，由程序校验执行","input_schema":strict_schema(self.result_type(context).model_json_schema())}]
         if self.settings.ai_max_searches>0:tools.append({"type":"web_search_20260209","name":"web_search","max_uses":self.settings.ai_max_searches})
         with history_session(self,context,usage) as history:
             if history:tools.append({"name":NAME,"description":DESCRIPTION,"input_schema":SCHEMA})
@@ -616,7 +620,7 @@ class AIAnalyst:
                 self._add_usage(usage,response)
                 calls=[b for b in response.content if b.type=='tool_use']
                 if len(calls)==1 and calls[0].name=='submit_portfolio_decisions':
-                    parsed=AutonomousResult.model_validate(calls[0].input)
+                    parsed=self.result_type(context).model_validate(calls[0].input)
                     return parsed.research_notes,[s.model_dump() for s in parsed.sources],parsed
                 results=[]
                 for block in calls:
@@ -630,7 +634,7 @@ class AIAnalyst:
                 elif response.stop_reason=='pause_turn' and pauses<MAX_PAUSE_CONTINUATIONS:
                     pauses+=1;messages.append({'role':'assistant','content':response.content})
                 else:break
-        raise RuntimeError("API 未提交完整六账户决策")
+        raise RuntimeError("API 未提交完整活动账户决策")
 
     def _research(self, context: Dict[str, Any], usage: Dict[str, int]):
         user = ("当前行情与宏观上下文（JSON，数据由程序实时抓取）：\n"

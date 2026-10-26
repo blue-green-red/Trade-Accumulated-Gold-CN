@@ -1,4 +1,4 @@
-"""AI 自主六账户模拟盘：三周期各满仓/空仓起点，一次判断六个决策，独立审计执行。"""
+"""AI 自主模拟盘：短中线四账户，保留旧六账户协议兼容，独立审计执行。"""
 from __future__ import annotations
 
 import json
@@ -77,14 +77,37 @@ class AccountDecision(BaseModel):
         return self
 
 
-class PortfolioDecisions(BaseModel):
+class FourPortfolioDecisions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     short_full: AccountDecision
     short_empty: AccountDecision
     medium_full: AccountDecision
     medium_empty: AccountDecision
+
+
+class PortfolioDecisions(FourPortfolioDecisions):
     long_full: AccountDecision
     long_empty: AccountDecision
+
+
+def policy_version(settings):
+    return "autonomous-four-v1" if settings.ai_trading_mode=="four_account" else VERSION
+
+
+def active_modes(settings):
+    return tuple(k for k in LABELS if settings.ai_trading_mode!="four_account" or not k.startswith("long_"))
+
+
+def decision_type(settings):
+    return FourPortfolioDecisions if settings.ai_trading_mode=="four_account" else PortfolioDecisions
+
+
+def trading_prompt(settings):
+    if settings.ai_trading_mode!="four_account": return TRADING_PROMPT
+    return (TRADING_PROMPT.replace("六个", "四个").replace("六份", "四份")
+        .replace("；long_full/long_empty：长线", "")
+        .replace("；long_* 必须 position（数周至数月）", "")
+        + "\n当前只操盘short_*与medium_*四户；长线账户已删除，不得为其生成新决策、恢复交易或转移其资金。")
 
 
 TRADING_PROMPT = """你同时负责六个独立积存金模拟账户，每个账户初始10万元，资金不可混用：
@@ -114,12 +137,12 @@ hold/wait 不成交，可更新持仓保护；cancel 撤销未成交委托，也
 
 
 def enabled(settings):
-    return settings.ai_trading_mode == "six_account"
+    return settings.ai_trading_mode in ("six_account","four_account")
 
 
 def keys(settings):
     return {f"{model}:{mode}": f"{model.title()} · {label}" for model in settings.ai_analysts if model in MODELS
-            for mode, label in LABELS.items()}
+            for mode, label in LABELS.items() if mode in active_modes(settings)}
 
 
 def exists(conn):
@@ -136,6 +159,7 @@ def summaries(conn, settings, price):
     rows = []
     for raw in conn.execute("SELECT * FROM ai_portfolios ORDER BY model,start_mode"):
         a = dict(raw)
+        if a["key"] not in keys(settings): continue
         value = a["cash"] + a["grams"] * net_price(settings, price) if price else a["cash"] if a["grams"] < 1e-9 else None
         avg = a["cost"] / a["grams"] if a["grams"] > 1e-9 else None
         plan = conn.execute("SELECT * FROM ai_plans WHERE account=? ORDER BY id DESC LIMIT 1", (a["key"],)).fetchone()
@@ -166,14 +190,20 @@ class AutonomousPortfolio:
             store.conn.execute("INSERT OR IGNORE INTO ai_portfolios(key,model,start_mode,budget,cash,peak) VALUES(?,?,?,?,?,?)",
                                (key, model, mode, settings.account_budget, settings.account_budget, settings.account_budget))
         store.conn.commit()
+        if settings.ai_trading_mode=="four_account":
+            from .retire_long import remove_long_accounts
+            removed=remove_long_accounts(store.conn)
+            if removed:
+                for model in settings.ai_analysts:
+                    if active(store.conn,model):enqueue(store.conn,model,"长线已删除，按四账户重新评估",0,event_id="four-account-mode:v1")
         if not store.get_state("autonomous_since"):
             store.set_state("autonomous_since", utc_now().isoformat())
 
     def input(self, model, quote, store=None, as_of=None):
         conn = (store or self.store).conn
         rows = [a for a in summaries(conn, self.settings, quote["price"] if quote else None) if a["model"] == model]
-        if len(rows) != 6 or not all(a["started"] for a in rows):
-            raise ValueError("六账户尚未完成初始化，等待有效报价和模型开启")
+        if len(rows) != len(active_modes(self.settings)) or not all(a["started"] for a in rows):
+            raise ValueError("活动账户尚未完成初始化，等待有效报价和模型开启")
         accounts = {}
         as_of = as_of or utc_now().isoformat()
         for a in rows:
@@ -191,7 +221,7 @@ class AutonomousPortfolio:
                 review=wait_review(conn,a["plan"],quote,as_of)
                 if review:accounts[a["start_mode"]]["short_wait_review"]=review
 
-        return {"policy_version":VERSION, "short_strategy_profile":{"name":"短线波段","holding_period":"数日至一两周","primary_timeframes":["1D"],"ignored_timeframes":["30m","1H","4H"],"entry_exit_timing":"日线与数日至周级别价格结构，不要求小时确认","pace":"每周约两次买卖操作是参考，不是配额或硬上限；不要求日内平仓"}, "reference_quote":quote, "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,
+        return {"policy_version":policy_version(self.settings), "short_strategy_profile":{"name":"短线波段","holding_period":"数日至一两周","primary_timeframes":["1D"],"ignored_timeframes":["30m","1H","4H"],"entry_exit_timing":"日线与数日至周级别价格结构，不要求小时确认","pace":"每周约两次买卖操作是参考，不是配额或硬上限；不要求日内平仓"}, "reference_quote":quote, "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,
             "spread_cny": self.settings.spread_cny, "max_position_pct": 100, "protection_policy": "model_discretion", "stop_loss_required": False, "can_clear_stop_loss": True,
             "inflight_max_move_pct":self.settings.ai_inflight_max_move_pct, "max_input_age_minutes": self.settings.ai_decision_max_age_minutes, "max_plan_minutes": 1440,
             "currency": "CNY", "quantity_unit": "gram", "shorting": False}}
@@ -349,13 +379,13 @@ class AutonomousPortfolio:
             for raw in c.execute("SELECT * FROM ai_portfolios ORDER BY model,start_mode").fetchall():
                 a = dict(raw)
                 status = self.store.get_state("ai_status:"+a["model"],{})
-                can_trade = a["model"] in self.settings.ai_analysts and active(c,a["model"]) and status.get("available",True)
+                can_trade = a["key"] in keys(self.settings) and a["model"] in self.settings.ai_analysts and active(c,a["model"]) and status.get("available",True)
                 if not a["started_at"]:
                     if not can_trade:
                         continue
                     a["started_at"], a["initial_price"] = batch_start, quote["price"]
                     a["revision"] += 1
-                    refreshes.append((a["model"],"portfolio-init:"+a["model"],"六账户初始化，按新账户提交决策"))
+                    refreshes.append((a["model"],"portfolio-init:"+a["model"],"活动账户初始化，按新账户提交决策"))
                     if a["start_mode"].endswith("_full"):
                         self._fill(a,"buy",a["budget"]/quote["price"],quote,"实验初始化：满仓起点")
                 # 已有保护优先执行，与模型开关、预测和计划到期无关。
