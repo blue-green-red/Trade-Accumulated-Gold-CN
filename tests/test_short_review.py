@@ -64,6 +64,12 @@ class ShortReviewTests(unittest.TestCase):
         self.assertIn('不固定900',text)
         self.assertIn('上次条件是否出现',text)
         self.assertIn('短线reason不超过240字',self.f.a.result_instructions())
+        self.assertIn('不得把未提供的完整京东人民币日线',text)
+        self.assertIn('不能逐轮重复等待缺失数据',text)
+        self.assertIn('情景测算',text)
+        self.assertIn('不得为了避免等待而虚构目标或强制买入',text)
+        self.assertIn('机会不合适：',self.f.a.result_instructions())
+        self.assertIn('证据不足：',self.f.a.result_instructions())
 
     def test_wave_profile_and_trade_count_exclude_initialization_and_future(self):
         c=self.f.store.conn
