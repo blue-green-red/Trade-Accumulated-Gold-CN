@@ -63,7 +63,7 @@ class ShortReviewTests(unittest.TestCase):
         self.assertIn('不强制试仓',text)
         self.assertIn('不固定900',text)
         self.assertIn('上次条件是否出现',text)
-        self.assertIn('短线reason不超过240字',self.f.a.result_instructions())
+        self.assertIn('短线reason不超过360字',self.f.a.result_instructions())
         self.assertIn('不得把未提供的完整京东人民币日线',text)
         self.assertIn('不能逐轮重复等待缺失数据',text)
         self.assertIn('情景测算',text)
