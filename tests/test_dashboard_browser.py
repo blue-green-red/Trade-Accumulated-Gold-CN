@@ -393,6 +393,45 @@ class DashboardBrowserTests(unittest.TestCase):
             server.shutdown();server.server_close();thread.join();fixture.tearDown()
 
 
+    def test_risk_accounts_filters_comparison_and_notifications(self):
+        import test_risk_accounts as risk
+        from playwright.sync_api import sync_playwright
+        f=risk.RiskAccountTests();f.setUp()
+        class Local(Handler):
+            password=''
+            def log_message(self,*args):pass
+        Local.settings=f.settings
+        server=ThreadingHTTPServer(('127.0.0.1',0),Local)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            with sync_playwright() as p:
+                b=p.chromium.launch(headless=True,args=['--no-sandbox'])
+                page=b.new_page(viewport={'width':390,'height':844});errors=[]
+                page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto(f'http://127.0.0.1:{server.server_port}/#ai')
+                page.get_by_role('heading',name='六账户短线风险实验',exact=True).wait_for()
+                page.get_by_role('combobox',name='风险场景').select_option('high')
+                self.assertEqual(page.get_by_role('combobox',name='风险场景').locator('option').count(),4)
+                self.assertIn('单次计划风险 4%',page.locator('#panel-ai').inner_text())
+                page.get_by_role('tab',name='操盘对比',exact=True).click()
+                self.assertEqual(page.locator('#panel-compare tbody tr').count(),12)
+                self.assertNotIn('中线',page.locator('#panel-compare .compare-mobile').inner_text())
+                page.get_by_role('tab',name='账户',exact=True).click()
+                self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),12)
+                page.get_by_role('combobox',name='风险场景').select_option('low')
+                self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),4)
+                page.get_by_role('tab',name='通知',exact=True).click()
+                text=page.locator('#panel-notifications').inner_text()
+                self.assertIn('高风险短线',text);self.assertNotIn('中线',text)
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                page.set_viewport_size({'width':1280,'height':900})
+                for tab in ['总览','账户','操盘对比','AI','行情','操盘记录','通知']:
+                    page.get_by_role('tab',name=tab,exact=True).click()
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                self.assertEqual(errors,[]);b.close()
+        finally:server.shutdown();server.server_close();thread.join();f.tearDown()
+
+
     def test_wave_data_views_calendar_and_actual_input(self):
         import test_four_account as fixtures
         from playwright.sync_api import sync_playwright

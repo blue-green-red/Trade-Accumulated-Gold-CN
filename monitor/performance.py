@@ -106,7 +106,7 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
         for _,ret in points + ([["now",value/budget-1]] if value is not None and budget else []):
             peak=max(peak,1+ret);mdd=max(mdd,1-(1+ret)/peak)
         stats = conn.execute("SELECT max_drawdown FROM ai_portfolio_model_stats WHERE model=?",(model,)).fetchone() if rows else None
-        if stats and settings.ai_trading_mode!="four_account": mdd=stats[0]
+        if stats and settings.ai_trading_mode not in ("four_account","risk_six_account"): mdd=stats[0]
         starts=[a["started_at"] for a in rows if a["started_at"]]
         baseline = sum(a["baseline_return"]*a["budget"] for a in rows)/budget if budget and all(a["baseline_return"] is not None for a in rows) else None
         models.append({"key":model,"name":model.title(),"budget":budget,"value":value,
@@ -116,4 +116,4 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
     baselines = [r for r in board if not r.get("analyst")]
     baselines += [dict(r,name=r["label"]) for r in short if not r.get("analyst")]
     return {"models":models,"baselines":baselines,"version":policy_version(settings),
-        "rules":("每模型四个独立账户：短中各满仓/空仓，各10万元；长线已移除，不计入当前对比。" if settings.ai_trading_mode=="four_account" else "每模型六个独立账户：短中长各满仓/空仓，各10万元；同轮统一返回六份决策。")+"胜率按完整平仓周期扣费统计。"}
+        "rules":("每模型六个短线波段账户：低/标准/高风险各初始满仓和空仓，各10万元；仅风险预算不同，中长线已删除。" if settings.ai_trading_mode=="risk_six_account" else "每模型四个独立账户：短中各满仓/空仓，各10万元；长线已移除，不计入当前对比。" if settings.ai_trading_mode=="four_account" else "每模型六个独立账户：短中长各满仓/空仓，各10万元；同轮统一返回六份决策。")+"胜率按完整平仓周期扣费统计。"}

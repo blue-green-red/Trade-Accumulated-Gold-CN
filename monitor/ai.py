@@ -36,7 +36,7 @@ from .config import BJ, Settings
 from .store import Store, iso, utc_now
 from .controls import control, active
 from .ai_events import enqueue, read as read_events, acknowledge
-from .autonomous import PortfolioDecisions, FourPortfolioDecisions, decision_type, policy_version, trading_prompt, TRADING_PROMPT, VERSION as TRADING_VERSION
+from .autonomous import PortfolioDecisions, FourPortfolioDecisions, RiskPortfolioDecisions, decision_type, policy_version, trading_prompt, TRADING_PROMPT, VERSION as TRADING_VERSION
 
 log = logging.getLogger("monitor.ai")
 
@@ -140,6 +140,10 @@ class Source(BaseModel):
 class ClaudeCodeResult(MarketView):
     research_notes: str = Field(description="中文研究笔记：检索到的事实（含日期与来源）、多空证据、矛盾之处")
     sources: List[Source] = Field(description="实际引用的网页（标题 + URL）")
+
+
+class RiskAccountResult(ClaudeCodeResult):
+    account_decisions: RiskPortfolioDecisions
 
 
 class AutonomousResult(ClaudeCodeResult):
@@ -532,7 +536,7 @@ class AIAnalyst:
         return "按给定 JSON schema 输出；research_notes 最多 1000 字，sources 仅列实际引用来源，不编造网址。"
 
     def result_type(self, context):
-        return (FourAccountResult if self.settings.ai_trading_mode=="four_account" else AutonomousResult) if context.get("trading_accounts") else ClaudeCodeResult
+        return (RiskAccountResult if self.settings.ai_trading_mode=="risk_six_account" else FourAccountResult if self.settings.ai_trading_mode=="four_account" else AutonomousResult) if context.get("trading_accounts") else ClaudeCodeResult
 
     def trading_system(self, context):
         if not context.get("trading_accounts"):return ""

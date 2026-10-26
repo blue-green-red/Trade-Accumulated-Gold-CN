@@ -1,4 +1,4 @@
-"""AI 自主模拟盘：短中线四账户，保留旧六账户协议兼容，独立审计执行。"""
+"""AI 自主模拟盘：三档风险六账户短线实验，保留旧协议兼容，独立审计执行。"""
 from __future__ import annotations
 
 import json
@@ -11,6 +11,8 @@ from .controls import MODELS, active, control, view_active
 from .execution import execution_quote
 from .store import utc_now
 from .ai_events import enqueue
+
+from .risk_profiles import MODE as RISK_MODE, MODES as RISK_MODES, LABELS as RISK_LABELS, profile, risk_state
 
 VERSION = "autonomous-six-v2"
 PERIODS = {"short": ("短线", "intraday"), "medium": ("中线", "swing"), "long": ("长线", "position")}
@@ -57,6 +59,7 @@ class AccountDecision(BaseModel):
     limit_price_cny: Optional[float] = Field(default=None, gt=0, description="限价，元/克；市价填 null")
     min_execution_price_cny: Optional[float] = Field(default=None, gt=0, description="买卖可接受成交价下限，元/克；买卖必填，其他动作null")
     max_execution_price_cny: Optional[float] = Field(default=None, gt=0, description="买卖可接受成交价上限，元/克；买卖必填，其他动作null")
+    risk_exit_cny: Optional[float] = Field(default=None, gt=0, description="风险实验买入必填：整仓风险退出参考价，元/克；仅用于计划风险预算，不自动设置止损")
     stop_loss_cny: Optional[float] = Field(default=None, gt=0, description="持仓止损价，元/克；null 保留现有保护")
     take_profit_cny: Optional[float] = Field(default=None, gt=0, description="持仓全部止盈价，元/克；null 保留现有目标")
     clear_stop_loss: bool = Field(default=False, description="主动取消已有止损；与 stop_loss_cny 同时设置无效")
@@ -85,24 +88,42 @@ class FourPortfolioDecisions(BaseModel):
     medium_empty: AccountDecision
 
 
+class RiskPortfolioDecisions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    low_full: AccountDecision
+    low_empty: AccountDecision
+    standard_full: AccountDecision
+    standard_empty: AccountDecision
+    high_full: AccountDecision
+    high_empty: AccountDecision
+
+
 class PortfolioDecisions(FourPortfolioDecisions):
     long_full: AccountDecision
     long_empty: AccountDecision
 
 
 def policy_version(settings):
+    if settings.ai_trading_mode==RISK_MODE:return "autonomous-risk-six-v1"
     return "autonomous-four-v1" if settings.ai_trading_mode=="four_account" else VERSION
 
 
 def active_modes(settings):
+    if settings.ai_trading_mode==RISK_MODE:return RISK_MODES
     return tuple(k for k in LABELS if settings.ai_trading_mode!="four_account" or not k.startswith("long_"))
 
 
 def decision_type(settings):
+    if settings.ai_trading_mode==RISK_MODE:return RiskPortfolioDecisions
     return FourPortfolioDecisions if settings.ai_trading_mode=="four_account" else PortfolioDecisions
 
 
 def trading_prompt(settings):
+    if settings.ai_trading_mode==RISK_MODE:
+        text=TRADING_PROMPT.replace("short_full/short_empty：短线，分别初始满仓/空仓；medium_full/medium_empty：中线；long_full/long_empty：长线。", "low_full/low_empty：低风险；standard_full/standard_empty：标准风险；high_full/high_empty：高风险；每档分别初始满仓/空仓，全部做数日至一两周短线波段。")
+        text=text.replace("short_* 的 horizon 必须 intraday（兼容编码，实际为数日至一两周的短线波段，不是日内交易）；medium_* 必须 swing（数日至数周）；long_* 必须 position（数周至数月）。", "所有账户horizon必须intraday，表示数日至一两周的波段；没有中线或长线。")
+        text=text.replace("short_*", "全部账户").replace("中线重点判断数周持仓逻辑、参与价值与失效条件，配置流或短线趋势确认非统一前提。", "配置流不是交易前提。")
+        return text+"\n风险预算以每户risk_budget为准：单次计划风险为当前净值的1%/2%/4%，阶段历史最大回撤线5%/10%/20%。买入必填risk_exit_cny且低于入场和当前价，按该价卖出全部买入后持仓扣费，相对当前净值的预计损失不得超过trade_risk_cny。加仓合并已有持仓计算；如有实际止损，使用两者更低者计风险。risk_exit_cny仅是计划参考，不自动下止损。触及阶段回撤线后本实验暂停该户新增买入，仍须评估持仓、卖出和保护。初始满仓是实验起点，不受单次买入预算约束；后续决策遵守预算。三档只改变可承受损失，仓位自主决定，不要求高风险一定交易或更高仓位；不能跨户补充预算。"
     if settings.ai_trading_mode!="four_account": return TRADING_PROMPT
     return (TRADING_PROMPT.replace("六个", "四个").replace("六份", "四份")
         .replace("；long_full/long_empty：长线", "")
@@ -142,12 +163,12 @@ hold/wait 不成交，可更新持仓保护；cancel 撤销未成交委托，也
 
 
 def enabled(settings):
-    return settings.ai_trading_mode in ("six_account","four_account")
+    return settings.ai_trading_mode in ("six_account","four_account","risk_six_account")
 
 
 def keys(settings):
     return {f"{model}:{mode}": f"{model.title()} · {label}" for model in settings.ai_analysts if model in MODELS
-            for mode, label in LABELS.items() if mode in active_modes(settings)}
+            for mode, label in (RISK_LABELS if settings.ai_trading_mode==RISK_MODE else LABELS).items() if mode in active_modes(settings)}
 
 
 def exists(conn):
@@ -173,7 +194,7 @@ def summaries(conn, settings, price):
         fills = conn.execute("SELECT COUNT(*),COALESCE(SUM(fee),0) FROM ai_portfolio_fills WHERE account=?", (a["key"],)).fetchone()
         rows.append({**a, **pnl_stats(pnls), "name": keys(settings).get(a["key"], a["key"]), "analyst": a["model"],
             "strategy": a["start_mode"], "started": a["started_at"] is not None, "requires_ai": True,
-            "horizon": LABELS[a["start_mode"]], "description": "短线波段：数日至一两周，以日线和波段价格结构为主；每周约两次操作为参考" if a["start_mode"].startswith("short_") else "AI 自主决定交易，三周期满仓/空仓独立记账",
+            "horizon": (RISK_LABELS | LABELS)[a["start_mode"]], "risk_budget":risk_state(a,price,lambda p:net_price(settings,p)) if settings.ai_trading_mode==RISK_MODE else None, "description": "短线波段：数日至一两周，以日线和波段价格结构为主；每周约两次操作为参考" if (a["start_mode"].startswith("short_") or settings.ai_trading_mode==RISK_MODE) else "AI 自主决定交易，三周期满仓/空仓独立记账",
             "realized_pnl": a["realized_pnl"], "value": value, "return": value / a["budget"] - 1 if value is not None and a["started_at"] else None, "win_rate_applicable": True,
             "avg_cost": avg, "unrealized_pnl": a["grams"] * net_price(settings, price) - a["cost"] if price else None,
             "position_pct": a["grams"] * price / (a["cash"] + a["grams"] * price) * 100 if price and a["cash"] + a["grams"] * price > 0 else 0,
@@ -187,6 +208,9 @@ class AutonomousPortfolio:
         self.settings, self.store = settings, store
         if not math.isfinite(settings.account_budget) or settings.account_budget <= 0:
             raise ValueError("账户本金配置无效")
+        if settings.ai_trading_mode==RISK_MODE:
+            from .risk_profiles import reset_experiment
+            reset_experiment(store.conn)
         store.conn.executescript(SCHEMA)
         from .ai import ensure_schema
         ensure_schema(store)
@@ -214,14 +238,15 @@ class AutonomousPortfolio:
         for a in rows:
             recent = conn.execute("SELECT ts,side,grams,price,fee,reason FROM ai_portfolio_fills WHERE account=? ORDER BY id DESC LIMIT 6", (a["key"],)).fetchall()
             accounts[a["start_mode"]] = {k:a[k] for k in ("key", "revision", "budget", "cash", "grams", "avg_cost", "value", "unrealized_pnl", "realized_pnl", "position_pct", "stop_price", "target_price")}
+            if self.settings.ai_trading_mode==RISK_MODE:accounts[a["start_mode"]]["risk_budget"]=a["risk_budget"]
             accounts[a["start_mode"]].update({"last_plan": {k:a["plan"][k] for k in ("status","reason","decision","expires_at")} if a["plan"] else None, "recent_fills": [dict(r) for r in recent]})
-            if a["start_mode"].startswith("short_"):
+            if (a["start_mode"].startswith("short_") or self.settings.ai_trading_mode==RISK_MODE):
                 count=conn.execute("SELECT COUNT(*) FROM ai_portfolio_fills WHERE account=? "
                     "AND julianday(ts)>=julianday(?)-7 AND julianday(ts)<=julianday(?) "
                     "AND reason NOT LIKE '实验初始化%'",(a["key"],as_of,as_of)).fetchone()[0]
                 accounts[a["start_mode"]]["short_trade_activity"]={"lookback_days":7,"filled_operations":count,
                     "note":"买卖各计一次，排除初始化；每周约两次是节奏参考，不是配额或硬上限，不限制必要的风险退出。"}
-            if a["start_mode"].startswith("short_") and a["grams"]<=1e-9:
+            if (a["start_mode"].startswith("short_") or self.settings.ai_trading_mode==RISK_MODE) and a["grams"]<=1e-9:
                 from .short_review import wait_review
                 review=wait_review(conn,a["plan"],quote,as_of)
                 if review:accounts[a["start_mode"]]["short_wait_review"]=review
@@ -282,7 +307,7 @@ class AutonomousPortfolio:
         price = quote["price"]
         if d["execution"] == "limit" and not d.get("limit_price_cny"):
             raise ValueError("限价委托缺少限价")
-        if d["horizon"] != PERIODS[a["start_mode"].split("_")[0]][1]:
+        if d["horizon"] != ("intraday" if self.settings.ai_trading_mode==RISK_MODE else PERIODS[a["start_mode"].split("_")[0]][1]):
             raise ValueError("决策周期与账户不一致")
         action = d["action"]
         if check_range and action in ("buy","sell") and not d["min_execution_price_cny"] <= price <= d["max_execution_price_cny"]:
@@ -297,6 +322,18 @@ class AutonomousPortfolio:
             entry = price if d["execution"] == "market" else d["limit_price_cny"]
             if stop is not None and stop >= entry:
                 raise ValueError("买入止损须低于入场价")
+            if self.settings.ai_trading_mode==RISK_MODE:
+                budget=risk_state(a,price,lambda p:net_price(self.settings,p))
+                if budget['buy_paused']:raise ValueError("阶段回撤触线，暂停新增买入")
+                exit_price=d.get('risk_exit_cny')
+                if exit_price is None or exit_price>=min(entry,price):raise ValueError("买入必须给低于当前及入场价的风险退出参考")
+                protection=None if d.get('clear_stop_loss') else d.get('stop_loss_cny') or a['stop_price']
+                exit_price=min(exit_price,protection) if protection else exit_price
+                # Pending orders reserve risk at their highest possible entry, then recheck on fill.
+                risk_entry=entry if check_range else min(entry,d['max_execution_price_cny'])
+                after=a['cash']-amount+(a['grams']+amount/risk_entry)*net_price(self.settings,exit_price)
+                current=a['cash']+a['grams']*net_price(self.settings,price)
+                if current-after>budget['trade_risk_cny']+1e-6:raise ValueError("买入后整仓计划损失超过本账户单次风险预算")
         elif action == "sell":
             quantity = d.get("grams")
             if quantity is None or quantity <= 0 or quantity > a["grams"] + 1e-7:
@@ -386,7 +423,7 @@ class AutonomousPortfolio:
                 status = self.store.get_state("ai_status:"+a["model"],{})
                 can_trade = a["key"] in keys(self.settings) and a["model"] in self.settings.ai_analysts and active(c,a["model"]) and status.get("available",True)
                 if not a["started_at"]:
-                    if not can_trade:
+                    if not can_trade and self.settings.ai_trading_mode!=RISK_MODE:
                         continue
                     a["started_at"], a["initial_price"] = batch_start, quote["price"]
                     a["revision"] += 1
@@ -401,12 +438,12 @@ class AutonomousPortfolio:
                         sold_grams = a["grams"]
                         fill_id = self._fill(a,"sell",sold_grams,quote,reason)
                         c.execute("UPDATE ai_plans SET status='cancelled',reason='持仓保护已触发' WHERE account=? AND status='pending'",(a["key"],))
-                        refreshes.append((a["model"],f"portfolio-fill:{fill_id}",f"{LABELS[a['start_mode']]}{reason}"))
-                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {LABELS[a['start_mode']]} {reason}","body":f"模拟卖出 {sold_grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克，保护已执行；卖出手续费 {sold_grams*quote['price']*self.settings.sell_fee_rate:.2f} 元"})
+                        refreshes.append((a["model"],f"portfolio-fill:{fill_id}",f"{(RISK_LABELS | LABELS)[a['start_mode']]}{reason}"))
+                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {(RISK_LABELS | LABELS)[a['start_mode']]} {reason}","body":f"模拟卖出 {sold_grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克，保护已执行；卖出手续费 {sold_grams*quote['price']*self.settings.sell_fee_rate:.2f} 元"})
                 latest = c.execute("SELECT rowid,* FROM ai_views WHERE analyst=? AND error IS NULL ORDER BY rowid DESC LIMIT 1",(a["model"],)).fetchone() if has_views else None
                 if latest and latest["rowid"] > a["last_view_id"] and can_trade:
                     data = json.loads(latest["view_json"])
-                    if data.get("account_decisions") and view_active(c,a["model"],data):
+                    if (data.get("_trading_version")==policy_version(self.settings) or self.settings.ai_trading_mode!=RISK_MODE) and data.get("account_decisions") and view_active(c,a["model"],data):
                         self._accept(a,latest,data,quote)
                         rejected = c.execute("SELECT id,reason FROM ai_plans WHERE account=? AND view_id=? AND status='rejected'",(a["key"],latest["rowid"])).fetchone()
                         if rejected:
@@ -416,7 +453,7 @@ class AutonomousPortfolio:
                             else:
                                 prefix="price-range" if "成交价格区间" in rejected['reason'] else "portfolio-reject"
                                 event_id=f"{prefix}:{rejected['id']}"
-                            refreshes.append((a["model"],event_id,f"{LABELS[a['start_mode']]}委托拒绝：{rejected['reason']}"))
+                            refreshes.append((a["model"],event_id,f"{(RISK_LABELS | LABELS)[a['start_mode']]}委托拒绝：{rejected['reason']}"))
                 plans = c.execute("SELECT * FROM ai_plans WHERE account=? AND status='pending' ORDER BY id",(a["key"],)).fetchall()
                 for plan in plans:
                     if not can_trade or not active(c,a["model"],plan["generation"]):
@@ -447,7 +484,7 @@ class AutonomousPortfolio:
                             a["stop_price"] = None if d.get("clear_stop_loss") else d.get("stop_loss_cny") or a["stop_price"]
                             a["target_price"] = None if d.get("clear_take_profit") else d.get("take_profit_cny") or a["target_price"]
                         c.execute("UPDATE ai_plans SET status='executed',reason='按AI委托成交' WHERE id=?",(plan["id"],))
-                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {LABELS[a['start_mode']]} 模拟"+("买入" if d["action"]=="buy" else "卖出"),"body":f"{grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克；{d['reason']}"})
+                        emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {(RISK_LABELS | LABELS)[a['start_mode']]} 模拟"+("买入" if d["action"]=="buy" else "卖出"),"body":f"{grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克；{d['reason']}"})
                     except (ValueError,TypeError) as exc:
                         self._reject(plan["id"],str(exc))
                 value = a["cash"] + a["grams"]*net_price(self.settings,quote["price"])

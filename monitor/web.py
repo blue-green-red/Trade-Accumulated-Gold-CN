@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 from .config import BANK_NAMES, Settings
 from .scorecard import evaluate as evaluate_scorecard
 from .strategies import REGISTRY
-from .notification_control import subscriptions
+from .notification_control import subscriptions, visible_subscriptions
 from .controls import control, set_enabled, identity, short_labels, daily_keys
 from .performance import comparison, autonomous_comparison
 from .autonomous import summaries as portfolio_summaries, enabled as autonomous_enabled, keys as portfolio_keys, exists as portfolios_exist
@@ -350,7 +350,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                           "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
-                "subscriptions": [r for r in subscriptions(conn) if settings.ai_trading_mode!="four_account" or not r["key"].endswith(":long")]},
+                "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode)},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,
             "trading_mode": settings.ai_trading_mode,
@@ -378,7 +378,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "jin10_triage": get_state(conn, "jin10_triage") or {},
             "fills": [{k: r[k] for k in ("strategy", "ts", "side", "grams", "price", "fee", "reason")} | {"decision": json.loads(r["decision_json"]) if "decision_json" in r.keys() and r["decision_json"] else None} for r in fills],
             "alerts": [{"ts": r["ts"], "title": r["title"], "delivered": bool(r["delivered"])} for r in alerts],
-            "strategy_names": {**{k: cls.name for k, cls in REGISTRY.items()},**portfolio_keys(settings)},
+            "strategy_names": {**{k: cls.name for k, cls in REGISTRY.items() if settings.ai_trading_mode!="risk_six_account" or k in (*daily_keys(settings),*short_labels(settings))},**(short_labels(settings) if settings.ai_trading_mode=="risk_six_account" else {}),**portfolio_keys(settings)},
             "series_order": SERIES_ORDER,
         }
     finally:

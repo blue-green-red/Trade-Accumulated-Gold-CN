@@ -11,7 +11,7 @@ REMOVED_ACCOUNTS = ("dca", "dca_smart", "claude:dca_smart_ai", "codex:dca_smart_
 def daily_keys(settings) -> tuple:
     """Active experiment only; retired DCA options in an old .env cannot recreate accounts."""
     keys = [key for key in ("hold", "position") if key in settings.strategies]
-    for model in (() if settings.ai_trading_mode in ("six_account","four_account") else settings.ai_analysts):
+    for model in (() if settings.ai_trading_mode in ("six_account","four_account","risk_six_account") else settings.ai_analysts):
         key = f"{model}:position_ai"
         if model in MODELS and ("position_ai" in settings.strategies or key in settings.strategies):
             keys.append(key)
@@ -68,6 +68,6 @@ def identity(key: str):
 
 def short_labels(settings) -> dict:
     labels = {"short": "短线日内"} if "short" in settings.strategies else {}
-    if "short_ai" in settings.strategies and settings.ai_trading_mode not in ("six_account","four_account"):
+    if "short_ai" in settings.strategies and settings.ai_trading_mode not in ("six_account","four_account","risk_six_account"):
         labels.update({f"{m}:short_ai": f"{m.title()} · 短线" for m in settings.ai_analysts if m in MODELS})
     return labels
