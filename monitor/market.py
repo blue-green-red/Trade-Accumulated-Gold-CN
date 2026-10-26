@@ -149,6 +149,8 @@ class Market:
         else:
             snap["market_open"] = snap.get("xauusd") is not None  # 无法判断时按开市处理，并在 errors 中留痕
 
+        from .wave_evidence import daily_indicators
+        snap["daily_indicators"] = daily_indicators(snap,snap["ts"])
         snap["international_market_open"] = snap["market_open"]
         snap["market_open"] = snap["jd_session"]["is_open"]
         snap["fx"] = self.fx

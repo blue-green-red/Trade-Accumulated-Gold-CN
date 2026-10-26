@@ -127,23 +127,24 @@ class Monitor:
             "jd_trading_session": trading_session(),
         }
         from .jd_research import snapshot as jd_snapshot
+        from .wave_evidence import daily_reference, daily_indicators, jd_daily_samples, calendar_window
         store = Store(self.settings.db_path)
         try:
             macro = store.get_state("web_macro", {})
-            now = utc_now()
+            now = snap.get("ts") or utc_now()
+            ctx["daily_indicators"] = daily_indicators(snap,now)
+            ctx["daily_trend_reference"] = daily_reference(store.conn,now)
+            ctx["jd_daily_samples"] = jd_daily_samples(store.conn,now)
             from .macro_cache import age_seconds
             times = {kind: macro.get(kind + "_fetched_at", macro.get("fetched_at"))
                      for kind in ("quotes", "calendar")}
-            valid = {kind: 0 <= age_seconds(stamp, now) < 3600 for kind, stamp in times.items()}
-            calendar = []
-            if valid["calendar"]:
-                for event in macro.get("calendar") or []:
-                    if -86400 <= age_seconds(event.get("time_utc"), now) <= 86400:
-                        calendar.append(event)
+            valid = {kind: 0 <= age_seconds(stamp, utc_now()) < 3600 for kind, stamp in times.items()}
+            selected_calendar=calendar_window(macro.get("calendar") if valid["calendar"] else [],now)
+            calendar=selected_calendar.pop("events")
             ctx["macro"] = {"fetched_at": macro.get("fetched_at"),
                 "quotes_fetched_at": times["quotes"], "calendar_fetched_at": times["calendar"],
                 "quotes": macro.get("quotes") if valid["quotes"] else None,
-                "calendar": sorted(calendar, key=lambda e: (e.get("tier", 3), e["time_utc"]))[:16],
+                "calendar": calendar, "calendar_window":selected_calendar,
                 "hard_events_24h": (macro.get("hard_events_24h") or [])[:8] if valid["calendar"] else [],
                 "status": {kind: "available" if valid[kind] else "stale_or_missing" for kind in valid},
                 "errors": macro.get("errors")}
@@ -160,7 +161,12 @@ class Monitor:
             audit.set_state("ai_inputs", {"at": utc_now().isoformat(),
                 "context_chars": len(json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))),
                 "news_count": len(ctx["jin10_flash_recent"]), "max_searches": self.settings.ai_max_searches,
-                "jd_research": ctx["jd_research"], "macro_at": ctx["macro"].get("fetched_at")})
+                "jd_research": ctx["jd_research"], "macro_at": ctx["macro"].get("fetched_at"),
+                "wave_evidence": {"as_of":ctx["snapshot_at"],
+                    "daily_reference":{"status":ctx["daily_trend_reference"]["status"],"last_day":ctx["daily_trend_reference"].get("last_day"),"sessions":len(ctx["daily_trend_reference"]["recent_sessions"])},
+                    "daily_indicators":ctx["daily_indicators"],
+                    "jd_daily":{"status":ctx["jd_daily_samples"]["status"],"days":len(ctx["jd_daily_samples"]["days"]),"missing_dates":ctx["jd_daily_samples"].get("missing_dates",[])},
+                    "calendar":{"events":len(calendar),"status":ctx["macro"]["status"]["calendar"],**ctx["macro"]["calendar_window"]}}})
         finally:
             audit.conn.close()
         return ctx
@@ -244,21 +250,9 @@ class Monitor:
                 pending = {name: read_events(coverage_store.conn, name)["pending"] for name in due}
                 portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
-                trend = None
-                if self.portfolios:
-                    from .accounts import last_completed_ny_day
-                    bars = coverage_store.conn.execute("SELECT day,xau_close FROM daily_bars WHERE day<=? ORDER BY day DESC LIMIT 61",
-                        (last_completed_ny_day(utc_now()).isoformat(),)).fetchall()
-                    if bars:
-                        trend = {"source": "GC=F期货日线代理，非京东历史成交价", "last_day": bars[0]["day"],
-                            "last_close_usd": bars[0]["xau_close"],
-                            "changes_pct": {f"{n}d": round((bars[0]["xau_close"]/bars[n]["xau_close"]-1)*100,2)
-                                            for n in (5,20,60) if len(bars)>n and bars[n]["xau_close"]>0}}
             finally:
                 coverage_store.conn.close()
             context = dict(self.ai_context(snap, base_plan, jin10_recent))
-            if trend:
-                context["daily_trend_reference"] = trend
             context["event_coverage"] = {name: [e["id"] for e in events] for name, events in pending.items()}
             shared = {e["id"]: e for events in pending.values() for e in events}
             context["trigger_events"] = [{k: e[k] for k in ("id", "reason", "observed_at", "data")} for e in shared.values()]
@@ -334,7 +328,7 @@ class Monitor:
 
     def publish_for_web(self, snap, plan, plan_base=None, plan_source: str = "base", ai_plans=None) -> None:
         """网页端只读数据库：把本轮行情与计划存一份，网页不自己联网。"""
-        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "market_open", "jd_session", "international_market_open", "fx", "execution_quote", "jd_last_quote")
+        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "daily_indicators", "market_open", "jd_session", "international_market_open", "fx", "execution_quote", "jd_last_quote")
         payload = {k: snap.get(k) for k in keep}
         payload["ts"] = snap["ts"].isoformat()
         payload["plan"] = plan

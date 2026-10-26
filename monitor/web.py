@@ -268,8 +268,12 @@ def ai_section(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
         row = (conn.execute("SELECT * FROM ai_views WHERE error IS NULL AND analyst=? ORDER BY ts DESC LIMIT 1", (name,))
                if has_analyst else conn.execute("SELECT * FROM ai_views WHERE error IS NULL ORDER BY ts DESC LIMIT 1")).fetchone()
         if row:
+            from .wave_evidence import input_summary
+            run_id=row["run_id"] if "run_id" in row.keys() else None
+            model_input=get_state(conn,f"ai_model_input:{run_id}:{name}") if run_id else None
+            wave_input=input_summary(model_input or {})
             analysts.append({**json.loads(row["view_json"]), "analyst": name, "name": ANALYST_NAMES.get(name, name),
-                             "ts": row["ts"], "model": row["model"], "sources": json.loads(row["sources_json"] or "[]")[:12]})
+                             "wave_input":wave_input,"ts": row["ts"], "model": row["model"], "sources": json.loads(row["sources_json"] or "[]")[:12]})
     history = conn.execute(f"SELECT ts, trigger, view_json, error{', analyst' if has_analyst else ''} FROM ai_views "
                            "ORDER BY ts DESC LIMIT 20").fetchall()
 
@@ -300,6 +304,13 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
         quote = execution_quote(snap)
         valuation_quote = quote or snap.get("jd_last_quote")
         price = valuation_quote["price"] if valuation_quote else None
+        from .wave_evidence import daily_reference,jd_daily_samples
+        evidence_now=datetime.now(timezone.utc)
+        indicator=dict(snap.get("daily_indicators") or {"status":"unavailable"})
+        from .macro_cache import age_seconds
+        if indicator.get("status") in ("fresh","partial") and not -30<=age_seconds(indicator.get("fetched_at"),evidence_now)<=180: indicator["status"]="stale"
+        wave_evidence={"as_of":evidence_now.isoformat(),"daily_reference":daily_reference(conn,evidence_now),
+            "daily_indicators":indicator,"jd_daily":jd_daily_samples(conn,evidence_now)}
         keys = daily_keys(settings)
         fills = conn.execute(
             f"SELECT * FROM account_fills WHERE strategy IN ({','.join('?' for _ in keys)}) ORDER BY ts DESC LIMIT 200",
@@ -357,7 +368,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                     if portfolios_exist(conn) else [],
                 "fills": [dict(r) for r in conn.execute("SELECT * FROM ai_portfolio_fills ORDER BY id DESC LIMIT 200")]
                     if portfolios_exist(conn) else []},
-            "prices": price_history(conn),
+            "prices": price_history(conn),"wave_evidence":wave_evidence,
             "ai": ai_section(conn, settings),
             "scorecard": evaluate_scorecard(conn),
             "macro": get_state(conn, "web_macro"),

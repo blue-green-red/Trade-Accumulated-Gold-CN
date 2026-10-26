@@ -143,6 +143,8 @@ class DashboardBrowserTests(unittest.TestCase):
                         self.assertIn("重要黄金消息测试", market_panel.inner_text())
                         self.assertNotIn("普通黄金消息测试", market_panel.inner_text())
                         self.assertEqual(market_panel.get_by_text("参考数据可用", exact=True).count(), 2)
+                        market_panel.get_by_text("京东资金挂单参考与接口诊断",exact=True).click()
+                        market_panel.get_by_text("分时走势（按需查看）",exact=True).click()
                         self.assertIn("多单 60.0%", market_panel.inner_text())
                         self.assertIn("价格数据积累中", page.locator("#price-chart").inner_text())
                         self.assertEqual(market_panel.locator(".cluster-row").first.locator(":scope > div").count(), 2)
@@ -156,15 +158,18 @@ class DashboardBrowserTests(unittest.TestCase):
                         self.assertIn("更新延迟", market_panel.inner_text())
                         self.assertIn("刷新失败 · 保留旧值", market_panel.inner_text())
                         page.evaluate("renderMarket({...DATA,macro:{},jd_research:{},jin10:[]})")
+                        market_panel.get_by_text("京东资金挂单参考与接口诊断",exact=True).click()
                         self.assertIn("日历尚未获取", market_panel.inner_text())
                         self.assertIn("暂无可用资金事件", market_panel.inner_text())
                         page.evaluate("renderMarket({...DATA,jd_research:{funds:{status:'quota_exhausted',error_type:'ProviderDailyQuota'},orders:{status:'quota_exhausted'},quota:{used_today:10,daily_cap:10,status:'quota_exhausted',retry_at:'2026-10-17T00:00:00Z',recent_requests:[{kind:'funds',started_at:'2026-10-16T00:00:00Z',status:'quota_exhausted',error_type:'ProviderDailyQuota'}]}}})")
+                        market_panel.get_by_text("京东资金挂单参考与接口诊断",exact=True).click()
                         self.assertIn("京东额度耗尽",market_panel.inner_text())
                         self.assertIn("今日 10/10 次",market_panel.inner_text())
                         self.assertIn("本地重试时间",market_panel.inner_text())
                         market_panel.get_by_text("最近接口请求",exact=True).click()
                         self.assertIn("供应商报告当日额度耗尽",market_panel.inner_text())
                         page.evaluate("renderMarket({...DATA,jd_research:{funds:{status:'unavailable',error_type:'TimeoutError'},orders:{status:'cache_stale'}}})")
+                        market_panel.get_by_text("京东资金挂单参考与接口诊断",exact=True).click()
                         self.assertIn("获取失败",market_panel.inner_text())
                         self.assertIn("缓存待刷新",market_panel.inner_text())
                         self.assertIn("接口请求超时",market_panel.inner_text())
@@ -386,6 +391,68 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertEqual(errors,[]);b.close()
         finally:
             server.shutdown();server.server_close();thread.join();fixture.tearDown()
+
+
+    def test_wave_data_views_calendar_and_actual_input(self):
+        import test_four_account as fixtures
+        from playwright.sync_api import sync_playwright
+        f=fixtures.FourAccountTests();f.setUp()
+        now=utc_now();tv={'status':'ok','fetched_at':now.isoformat(),'rsi_1d':45,'sma20_1d':4000,'sma50_1d':4100}
+        f.snap.update(ts=now,tv=tv,signals={'30m':'买入','1H':'中性','4H':'卖出','日线':'中性','周线':'卖出'})
+        from monitor.wave_evidence import daily_indicators
+        f.snap['daily_indicators']=daily_indicators(f.snap,now)
+        for n in range(1,65):
+            day=(now-timedelta(days=n)).date()
+            if day.weekday()<5:f.m.store.conn.execute('INSERT OR REPLACE INTO daily_bars VALUES(?,?,?,?,?,?)',(day.isoformat(),4000+n,4001+n,7,900,901))
+        f.m.store.conn.commit()
+        for n,price in [(5,995),(1,1000)]:
+            value=dict(f.snap,ts=now-timedelta(minutes=n),jd_price=price)
+            f.m.store.add_tick(value)
+        f.m.store.set_state('web_macro',{'fetched_at':now.isoformat(),'quotes':{},'calendar':[
+            {'time_utc':(now+timedelta(days=3)).isoformat(),'tier':1,'title':'波段测试事件','released':True,'actual':99},
+            {'time_utc':(now+timedelta(days=9)).isoformat(),'tier':1,'title':'不在七天窗口','released':False}]})
+        f.m.store.set_state('jin10_flash',[{'id':str(i),'important':True,'time_bj':now.strftime('%Y-%m-%d %H:%M:%S'),'text':'测试快讯'+str(i)+'内容'*150} for i in range(10)])
+        ctx=f.m.ai_context(f.snap,None);ctx['trading_accounts']=f.context()['trading_accounts']
+        f.a._run_codex=Mock(return_value=('notes',[],f.value()));f.a.analyze(ctx,'test',run_id='wave-ui')
+        f.m.publish_for_web(f.snap,None)
+        class Local(Handler):
+            password=''
+            def log_message(self,*args):pass
+        Local.settings=f.settings
+        server=ThreadingHTTPServer(('127.0.0.1',0),Local)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            with sync_playwright() as p:
+                b=p.chromium.launch(headless=True,args=['--no-sandbox'])
+                page=b.new_page(viewport={'width':390,'height':844});errors=[]
+                page.on('pageerror',lambda e:errors.append(str(e)))
+                page.goto(f'http://127.0.0.1:{server.server_port}/#market')
+                page.get_by_role('heading',name='波段行情与日线参考',exact=True).wait_for()
+                market=page.locator('#panel-market')
+                self.assertIn('MA20（美元/盎司）',market.inner_text())
+                self.assertIn('波段测试事件',market.inner_text());self.assertNotIn('不在七天窗口',market.inner_text())
+                self.assertNotIn('1H 中性',market.inner_text())
+                self.assertEqual(page.locator('#wave-chart svg').count(),1)
+                news=page.get_by_role('heading',name='黄金相关快讯',exact=True).locator('xpath=../..')
+                self.assertEqual(news.locator('li.event-row').count(),8)
+                news.get_by_role('button',name='显示更多快讯',exact=False).click()
+                self.assertEqual(news.locator('li.event-row').count(),10)
+                self.assertEqual(news.get_by_text('阅读全文',exact=True).count(),10)
+                page.get_by_role('button',name='京东逐日采样',exact=True).click()
+                page.get_by_text('逐日采样明细与缺口',exact=True).click()
+                self.assertIn('当日未结束',market.inner_text());self.assertIn('采样不完整',market.inner_text())
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                page.get_by_role('tab',name='AI',exact=True).click()
+                page.get_by_text('本轮分析输入详情',exact=True).click()
+                ai=page.locator('#panel-ai')
+                self.assertIn('本轮实际输入的波段数据',ai.inner_text())
+                self.assertIn('期货代理开收盘 30 个交易日',ai.inner_text())
+                self.assertIn('日历未来 7 天',ai.inner_text())
+                page.get_by_role('tab',name='行情',exact=True).click()
+                page.evaluate("renderMarket({...DATA,wave_evidence:{daily_reference:{recent_sessions:[]},jd_daily:{days:[]},daily_indicators:{status:'unavailable'}}});drawWaveEvidence()")
+                self.assertIn('尚未积累',market.inner_text())
+                self.assertEqual(errors,[]);b.close()
+        finally:server.shutdown();server.server_close();thread.join();f.tearDown()
 
 if __name__ == "__main__":
     unittest.main()

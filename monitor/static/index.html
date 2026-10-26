@@ -366,7 +366,7 @@ function showTab(id, push = true) {
 window.addEventListener("hashchange", () => { const id = location.hash.slice(1); if (TABS.some(([t]) => t === id)) showTab(id, false); });
 
 /* ── 图表：折线（共享 Y 轴、十字线汇总提示）与迷你走势 ─────────────── */
-function lineChart(container, { series, yFormat, tipFormat, refLines = [], height = 240, emptyText, zeroLine = false }) {
+function lineChart(container, { series, yFormat, tipFormat, refLines = [], height = 240, emptyText, zeroLine = false, dateOnly = false }) {
   clear(container);
   tipFormat = tipFormat || yFormat;
   const visible = series.filter((s) => s.points.length);
@@ -431,7 +431,7 @@ function lineChart(container, { series, yFormat, tipFormat, refLines = [], heigh
     });
     cross.setAttribute("x1", X(snapT)); cross.setAttribute("x2", X(snapT)); cross.setAttribute("visibility", "visible");
     clear(tip);
-    tip.appendChild(el("div", { class: "muted" }, fmtTs(snapT)));
+    tip.appendChild(el("div", { class: "muted" }, dateOnly ? fmtTs(snapT).slice(0,5) : fmtTs(snapT)));
     rows.sort((a, b) => b.v - a.v).forEach((r) => tip.appendChild(el("div", { class: "trow" },
       el("span", {}, el("span", { class: "swatch", style: `background:${r.color}` }), r.name), el("strong", {}, tipFormat(r.v)))));
     tip.style.display = "block";
@@ -464,7 +464,7 @@ function sparkline(container, points, height = 56) {
 let DATA = null;
 const hiddenSeries = new Set();
 let priceRange = "1d";
-let calendarFilter = "upcoming", flashFilter = "all";
+let calendarFilter = "upcoming", flashFilter = "important", flashLimit=8;
 let strategyScope = "ai", assetModel="all", assetPeriod="all", assetStart="all";
 const assetMatches=(key)=> (assetModel==="all" || key.startsWith(assetModel+":")) && (assetPeriod==="all" || key.includes(":"+assetPeriod+"_")) && (assetStart==="all" || key.endsWith("_"+assetStart));
 let fillFilter = "all";
@@ -895,7 +895,18 @@ function renderAI(d) {
     })));
   }
   if(["six_account","four_account"].includes(d.trading_mode)) panel.appendChild(autonomousAccounts(d));
-  if(inputs) panel.appendChild(inputHost);
+  const actualInputs=(ai.analysts || []);
+  if(actualInputs.length) inputHost.appendChild(card("本轮实际输入的波段数据",null,
+    actualInputs.map(model=>{
+      const used=model.wave_input;
+      if(!used)return el("div",{class:"sub",style:"margin-bottom:10px"},`${model.name || ANALYST[model.analyst]} · 该轮未包含新增波段数据`);
+      return el("div",{style:"margin-bottom:14px"},el("strong",{},`${model.name || ANALYST[model.analyst]} · 快照 ${fmtTs(used.as_of)}`),
+        el("div",{class:"sub"},`期货代理开收盘 ${used.daily_reference?.sessions || 0} 个交易日 · 最新结束日期 ${used.daily_reference?.last_day || "—"}`),
+        el("div",{class:"sub"},`日线指标 ${({fresh:"可用",partial:"部分缺失",unavailable:"不可用"})[used.daily_indicators?.status] || "未知"} · 京东逐日采样 ${used.jd_daily?.days || 0} 天`),
+        el("div",{class:"sub"},`日历未来 ${used.calendar?.days_ahead || 7} 天 · 本轮 ${used.calendar?.events || 0} 项${used.calendar?.status!=="available" ? "（日历缓存不可用或未记录状态）" : used.calendar?.truncated ? "（已优先截取重大事件）" : ""}`));
+    }),el("p",{class:"sub"},"对应各模型最新分析的实际输入；行情页显示最新缓存。采样摘要不作为官方完整K线。"),
+    el("button",{class:"link-btn",onclick:()=>showTab("market")},"查看最新波段数据 →")));
+  if(inputs || actualInputs.length) panel.appendChild(inputHost);
   panel.appendChild(el("details",{class:"more card"},el("summary",{},"预测准确度（区别于交易胜率）"),scorecardCard(d)));
   panel.appendChild(card("分析历史",el("button",{class:"link-btn",onclick:()=>{recordKind="analysis";recordModel="all";fillFilter="all";resetHistory();showTab("records");}},"查看完整分析历史 →"),
     el("div",{class:"sub"},"包含分析时间、触发原因、成功/失败，以及已到期的方向判断结果。")));
@@ -967,7 +978,7 @@ function renderMarketSummary(d) {
     tile("国际现货黄金", num(s.xauusd), "美元/盎司", el("div", {},
       el("div", { class: "sub" }, `日涨跌 ${signed(s.change_pct)}%`), sourceMeta(s.ts, "每分钟", 180, null, s.xauusd == null))),
     tile("美元兑人民币", num(fx.rate, 4), "USD/CNY", sourceMeta(fx.fetched_at, "每15分钟", 1200, null, fx.rate == null)),
-    tile("日内波动区间", `${num(s.day_low, 0)} – ${num(s.day_high, 0)}`, "", el("div", { class: "data-meta" }, "国际金价 · 美元/盎司")));
+    tile("期货近5日涨跌", signed(d.wave_evidence?.daily_reference?.changes_pct?.["5d"]), "%", el("div", { class: "data-meta" }, `GC=F代理 · 截止 ${d.wave_evidence?.daily_reference?.last_day || "—"}`)));
 }
 function renderMacroData(d) {
   const macro = d.macro || {}, quotes = macro.quotes || {}, stamp = macro.quotes_fetched_at || macro.fetched_at;
@@ -980,12 +991,44 @@ function renderMacroData(d) {
   }
   return card("宏观指标", sourceMeta(stamp, "每5分钟", 420, (macro.refresh_errors || {}).quotes, !Object.keys(quotes).length), grid);
 }
+function updateMarketView() {
+  preservePanel(document.getElementById("panel-market"),()=>renderMarket(DATA));
+  renderActiveCharts();
+}
+let waveSeries="proxy";
+function renderWaveEvidence(d) {
+  const w=d.wave_evidence || {},r=w.daily_reference || {},i=w.daily_indicators || {},j=w.jd_daily || {},days=j.days || [];
+  const status={fresh:"已更新",partial:"部分指标缺失",stale:"指标已过期",unavailable:"尚无有效数据"};
+  const choose=el("div",{class:"seg",role:"group","aria-label":"波段数据源"},[["proxy","国际日线参考"],["jd","京东逐日采样"]].map(([key,label])=>el("button",{type:"button","aria-pressed":String(waveSeries===key),onclick:()=>{waveSeries=key;updateMarketView();}},label)));
+  const metric=(label,value)=>el("div",{},el("div",{class:"sub"},label),el("strong",{},value));
+  const signals=Object.entries(d.snapshot?.signals || {}).filter(([k])=>["日线","周线"].includes(k));
+  return card("波段行情与日线参考",null,
+    el("div",{class:"row",style:"flex-wrap:wrap;margin-bottom:10px"},signals.map(([key,value])=>el("span",{class:"chip"},`${key} ${value}`))),
+    el("div",{class:"asset-filters"},metric("RSI（日线）",num(i.rsi,1)),metric("MA20（美元/盎司）",num(i.ma20_usd)),metric("MA50（美元/盎司）",num(i.ma50_usd))),
+    el("div",{class:"sub",style:"margin:8px 0 14px"},`TradingView现货日线 · ${status[i.status] || "尚无有效数据"} · 指标时间 ${fmtTs(i.fetched_at)} · 日线指标盘中会变化`),
+    choose,el("div",{class:"chart",id:"wave-chart"}),
+    el("div",{class:"sub"},waveSeries==="proxy" ? `GC=F期货代理 · 美元/盎司 · 已结束日期 ${r.last_day || "—"} · ${(r.recent_sessions || []).length} 个交易日，仅开收盘，非完整K线、非京东成交价。` : `京东报价本地采样 · 元/克 · 北京时间自然日 · ${days.length} 天；首末笔不是官方开收盘，采样高低不代表逐笔极值。`),
+    waveSeries==="proxy" ? el("div",{class:"chips",style:"margin-top:10px"},Object.entries(r.changes_pct || {}).filter(([key])=>key!=="5d").map(([key,v])=>el("span",{class:"chip"},`${key.replace("d","日")} ${signed(v)}%`))) :
+      el("details",{class:"more","data-detail-key":"jd-daily-table"},el("summary",{},"逐日采样明细与缺口"),
+        (j.missing_dates || []).length ? el("div",{class:"notice warn"},`未采到报价的交易日期：${j.missing_dates.join("、")}`):null,
+        el("div",{class:"sub"},"缺口按每分钟一档估算，仅表示采样覆盖，不等于接口故障。"),
+        el("ul",{class:"list"},days.slice().reverse().map(row=>el("li",{},el("strong",{},`${row.date_bj} · ${row.session_ended ? "日期已结束" : "当日未结束"} · ${row.partial ? "采样不完整" : "分钟档覆盖完整"}`),
+          el("div",{class:"sub"},`首笔 ${num(row.first_price_cny)} · 末笔 ${num(row.last_price_cny)} · 采样低/高 ${num(row.sampled_low_cny)} / ${num(row.sampled_high_cny)} 元/克`),
+          el("div",{class:"sub"},`${row.samples} 次采样 · 缺 ${row.missing_minute_samples} 个分钟档 · 最大采样间隔 ${num(row.max_gap_minutes,1)} 分钟`),
+          el("div",{class:"sub"},`${fmtTs(row.first_sample_at)} 至 ${fmtTs(row.last_sample_at)}`))))));
+}
+function drawWaveEvidence() {
+  const container=document.getElementById("wave-chart");if(!container || !DATA)return;
+  const w=DATA.wave_evidence || {},proxy=waveSeries==="proxy",rows=proxy ? w.daily_reference?.recent_sessions || [] : w.jd_daily?.days || [];
+  const points=rows.map(r=>[proxy ? r.date : r.date_bj,proxy ? r.close_usd : r.last_price_cny]).filter(p=>Number.isFinite(p[1]));
+  lineChart(container,{series:[{key:waveSeries,name:proxy?"期货代理收盘（美元/盎司）":"京东末笔采样（元/克）",color:"var(--series-1)",points}],yFormat:v=>num(v),tipFormat:v=>num(v),dateOnly:true,emptyText:proxy?"已结束日期的日线缓存尚未积累":"京东逐日采样尚未积累"});
+}
 function renderEconomicCalendar(d) {
   const macro = d.macro || {}, stamp = macro.calendar_fetched_at || macro.fetched_at;
   const fast = macro.calendar_refresh_seconds === 60;
   const filters = marketFilter("日历筛选", [["upcoming", "待公布"], ["released", "已公布"], ["all", "全部"]], calendarFilter,
-    (key) => { calendarFilter = key; renderMarket(DATA); drawPrice(); });
-  const events = (macro.calendar || []).filter((e) => calendarFilter === "all" || (calendarFilter === "released" ? e.released : !e.released && new Date(e.time_utc).getTime() >= Date.now() - 1800000))
+    (key) => { calendarFilter = key; updateMarketView(); });
+  const events = (macro.calendar || []).filter(e=>new Date(e.time_utc)>=Date.now()-86400000 && new Date(e.time_utc)<=Date.now()+7*86400000).map(e=>new Date(e.time_utc)>Date.now() ? {...e,actual:null,released:false}:e).filter((e) => calendarFilter === "all" || (calendarFilter === "released" ? e.released : !e.released && new Date(e.time_utc).getTime() >= Date.now() - 1800000))
     .slice().sort((a, b) => calendarFilter === "released" ? new Date(b.time_utc) - new Date(a.time_utc) : new Date(a.time_utc) - new Date(b.time_utc));
   const eventList = el("ul", { class: "event-list" }, events.map((e) => {
     const distance = (new Date(e.time_utc).getTime() - Date.now()) / 60000;
@@ -997,8 +1040,8 @@ function renderEconomicCalendar(d) {
         el("div", { class: "event-values" }, el("span", {}, "实际 ", el("strong", {}, e.actual ?? "—")),
           el("span", {}, `预期 ${e.forecast ?? "—"}`), el("span", {}, `前值 ${e.previous ?? "—"}`))));
   }));
-  return card("经济日历", sourceMeta(stamp, fast ? "公布窗口 · 每分钟" : "每30分钟", fast ? 180 : 2100, (macro.refresh_errors || {}).calendar, !macro.calendar),
-    el("div", { class: "row", style: "flex-wrap:wrap;justify-content:space-between" }, filters, el("span", { class: "sub" }, "北京时间 · " + events.length + " 项")),
+  return card("未来七天经济日历", sourceMeta(stamp, fast ? "公布窗口 · 每分钟" : "每30分钟", fast ? 180 : 2100, (macro.refresh_errors || {}).calendar, !macro.calendar),
+    el("div", { class: "row", style: "flex-wrap:wrap;justify-content:space-between" }, filters, el("span", { class: "sub" }, "北京时间 · 未来7天及近24小时 · " + events.length + " 项")),
     events.length ? eventList : el("div", { class: "empty" }, macro.calendar ? "当前筛选下暂无日程" : "日历尚未获取，等待后台更新"));
 }
 function renderJDReference(d) {
@@ -1047,30 +1090,32 @@ function renderJDReference(d) {
 function renderMarketNews(d) {
   const all = d.jin10 || [], flashes = all.filter((x) => flashFilter !== "important" || x.important);
   const filters = marketFilter("快讯筛选", [["all", "全部快讯"], ["important", "只看重要"]], flashFilter,
-    (key) => { flashFilter = key; renderMarket(DATA); drawPrice(); });
+    (key) => { flashFilter = key; flashLimit=8; updateMarketView(); });
   return card("黄金相关快讯", el("span", { class: "sub" }, "金十 · 每2分钟采集"), filters,
-    flashes.length ? el("ul", { class: "event-list" }, flashes.map((x) => {
-      const triage = (d.jin10_triage || {})[x.id];
+    flashes.length ? el("ul", { class: "event-list" }, flashes.slice(0,flashLimit).map((x) => {
+      const triage = (d.jin10_triage || {})[x.id],text=String(x.text || ""),brief=text.replace(/\s+/g," ").trim();
       return el("li", { class: "event-row" }, el("div", { class: "event-time" }, (x.time_bj || "").slice(5, 10), el("div", {}, (x.time_bj || "").slice(11, 16))),
-        el("div", {}, el("div", { style: "font-size:14px;overflow-wrap:anywhere" }, x.important ? el("span", { class: "tag ai", style: "margin-right:6px" }, "重要") : null, x.text),
+        el("div", {}, el("div", { style: "font-size:14px;overflow-wrap:anywhere" }, x.important ? el("span", { class: "tag ai", style: "margin-right:6px" }, "重要") : null, brief.length>160 ? brief.slice(0,160)+"…" : brief),
+          brief.length>160 ? el("details",{class:"more","data-detail-key":"flash:"+x.id},el("summary",{},"阅读全文"),el("div",{style:"white-space:pre-wrap;overflow-wrap:anywhere"},text)):null,
           triage ? el("details", { class: "more" }, el("summary", {}, triage.decision === "trigger" ? "已触发 AI 分析" : "未触发额外分析"), el("div", { class: "sub" }, triage.reason)) : null));
-    })) : el("div", { class: "empty" }, flashFilter === "important" ? "暂无重要快讯" : "暂无相关快讯，等待后台采集"));
+    })) : el("div", { class: "empty" }, flashFilter === "important" ? "暂无重要快讯" : "暂无相关快讯，等待后台采集"),
+    flashes.length>flashLimit ? el("button",{class:"link-btn",onclick:()=>{flashLimit+=8;updateMarketView();}},`显示更多快讯（剩余 ${flashes.length-flashLimit} 条）`):null);
 }
 
 function renderMarket(d) {
   const panel = clear(document.getElementById("panel-market"));
   const s = d.snapshot || {}, p = plan(d);
   panel.appendChild(renderMarketSummary(d));
+  panel.appendChild(renderWaveEvidence(d));
+  panel.appendChild(renderEconomicCalendar(d));
+  panel.appendChild(renderMacroData(d));
   const seg = el("div", { class: "seg", role: "group", "aria-label": "时间范围" }, [["1d", "1 天"], ["7d", "7 天"]].map(([k, l]) =>
     el("button", { type: "button", "aria-pressed": String(priceRange === k), onclick: (e) => {
       priceRange = k; e.currentTarget.parentNode.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === e.currentTarget))); drawPrice(); } }, l)));
-  panel.appendChild(card("XAUUSD 走势", seg, el("div", { class: "chart", id: "price-chart" }),
-    s.signals ? el("div", { class: "chips", style: "margin-top:10px" }, Object.entries(s.signals).map(([k, v]) => el("span", { class: "chip" }, `${k} ${v}`))) : null));
-
-  panel.appendChild(renderEconomicCalendar(d));
+  panel.appendChild(el("details",{class:"more card","data-detail-key":"intraday-chart",ontoggle:e=>{if(e.currentTarget.open)drawPrice();}},el("summary",{},"分时走势（按需查看）"),
+    seg,el("div",{class:"sub",style:"margin-top:10px"},`国际金价当日采样范围 ${num(s.day_low)}–${num(s.day_high)} 美元/盎司`),el("div",{class:"chart",id:"price-chart"})));
   panel.appendChild(renderMarketNews(d));
-  panel.appendChild(renderMacroData(d));
-  panel.appendChild(renderJDReference(d));
+  panel.appendChild(el("details",{class:"more card","data-detail-key":"jd-diagnostics"},el("summary",{},"京东资金挂单参考与接口诊断"),renderJDReference(d)));
 }
 function ruleReference(d) {
   const s=d.snapshot || {},p=plan(d);
@@ -1192,7 +1237,7 @@ function renderActiveCharts() {
   if (!DATA) return;
 
   if (activeTab === "strategies") drawEquity();
-  if (activeTab === "market") drawPrice();
+  if (activeTab === "market") {drawPrice();drawWaveEvidence();}
   if (activeTab === "compare") drawComparison();
 }
 const panelSignatures=new Map(), panelOpen=new Map();
@@ -1209,12 +1254,12 @@ function preservePanel(panel,fn) {
 }
 function renderPage(id,force=false) {
   if(!DATA) return;
-  const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
+  const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.wave_evidence?.daily_reference,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
     strategies:[DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
     notifications:[DATA.notifications],
     ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],
-    market:[DATA.snapshot,DATA.execution,DATA.macro,DATA.jd_research,DATA.jin10,DATA.prices],records:[DATA.strategy_names]};
+    market:[DATA.snapshot,DATA.wave_evidence,DATA.execution,DATA.macro,DATA.jd_research,DATA.jin10,DATA.prices],records:[DATA.strategy_names]};
   const expiryPlans=[...(DATA.autonomous?.accounts || []).map(a=>a.plan).filter(Boolean),...(DATA.autonomous?.plans || []),...(id==="records" && recordKind==="plans" ? historyItems : [])];
   const signature=JSON.stringify([dependencies[id],["ai","overview","records","strategies"].includes(id) ? expiryPlans.map(p=>[p.id,planPastDeadline(p)]) : null]);
   if(force || panelSignatures.get(id)!==signature) {
