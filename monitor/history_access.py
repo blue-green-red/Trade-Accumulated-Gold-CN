@@ -29,6 +29,9 @@ def session(analyst,context,usage):
         codex=[]
         for key,value in {**config,'enabled_tools':[NAME],'required':True,'startup_timeout_sec':5,'tool_timeout_sec':5,'default_tools_approval_mode':'approve'}.items():
             codex+=['-c','mcp_servers.account_history.'+key+'='+json.dumps(value)]
+        from .analysis_archive import record
+        from .history_tool import TOOL
+        record(usage,'tool_definition',TOOL)
         try:yield {'claude':{'mcpServers':{'account_history':config}},'codex':codex,'reader':reader}
         finally:
             records=[]
@@ -36,6 +39,8 @@ def session(analyst,context,usage):
                 if not line.strip():continue
                 try:records.append(json.loads(line))
                 except ValueError:usage.setdefault('performance',{})['history_audit_incomplete']=True
+            from .analysis_archive import record
+            for entry in records:record(usage,'history_query',entry)
             usage['history_queries']=records
             usage.setdefault('performance',{})['history_queries']=len(records)
             usage['performance']['history_rows']=sum(len(r.get('result',{}).get('items',[])) for r in records)
