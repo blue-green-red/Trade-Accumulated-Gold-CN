@@ -316,14 +316,11 @@ class Monitor:
         if not done:
             return
         from .ai import ANALYST_NAMES
-        title = "🧠" + "｜".join(f"{ANALYST_NAMES.get(n, n)}短期{axis_m_from_view(v)['axis']}" for n, v in done.items())
-        parts = [f"## {ANALYST_NAMES.get(n, n)}\n\n{format_view(v)}" for n, v in done.items()]
-        if len(done) >= 2:
-            vs = list(done.values())
-            agree = [f for f, label in (("bias_short", "短期"), ("bias_long", "中长期")) if vs[0][f] == vs[1][f]]
-            parts.insert(0, "**两个 AI 判断**：" + ("、".join({"bias_short": "短期", "bias_long": "中长期"}[f] for f in agree) + "一致" if agree else "方向全部分歧")
-                         + "；两个 AI 分别使用自己的判断操盘")
-        self._ai_results.put({"key": f"ai:{run_id}", "title": title, "body": "\n\n---\n\n".join(parts)})
+        # Keep summaries model-scoped so one subscription cannot leak another model's result.
+        for name,view in done.items():
+            self._ai_results.put({"key":f"ai:{name}:{run_id}","notification_topic":name+":analysis",
+                "title":f"🧠{ANALYST_NAMES.get(name,name)}短期{axis_m_from_view(view)['axis']}",
+                "body":f"## {ANALYST_NAMES.get(name,name)}\n\n{format_view(view)}"})
 
     def wait_for_ai(self) -> None:
         if self._ai_thread:

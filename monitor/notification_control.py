@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 TOPICS = {f'{model}:{period}': f'{model.title()} · {label}'
           for model in ('claude', 'codex')
           for period, label in (('short', '短线'), ('medium', '中线'), ('long', '长线'), ('low','低风险短线'), ('standard','标准风险短线'), ('high','高风险短线'))}
+TOPICS.update({f'{model}:analysis':f'{model.title()} · 分析摘要' for model in ('claude','codex')})
 TOPICS.update({'rules:hold': '对照 · 买入持有', 'rules:position': '对照 · 趋势策略',
                'rules:short': '对照 · 短线', 'system': '行情提醒与定时报告'})
 
@@ -21,7 +22,7 @@ def subscriptions(conn):
 def visible_subscriptions(conn,mode):
     risk=mode=='risk_six_account'
     return [r for r in subscriptions(conn) if not r['key'].startswith(('claude:','codex:')) or
-            (r['key'].split(':')[-1] in ('low','standard','high') if risk else
+            (r['key'].split(':')[-1] in ('low','standard','high','analysis') if risk else
              r['key'].split(':')[-1] not in ('low','standard','high') and (mode!='four_account' or not r['key'].endswith(':long')))]
 
 

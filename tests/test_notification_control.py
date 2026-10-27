@@ -48,6 +48,19 @@ class NotificationTests(unittest.TestCase):
                 {'key':'acct:codex:position_ai:2026-10-22:buy'},{'key':'move:up'}]
         self.assertEqual(selected_events(self.store.conn,events),events[:2])
 
+    def test_analysis_summary_independent_of_system_alerts_and_model_trade_topics(self):
+        set_subscription(self.store.conn,'codex:analysis',True)
+        events=[{'key':'ai:codex:run','notification_topic':'codex:analysis','title':'Codex摘要','body':'codex'},
+                {'key':'ai:claude:run','notification_topic':'claude:analysis','title':'Claude摘要','body':'claude'},
+                {'key':'touch:R1','title':'点位','body':'level'},{'key':'gate:allow','title':'门控','body':'gate'},
+                {'key':'autonomous:1','notification_topic':'codex:high','title':'买入','body':'fill'}]
+        self.assertEqual(selected_events(self.store.conn,events),events[:1])
+        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m.dispatch(events)
+        self.assertEqual(m.notifier.send.call_args.args,('Codex摘要','### Codex摘要\n\ncodex'))
+        self.assertEqual(self.store.conn.execute('select count(*) from alerts').fetchone()[0],5)
+        self.assertEqual(self.store.conn.execute('select count(*) from alerts where delivered=1').fetchone()[0],1)
+
     def test_http_requires_login_origin_and_valid_topic(self):
         import base64, http.client, threading
         from dataclasses import replace

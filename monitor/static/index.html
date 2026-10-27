@@ -851,7 +851,7 @@ const notificationPending=new Set();
 let notificationError="";
 function notificationControls(d) {
   const n=d.notifications || {},message=el("div",{class:"sub",role:"status"},n.configured ? `已配置 ${n.channel} · 修改后即时生效` : "尚未配置推送密钥，请在服务器配置后重启监控服务。"),
-    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"默认关闭。各周期包含初始满仓与初始空仓两户，仅通知实际买卖成交及止损止盈；观望、分析、挂单和初始化不推送。通知开关不改变 AI 操盘开关。")),grid=el("div",{class:"grid-2"});
+    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"默认关闭。每个风险档包含满仓/空仓两户，操作通知仅含实际成交及保护退出；分析摘要由单独开关控制，行情提醒与定时报告也独立设置。通知开关不改变操盘开关。")),grid=el("div",{class:"grid-2"});
   (n.subscriptions || []).forEach(c=>{
     const button=el("button",{class:"chip-btn",type:"button",role:"switch","aria-checked":String(c.enabled),"aria-label":`${c.name} 通知`,disabled:notificationPending.has(c.key),onclick:async()=>{
       if(notificationPending.has(c.key))return;

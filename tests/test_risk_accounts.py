@@ -64,7 +64,7 @@ class RiskAccountTests(unittest.TestCase):
         self.assertEqual(set(web['strategy_names']),{'hold','position','short',*(m+':'+k for m in ('claude','codex') for k in MODES)})
         for m in web['comparison']['models']:self.assertEqual(m['budget'],600000)
         topics=[r['key'] for r in web['notifications']['subscriptions'] if r['key'].startswith('codex:')]
-        self.assertEqual(topics,['codex:low','codex:standard','codex:high'])
+        self.assertEqual(topics,['codex:low','codex:standard','codex:high','codex:analysis'])
         reader=HistoryReader(self.settings.db_path,'codex',self.snap['ts'].isoformat())
         self.assertNotIn('error',reader.call({'account':'low_full','kind':'fills'}))
 
