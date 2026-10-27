@@ -466,6 +466,8 @@ const hiddenSeries = new Set();
 let priceRange = "1d";
 let calendarFilter = "upcoming", flashFilter = "important", flashLimit=8;
 let strategyScope = "ai", assetModel="all", assetPeriod="all", assetStart="all";
+const modelChoices=(d,label="全部模型")=>[["all",label],...(d.model_controls || []).filter(c=>c.enabled).map(c=>[c.key,c.name])];
+const visibleModel=(d,key)=>key==="all" || key==="rules" || (d.model_controls || []).some(c=>c.key===key && c.enabled);
 const assetMatches=(key)=> (assetModel==="all" || key.startsWith(assetModel+":")) && (assetPeriod==="all" || key.includes(":"+assetPeriod+"_")) && (assetStart==="all" || key.endsWith("_"+assetStart));
 let fillFilter = "all";
 let recordModel = "all", recordDays = "all";
@@ -527,6 +529,7 @@ function assetLegendLabel(series) {
   return assetModel==="all" ? `${ANALYST[model]} · ${{short:"短",medium:"中",long:"长",low:"低风险",standard:"标准",high:"高风险"}[match[1]]}/${match[2]==="full"?"满":"空"}` : ACCOUNT_LABELS[mode];
 }
 function renderStrategies(d) {
+  if(!visibleModel(d,assetModel)) assetModel="all";
   if((fourAccounts(d) && assetPeriod==="long") || (riskAccounts(d) && !periodChoices(d).some(([k])=>k===assetPeriod))) assetPeriod="all";
   const panel = clear(document.getElementById("panel-strategies"));
   const scopeMatches = (key) => assetMatches(key) && (strategyScope === "all" || (strategyScope === "ai" ? key.includes(":") : !key.includes(":")));
@@ -535,7 +538,7 @@ function renderStrategies(d) {
     el("button", { class: "filter-btn", type: "button", "aria-pressed": String(strategyScope === key), onclick: () => { strategyScope = key; assetModel="all";assetPeriod="all";assetStart="all";renderStrategies(DATA); drawEquity(); } }, label)));
   const chooser=(label,choices,value,set)=>el("label",{},label,el("select",{"aria-label":label,disabled:strategyScope==="rules",onchange:(e)=>{set(e.target.value);renderStrategies(DATA);drawEquity();}},choices.map(([v,t])=>el("option",{value:v,selected:value===v},t))));
   panel.appendChild(card("账户筛选",null,scope,el("div",{class:"asset-filters"},
-    chooser("资产模型",[["all","全部模型"],["claude","Claude"],["codex","Codex"]],assetModel,(v)=>assetModel=v),
+    chooser("资产模型",modelChoices(d),assetModel,(v)=>assetModel=v),
     chooser(riskAccounts(d)?"风险场景":"资产周期",periodChoices(d),assetPeriod,(v)=>assetPeriod=v),
     chooser("资产起点",[["all","全部起点"],["full","初始满仓"],["empty","初始空仓"]],assetStart,(v)=>assetStart=v)),
     el("div",{class:"sub",style:"margin-top:10px"},strategyScope==="rules" ? "对照组按各自规则独立运行，不使用模型、周期或起点筛选。" : "满仓 / 空仓指账户初始状态，当前是否持仓请看账户状态。")));
@@ -635,7 +638,7 @@ function modelControls(d) {
         } catch (e) { message.textContent = e.message; }
         finally { button.disabled = false; }
       } }, c.enabled ? "关闭模型" : "开启模型");
-    const message = el("div", { class: "sub", role: "status" }, !c.enabled ? "已暂停，历史战绩保留" :
+    const message = el("div", { class: "sub", role: "status" }, !c.enabled ? "模型已关闭，相关数据已隐藏；重新开启后恢复展示" :
       c.available === false ? "分析后端暂不可用" : running ? "正在分析 · 串行运行" : queued ? "排队中 · 等待前一个模型完成" : "已开启，按调度分析；重新开启后先获取新判断");
     if (c.daily_cap) message.appendChild(el("div",{},`今日调用 ${c.runs_today || 0} / ${c.daily_cap} 轮 · 其中 ${c.urgent_reserve} 轮预留重大事件`));
     if (c.enabled && c.pending_events) message.appendChild(el("div", {}, `待覆盖 ${c.pending_events} 个新事件 · 冷却期间保留，成功分析后确认`));
@@ -656,7 +659,7 @@ function modelControls(d) {
     if(manual.message) message.appendChild(el("div",{},`${manualPending ? "手动请求" : "上次手动"}：${manual.message}`));
     grid.appendChild(el("div", {}, el("div", { class: "row" }, el("strong", { class: "grow" }, c.name),
       el("span", { class: "tag" }, c.enabled ? "已开启" : "已关闭"), button),
-      el("div",{class:"row",style:"margin-top:8px"},manualButton),
+      c.enabled ? el("div",{class:"row",style:"margin-top:8px"},manualButton) : null,
       (() => { const m = ((d.comparison || {}).models || []).find((x) => x.key === c.key);
         return m ? el("div", { class: "sub", style: "margin:6px 0" }, `收益 ${pct(m.return)} · 胜率 ${rate(m.win_rate)} · 已平仓 ${m.trades} 次`) : null; })(), message));
   });
@@ -802,6 +805,7 @@ function planValidityText(plan) {
 
 let accountModel = "active", accountPeriod = "all", accountStart = "all";
 function autonomousAccounts(d) {
+  if(accountModel!=="active" && !visibleModel(d,accountModel)) accountModel="all";
   if((fourAccounts(d) && accountPeriod==="long") || (riskAccounts(d) && !periodChoices(d).some(([k])=>k===accountPeriod))) accountPeriod="all";
   if (accountModel === "active") accountModel = ((d.model_controls || []).find(c=>c.enabled) || {}).key || "all";
   const rows = ((d.autonomous || {}).accounts || []).filter((a) =>
@@ -812,7 +816,7 @@ function autonomousAccounts(d) {
   const cadence = d.cadence || {};
   const panel = card(riskAccounts(d)?"六账户短线风险实验":fourAccounts(d)?"四账户自主操盘":"六账户自主操盘",el("span",{class:"sub"},`每模型${fourAccounts(d)?4:6}户 · 每户10万元 · 一轮统一决策`),
     el("div",{class:"row",style:"flex-wrap:wrap;margin-bottom:12px"},
-      filter("账户模型",[["all","全部"],["claude","Claude"],["codex","Codex"]],accountModel,(v)=>accountModel=v),
+      filter("账户模型",modelChoices(d,"全部"),accountModel,(v)=>accountModel=v),
       filter(riskAccounts(d)?"风险场景":"账户周期",periodChoices(d),accountPeriod,(v)=>accountPeriod=v),
       filter("初始仓位",[["all","全部起点"],["full","初始满仓"],["empty","初始空仓"]],accountStart,(v)=>accountStart=v)));
   panel.appendChild(el("div",{class:"sub",style:"margin-bottom:10px"},cadence.review_minutes >= 0 ? `周期复查：${cadence.review_minutes > 0 ? `${cadence.review_minutes} 分钟后，` : "无最小时间间隔，"}国际金价较上次分析变化≥${cadence.min_move_pct}%才启动；最长${cadence.max_idle_minutes/60}小时兜底。重大事件另外排队，执行器每分钟检查。` : "定时分析加事件触发，执行器每分钟检查。"));
@@ -1196,6 +1200,8 @@ async function fetchHistory() {
 }
 function renderRecords(d) {
   if(!d) return;
+  if(!visibleModel(d,recordModel)) recordModel="all";
+  if(fillFilter!=="all" && !d.strategy_names[fillFilter])fillFilter="all";
   const panel=document.getElementById("panel-records");
   preservePanel(panel,()=>{
   clear(panel);
@@ -1205,14 +1211,14 @@ function renderRecords(d) {
   const controls=card("筛选交易记录",null,
     el("div",{class:"chips"},kinds.map(([v,t])=>el("button",{class:"filter-btn",type:"button","aria-pressed":String(recordKind===v),onclick:()=>{recordKind=v;fillFilter="all";resetHistory();}},t))),
     el("div",{class:"asset-filters"},
-      chooser("筛选模型",[["all","全部模型"],["claude","Claude"],["codex","Codex"],["rules","对照账户"]],recordModel,(v)=>{recordModel=v;fillFilter="all";}),
+      chooser("筛选模型",[...modelChoices(d),["rules","对照账户"]],recordModel,(v)=>{recordModel=v;fillFilter="all";}),
       chooser("筛选时间",[["all","全部历史"],["1","最近24小时"],["7","最近7天"],["30","最近30天"]],recordDays,(v)=>recordDays=v),
       !["analysis","alerts"].includes(recordKind) ? chooser("筛选账户",[["all","全部账户"],...keys],fillFilter,(v)=>fillFilter=v) : null));
   controls.classList.add("record-controls");panel.appendChild(controls);
   const title=({fills:"实际成交",plans:"AI 操盘决策",cycles:"交易周期",analysis:"分析历史",alerts:"系统提醒"})[recordKind];
   const descriptions={fills:"按成交时间倒序。这里才是实际发生的买卖；初始化建仓单独标注。",plans:"按决策时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮包含全部活动账户决策，不代表已经成交。",alerts:"系统监控提醒，不代表 AI 已下单。"};
   panel.appendChild(el("div",{class:"notice info"},descriptions[recordKind]));
-  const items=historyItems;
+  const items=historyItems.filter(r=>{const m=(r.account || r.strategy || "").split(":")[0];return (!["claude","codex"].includes(m) || visibleModel(d,m)) && !(d.model_controls || []).some(c=>!c.enabled && (r.title || "").toLowerCase().includes(c.key));});
   const list=items.map((r)=>{
     const label=d.strategy_names[r.account] || ANALYST[r.account] || r.account;
     const heading=(text)=>el("div",{class:"row",style:"flex-wrap:wrap"},el("strong",{class:"grow"},text),el("span",{class:"sub"},fmtTs(r.stamp)));
@@ -1291,7 +1297,9 @@ async function load(force=false) {
       const r = await fetch("/api/dashboard", { cache: "no-store", credentials: "same-origin", signal:controller.signal });
       if (!r.ok) throw new Error("HTTP " + r.status);
       const next = await r.json();
+      const visibilityChanged=DATA && JSON.stringify((DATA.model_controls || []).map(c=>[c.key,c.enabled]))!==JSON.stringify((next.model_controls || []).map(c=>[c.key,c.enabled]));
       DATA = next;
+      if(visibilityChanged) resetHistory();
       render();
       updated.title="点击刷新数据";
       if(activeTab==="records" && !historyBusy) refreshHistory();

@@ -103,7 +103,7 @@ def _horizon_stats(rows: List[Dict[str, Any]], h: Dict[str, Any]) -> Dict[str, A
     }
 
 
-def evaluate(conn: sqlite3.Connection, now: Optional[datetime] = None, recent_limit: int = 20, view_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+def evaluate(conn: sqlite3.Connection, now: Optional[datetime] = None, recent_limit: int = 20, view_ids: Optional[List[int]] = None, visible_models=None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     if not _table_exists(conn, "ai_views"):
         return {"enabled": False, "views": 0, "analysts": [], "agreement": [], "recent": []}
@@ -111,9 +111,14 @@ def evaluate(conn: sqlite3.Connection, now: Optional[datetime] = None, recent_li
     analyst_col = "analyst" if "analyst" in cols else "'claude'"
     run_col = "run_id" if "run_id" in cols else "NULL"
     timing_cols = ", completed_at, snapshot_at, started_at" if "completed_at" in cols else ", NULL, NULL, NULL"
+    visibility_clause=''
+    visibility_args=[]
+    if visible_models is not None:
+        visibility_args=list(visible_models)
+        visibility_clause=(' AND '+analyst_col+' IN ('+','.join('?' for _ in visibility_args)+')') if visibility_args else ' AND 0'
     views = conn.execute(
         f"SELECT ts, xauusd, view_json, {analyst_col}, {run_col}{timing_cols} FROM ai_views "
-        "WHERE error IS NULL AND xauusd IS NOT NULL" + (" AND rowid IN (" + ",".join("?" for _ in view_ids) + ")" if view_ids else "") + " ORDER BY ts", view_ids or []).fetchall()
+        "WHERE error IS NULL AND xauusd IS NOT NULL" + (" AND rowid IN (" + ",".join("?" for _ in view_ids) + ")" if view_ids else "") + visibility_clause + " ORDER BY ts", [*(view_ids or []),*visibility_args]).fetchall()
     bars: List[Tuple[date, float]] = []
     if _table_exists(conn, "daily_bars"):
         bars = [(date.fromisoformat(r[0]), r[1]) for r in conn.execute("SELECT day, xau_close FROM daily_bars ORDER BY day")]

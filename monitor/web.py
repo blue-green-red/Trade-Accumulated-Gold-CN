@@ -255,6 +255,8 @@ def price_history(conn: sqlite3.Connection) -> Dict[str, Any]:
             "7d": [[r["ts"], r["xauusd"]] for r in week if r["xauusd"]]}
 
 
+from .model_visibility import dashboard_visible,hidden_models
+
 ANALYST_NAMES = {"claude": "Claude", "codex": "Codex"}
 
 
@@ -263,6 +265,7 @@ def ai_section(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
         return {"enabled": False, "latest": None, "analysts": [], "history": []}
     has_analyst = "analyst" in {r[1] for r in conn.execute("PRAGMA table_info(ai_views)")}
     names = [n for n in settings.ai_analysts] if has_analyst else ["claude"]
+    names=[n for n in names if n not in hidden_models(conn)]
     analysts = []
     for name in names:
         row = (conn.execute("SELECT * FROM ai_views WHERE error IS NULL AND analyst=? ORDER BY ts DESC LIMIT 1", (name,))
@@ -275,7 +278,8 @@ def ai_section(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
             analysts.append({**json.loads(row["view_json"]), "analyst": name, "name": ANALYST_NAMES.get(name, name),
                              "wave_input":wave_input,"ts": row["ts"], "model": row["model"], "sources": json.loads(row["sources_json"] or "[]")[:12]})
     history = conn.execute(f"SELECT ts, trigger, view_json, error{', analyst' if has_analyst else ''} FROM ai_views "
-                           "ORDER BY ts DESC LIMIT 20").fetchall()
+                           + ("WHERE analyst IN ("+','.join('?' for _ in names)+") " if has_analyst and names else "WHERE 0 " if not names else "") +
+                           "ORDER BY ts DESC LIMIT 20",names if has_analyst else []).fetchall()
 
     def brief(r):
         v = json.loads(r["view_json"]) if r["view_json"] else {}
@@ -343,7 +347,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                              "runtime": get_state(conn, f"ai_runtime:{name}") or {}, "manual":manual_status(conn,name),
                              "runs_today": ai_run_usage(conn,name,datetime.now(timezone.utc)), "daily_cap": settings.ai_max_runs_per_day,
                              "urgent_reserve": settings.ai_urgent_reserve, "pending_events": len(read_events(conn, name)["pending"])})
-        return {
+        result = {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "bank": settings.paper_bank, "bank_name": EXECUTION_NAME,
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
@@ -370,7 +374,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                     if portfolios_exist(conn) else []},
             "prices": price_history(conn),"wave_evidence":wave_evidence,
             "ai": ai_section(conn, settings),
-            "scorecard": evaluate_scorecard(conn),
+            "scorecard": evaluate_scorecard(conn,visible_models=[m for m in settings.ai_analysts if m not in hidden_models(conn)]),
             "macro": get_state(conn, "web_macro"),
             "ai_inputs": get_state(conn, "ai_inputs"),
             "jd_research": jd_reference(conn,settings),
@@ -381,6 +385,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "strategy_names": {**{k: cls.name for k, cls in REGISTRY.items() if settings.ai_trading_mode!="risk_six_account" or k in (*daily_keys(settings),*short_labels(settings))},**(short_labels(settings) if settings.ai_trading_mode=="risk_six_account" else {}),**portfolio_keys(settings)},
             "series_order": SERIES_ORDER,
         }
+        return dashboard_visible(conn,result)
     finally:
         conn.close()
 
@@ -423,6 +428,9 @@ def history_page(settings, query):
         rows=[]
         for sql,params in sources:
             clauses=[]
+            for hidden in hidden_models(conn):
+                if kind=='alerts':clauses.append('title NOT LIKE ?');params.append('%'+hidden+'%')
+                else:clauses.append('(account<>? AND account NOT LIKE ?)');params.extend([hidden,hidden+':%'])
             if model=="rules": clauses.append("account NOT LIKE '%:%'" if kind!="analysis" else "0")
             elif model!="all":
                 clauses.append("(account=? OR account LIKE ?)");params+= [model,model+':%']

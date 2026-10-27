@@ -184,7 +184,8 @@ def run_locked(analyst,context,usage):
                 if history:cmd+=history['codex']
                 if session:cmd+=[session['id']]
                 cmd.append(prompt)
-                env={k:v for k,v in os.environ.items() if k!='CLAWX_JR_API_KEY'}
+                from net_proxy import model_environment
+                env=model_environment({k:v for k,v in os.environ.items() if k!='CLAWX_JR_API_KEY'})
                 env.setdefault('HOME',os.path.expanduser('~'))
                 proc=analyst._run_process(cmd,cwd=str(work),env=env,stdin=subprocess.DEVNULL,
                     capture_output=True,text=True,timeout=CODEX_TIMEOUT_SECONDS,on_stdout=events.feed)

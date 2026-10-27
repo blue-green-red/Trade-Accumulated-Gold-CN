@@ -232,7 +232,9 @@ class AIAnalyst:
         self.model = settings.codex_model if backend == "codex" else settings.ai_model
         if backend == "api":
             import anthropic  # 延迟导入：未启用 API 后端时不要求安装
-            self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None, timeout=600, max_retries=3)
+            from net_proxy import model_proxy_url
+            self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None, timeout=600, max_retries=3,
+                http_client=anthropic.DefaultHttpxClient(proxy=model_proxy_url() or None,trust_env=False))
         self.model_label = {"api": self.model, "claude_code": f"claude-code:{self.model}",
                             "codex": f"codex:{self.model or 'default'}"}[backend]
         self._failed_at: Optional[datetime] = None
@@ -511,7 +513,8 @@ class AIAnalyst:
                 raise RuntimeError(f"初筛解析失败（{response.stop_reason}）")
             return response.parsed_output.model_dump()
         with tempfile.TemporaryDirectory(prefix="gold-triage-") as workdir:
-            env = {k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"}
+            from net_proxy import model_environment
+            env = model_environment({k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"})
             env.setdefault("HOME", os.path.expanduser("~"))
             if self.backend == "codex":
                 schema_path, out_path = os.path.join(workdir, "schema.json"), os.path.join(workdir, "out.json")
@@ -592,7 +595,8 @@ class AIAnalyst:
         ]
         if self.settings.ai_effort:
             cmd += ["--effort", self.settings.ai_effort]
-        env = {k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"}
+        from net_proxy import model_environment
+        env = model_environment({k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"})
         env.setdefault("HOME", os.path.expanduser("~"))   # systemd 下也要能找到 Claude Code 的登录凭据
         from .history_access import session as history_session,CLAUDE_NAME
         with tempfile.TemporaryDirectory(prefix="gold-ai-") as workdir, history_session(self,context,usage) as history:
