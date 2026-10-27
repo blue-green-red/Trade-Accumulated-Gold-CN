@@ -846,16 +846,25 @@ function autonomousAccounts(d) {
   return panel;
 }
 
+let notificationGeneration=0;
+const notificationPending=new Set();
+let notificationError="";
 function notificationControls(d) {
   const n=d.notifications || {},message=el("div",{class:"sub",role:"status"},n.configured ? `已配置 ${n.channel} · 修改后即时生效` : "尚未配置推送密钥，请在服务器配置后重启监控服务。"),
-    box=card("微信操作通知",null,message,el("p",{class:"sub"},"默认关闭。各周期包含初始满仓与初始空仓两户，仅通知实际买卖成交及止损止盈；观望、分析、挂单和初始化不推送。通知开关不改变 AI 操盘开关。")),grid=el("div",{class:"grid-2"});
+    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"默认关闭。各周期包含初始满仓与初始空仓两户，仅通知实际买卖成交及止损止盈；观望、分析、挂单和初始化不推送。通知开关不改变 AI 操盘开关。")),grid=el("div",{class:"grid-2"});
   (n.subscriptions || []).forEach(c=>{
-    const button=el("button",{class:"chip-btn",type:"button",role:"switch","aria-checked":String(c.enabled),"aria-label":`${c.name} 通知`,onclick:async()=>{
-      button.disabled=true;
+    const button=el("button",{class:"chip-btn",type:"button",role:"switch","aria-checked":String(c.enabled),"aria-label":`${c.name} 通知`,disabled:notificationPending.has(c.key),onclick:async()=>{
+      if(notificationPending.has(c.key))return;
+      notificationPending.add(c.key);notificationError="";button.disabled=true;
       try {
         const response=await fetch("/api/notifications",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:JSON.stringify({topic:c.key,enabled:!c.enabled})});
-        if(!response.ok)throw new Error("通知设置保存失败");await load(true);
-      }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+        if(!response.ok)throw new Error("通知设置保存失败，请重试");
+        const saved=await response.json();
+        if(saved.key!==c.key || typeof saved.enabled!=="boolean")throw new Error("通知设置返回异常，请重试");
+        notificationGeneration++;
+        DATA={...DATA,notifications:{...DATA.notifications,subscriptions:DATA.notifications.subscriptions.map(item=>item.key===saved.key ? {...item,enabled:saved.enabled}:item)}};
+      }catch(error){notificationError=error.message;}
+      finally{notificationPending.delete(c.key);renderPage("notifications",true);}
     }},c.enabled ? "已开启通知" : "已关闭通知");
     grid.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
   });box.appendChild(grid);return box;
@@ -1289,6 +1298,7 @@ function render() {
 let loadInFlight = null;
 async function load(force=false) {
   if (loadInFlight) { if(!force) return loadInFlight; await loadInFlight; }
+  const notificationVersion=notificationGeneration;
   const controller = new AbortController(), updated=document.getElementById("updated");
   updated.textContent = DATA ? "刷新中…" : "加载中…";
   const timer=setTimeout(()=>controller.abort(),15000);
@@ -1297,6 +1307,7 @@ async function load(force=false) {
       const r = await fetch("/api/dashboard", { cache: "no-store", credentials: "same-origin", signal:controller.signal });
       if (!r.ok) throw new Error("HTTP " + r.status);
       const next = await r.json();
+      if(notificationVersion!==notificationGeneration && DATA) next.notifications=DATA.notifications;
       const visibilityChanged=DATA && JSON.stringify((DATA.model_controls || []).map(c=>[c.key,c.enabled]))!==JSON.stringify((next.model_controls || []).map(c=>[c.key,c.enabled]));
       DATA = next;
       if(visibilityChanged) resetHistory();
