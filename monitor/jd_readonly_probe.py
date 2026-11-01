@@ -25,6 +25,8 @@ READ_PATHS={
  '/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
 }
 AUTH_HOSTS={'plogin.m.jd.com','passport.jd.com','passport.m.jd.com','iv.jd.com','sso.jd.com'}
+# Gold-business SSO callback observed after successful interactive JD authentication.
+GOLD_CALLBACK_HOSTS={'plogin.jdjygold.com'}
 AUTH_SERVICE_HOSTS={'jcap.m.jd.com','jcapmonitor.m.jd.com','cactus.jd.com','sgm-taihang.jd.com','h5speed.m.jd.com'}
 # Public official login scripts call these functions; this gateway also serves commerce.
 AUTH_GATEWAY_FUNCTIONS={'h5Config','getCustomCtrl','wsgw_getinfo'}
@@ -59,6 +61,7 @@ def allowed(method,url,resource_type='xhr',login=False,post_data=None):
  if host=='api.jdjygold.com':return u.path in READ_PATHS and method in ('GET','POST','OPTIONS')
  if login and host=='api.m.jd.com':
   return u.path in ('','/','/client.action') and method in ('GET','POST','OPTIONS') and gateway_function_id(url,post_data) in AUTH_GATEWAY_FUNCTIONS
+ if login and host in GOLD_CALLBACK_HOSTS:return method in ('GET','HEAD','OPTIONS')
  if login and host in AUTH_HOSTS:return method in ('GET','POST','HEAD','OPTIONS')
  if login and host in AUTH_SERVICE_HOSTS:return method in ('GET','POST','HEAD','OPTIONS') and not ACTION.search(u.path)
  if login and u.path in AUTH_SUPPORT_PATHS.get(host,set()):return method in ('GET','POST','OPTIONS')
@@ -127,7 +130,7 @@ def probe(bank,headed=False,channel='chromium'):
   def response(r):
    host=urlsplit(r.url).hostname
    bank_query=host=='api.jdjygold.com' and urlsplit(r.url).path in READ_PATHS
-   auth_query=headed and host in (AUTH_HOSTS|AUTH_SERVICE_HOSTS|set(AUTH_SUPPORT_PATHS)|{'api.m.jd.com'})
+   auth_query=headed and host in (AUTH_HOSTS|GOLD_CALLBACK_HOSTS|AUTH_SERVICE_HOSTS|set(AUTH_SUPPORT_PATHS)|{'api.m.jd.com'})
    if not (bank_query or auth_query):return
    item={'status':r.status,'method':r.request.method,'path':safe_path(r.url)}
    if host=='api.m.jd.com':item['gateway_function']=gateway_function_id(r.url,r.request.post_data)
@@ -147,7 +150,7 @@ def probe(bank,headed=False,channel='chromium'):
    login_visible='立即登录' in page.locator('body').inner_text(timeout=5000)
   except Exception as exc:error=type(exc).__name__
   finally:context.close();browser.close()
- return {'format_version':3,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
+ return {'format_version':4,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
          'mode':'local_login_schema_review' if headed else 'anonymous_public_probe',
          'login_button_visible':login_visible,'connected':False,'order_submission_enabled':False,
          'error_type':error,'requests':events}
@@ -161,7 +164,7 @@ def write_report(path,report):
 
 def main():
  p=argparse.ArgumentParser(description='京东浙商/民生只读查询结构检查，不保存登录状态，不含下单功能')
- p.add_argument('--version',action='version',version='jd-readonly-probe 3')
+ p.add_argument('--version',action='version',version='jd-readonly-probe 4')
  p.add_argument('--bank',choices=BANKS,required=True)
  p.add_argument('--headed',action='store_true',help='在自己的电脑打开官方页面，由本人手动登录')
  p.add_argument('--browser',choices=('chromium','chrome','msedge'),default='chromium',help='可用本机已安装的Chrome或Edge，仍使用独立临时会话')

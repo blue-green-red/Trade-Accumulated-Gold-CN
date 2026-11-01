@@ -101,3 +101,42 @@ class JDLoginAllowlistTests(unittest.TestCase):
         self.assertIsNone(gateway_function_id(base+'?functionId=13800000000'))
         self.assertNotIn('13800000000',json.dumps(response_info({'err_code':23,'phone':'13800000000','message':'private'})))
         self.assertNotIn('654321',json.dumps(response_info({'code':'654321','err_code':23})))
+
+
+class JDGoldCallbackTests(unittest.TestCase):
+    def test_gold_sso_callback_is_login_only_and_read_only(self):
+        callback='https://plogin.jdjygold.com/callback?token=do-not-record'
+        self.assertTrue(allowed('GET',callback,'document',True))
+        self.assertFalse(allowed('GET',callback,'document',False))
+        self.assertFalse(allowed('POST',callback,'document',True))
+        self.assertFalse(allowed('GET','https://plogin.jdjygold.com.evil/callback','document',True))
+        self.assertFalse(allowed('POST','https://api.jdjygold.com/gw2/generic/6440/h5/m/submitOrder',login=True))
+        self.assertNotIn('do-not-record',safe_path(callback))
+
+    def test_login_redirect_reaches_gold_business_before_account_query(self):
+        from playwright.sync_api import sync_playwright
+        from monitor.jd_readonly_probe import BANKS
+        seen=[];blocked=[]
+        with sync_playwright() as p:
+            b=p.chromium.launch(headless=True,args=['--no-sandbox']);context=b.new_context()
+            def route(r):
+                q=r.request
+                if not allowed(q.method,q.url,q.resource_type,True,q.post_data):
+                    blocked.append(q.url);r.abort();return
+                seen.append(q.url.split('?')[0])
+                if q.url.startswith('https://plogin.m.jd.com/'):
+                    r.fulfill(status=200,content_type='text/html',body="<script>setTimeout(()=>location.href='https://plogin.jdjygold.com/callback?token=private-code',20)</script>")
+                elif q.url.startswith('https://plogin.jdjygold.com/'):
+                    r.fulfill(status=200,content_type='text/html',body="<script>setTimeout(()=>location.href='"+BANKS['zheshang']['url']+"',20)</script>")
+                elif q.url.startswith('https://m.jdjygold.com/'):
+                    r.fulfill(status=200,content_type='text/html',body='<html>Gold account</html>')
+                else:
+                    r.fulfill(status=200,content_type='application/json',headers={'Access-Control-Allow-Origin':'*'},body='{"success":true,"resultCode":"0"}')
+            context.route('**/*',route)
+            page=context.new_page();page.goto('https://plogin.m.jd.com/local-test-login',wait_until='load')
+            page.wait_for_url(BANKS['zheshang']['url'],timeout=5000)
+            result=page.evaluate("async()=>{const r=await fetch('https://api.jdjygold.com/gw2/generic/6440/h5/m/queryStallForGold');return r.json()}")
+            self.assertTrue(result['success'])
+            self.assertEqual(blocked,[])
+            self.assertEqual(seen[:3],['https://plogin.m.jd.com/local-test-login','https://plogin.jdjygold.com/callback',BANKS['zheshang']['url'].split('?')[0]])
+            context.close();b.close()
