@@ -13,3 +13,6 @@ venv/
 # 监控程序：密钥与运行数据
 .env
 monitor/data/
+
+# Local JD read-only field-structure reports
+jd-*-report.json

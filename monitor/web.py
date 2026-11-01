@@ -308,6 +308,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
         quote = execution_quote(snap)
         valuation_quote = quote or snap.get("jd_last_quote")
         price = valuation_quote["price"] if valuation_quote else None
+        from .jd_live_readonly import accounts as live_readonly_accounts
         from .wave_evidence import daily_reference,jd_daily_samples
         evidence_now=datetime.now(timezone.utc)
         indicator=dict(snap.get("daily_indicators") or {"status":"unavailable"})
@@ -350,6 +351,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
         result = {
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "bank": settings.paper_bank, "bank_name": EXECUTION_NAME,
+            "live_readonly":live_readonly_accounts(conn),
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
                           "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
@@ -608,6 +610,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             self._send(200, dashboard_html(self.settings), "text/html; charset=utf-8")
+        elif path == "/downloads/jd-readonly-probe.py":
+            self._send(200,Path(__file__).with_name("jd_readonly_probe.py").read_bytes(),"text/x-python; charset=utf-8",
+                       {"Content-Disposition":'attachment; filename="jd_readonly_probe.py"'})
         elif path == "/api/history":
             try:
                 body=json.dumps(history_page(self.settings,parse_qs(urlsplit(self.path).query)),ensure_ascii=False,default=str).encode()

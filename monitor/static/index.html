@@ -528,10 +528,25 @@ function assetLegendLabel(series) {
   if(!match)return series.name;
   return assetModel==="all" ? `${ANALYST[model]} · ${{short:"短",medium:"中",long:"长",low:"低风险",standard:"标准",high:"高风险"}[match[1]]}/${match[2]==="full"?"满":"空"}` : ACCOUNT_LABELS[mode];
 }
+function liveReadonlyPanel(d) {
+  return card("京东真实账户 · 只读接入",el("span",{class:"tag"},"待登录验证"),
+    el("div",{class:"sub"},"浙商与民生独立于模拟盘。当前尚未同步账户，金额和持仓未知；此处没有下单或接收密码的入口。"),
+    el("div",{class:"grid-2"},(d.live_readonly || []).map(a=>el("div",{class:"mini-stat"},
+      el("strong",{},a.name),el("div",{class:"sub"},a.public_status==="reachable"?"官方页面已验证 · 等待本人登录":"尚未验证账户查询"),
+      el("div",{},"可用资金 — · 持仓 — · 可卖 —"),
+      el("a",{href:a.official_url,target:"_blank",rel:"noopener noreferrer",class:"link-btn"},"打开京东官方页面 ↗")))),
+    el("div",{class:"sub"},"登录须在你自己的京东官方页面完成。本地浏览器登录不会自动授权服务器；只读助手报告不含Cookie或账户金额，字段确认后才接通同步。"),
+    el("details",{class:"more","data-detail-key":"jd-readonly-setup"},el("summary",{},"在自己电脑登录并检查只读查询"),
+      el("a",{href:"/downloads/jd-readonly-probe.py",download:"jd_readonly_probe.py",class:"link-btn"},"下载电脑端只读助手"),
+      el("div",{class:"sub"},"在下载目录打开终端，安装依赖并依次运行两款产品。登录后查看账户首页，再回终端按回车；生成的报告只含字段结构，用于下一步适配审核。"),
+      el("code",{style:"display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px"},"python -m pip install playwright\npython -m playwright install chromium\npython jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report.json\npython jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json")));
+
+}
 function renderStrategies(d) {
   if(!visibleModel(d,assetModel)) assetModel="all";
   if((fourAccounts(d) && assetPeriod==="long") || (riskAccounts(d) && !periodChoices(d).some(([k])=>k===assetPeriod))) assetPeriod="all";
   const panel = clear(document.getElementById("panel-strategies"));
+  if(d.live_readonly?.length)panel.appendChild(liveReadonlyPanel(d));
   const scopeMatches = (key) => assetMatches(key) && (strategyScope === "all" || (strategyScope === "ai" ? key.includes(":") : !key.includes(":")));
   const series = d.equity.series.filter((s) => scopeMatches(s.key)).map((s) => ({ ...s, color: seriesColor(s.key) }));
   const scope = el("div", { class: "chips", style: "margin-bottom:12px" }, [["ai", "AI 账户"], ["rules", "对照组"], ["all", `全部 ${d.leaderboard.length + d.short.length} 个账户`]].map(([key, label]) =>
@@ -1275,7 +1290,7 @@ function preservePanel(panel,fn) {
 function renderPage(id,force=false) {
   if(!DATA) return;
   const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.wave_evidence?.daily_reference,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
-    strategies:[DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
+    strategies:[DATA.live_readonly,DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
     notifications:[DATA.notifications],
     ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],

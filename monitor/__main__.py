@@ -51,6 +51,8 @@ class Monitor:
         if settings.ai_trading_mode=="risk_six_account":
             from .risk_profiles import reset_experiment
             reset_experiment(self.store.conn)
+        from .jd_live_readonly import ensure_schema as ensure_live_readonly
+        ensure_live_readonly(self.store.conn)
         self.market = Market(settings, self.store)
         self.alerts = AlertEngine(settings, self.store)
         # 短线基准与每个模型的独立账户；关闭模型只停新开仓，持仓继续风控。

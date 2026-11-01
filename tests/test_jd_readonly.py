@@ -1,0 +1,49 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from monitor.jd_readonly_probe import allowed,response_info,safe_path,write_report,probe
+from monitor.jd_live_readonly import ensure_schema,accounts
+from monitor.risk_profiles import reset_experiment
+from monitor.store import Store
+
+
+class JDReadonlyTests(unittest.TestCase):
+    def test_trade_requests_and_unknown_business_apis_are_blocked(self):
+        base='https://api.jdjygold.com'
+        for name in ('buy','sell','pay','cancelOrder','submitOrder','signAgreement','queryUnknown'):
+            for method in ('GET','POST'):
+                self.assertFalse(allowed(method,base+'/gw2/generic/hj/h5/m/'+name,login=True))
+        self.assertTrue(allowed('POST',base+'/gw2/generic/6440/h5/m/queryStallForGold'))
+        self.assertFalse(allowed('POST','https://evil.example/gw2/generic/6440/h5/m/queryStallForGold',login=True))
+        self.assertFalse(allowed('POST','https://passport.jd.com/login',login=False))
+        self.assertTrue(allowed('POST','https://passport.jd.com/login',login=True))
+        self.assertFalse(allowed('GET','http://api.jdjygold.com/gw/generic/hj/h5/m/latestPrice'))
+
+    def test_report_contains_shapes_not_credentials_or_financial_values(self):
+        data={'success':True,'resultCode':'0','resultData':{'pin':'private-user','cookie':'secret-token','cash':12345.67,'positions':[{'grams':99.123}], '13900000000':{'realName':'张三'}}}
+        text=json.dumps(response_info(data),ensure_ascii=False)
+        for secret in ('private-user','secret-token','12345.67','99.123','13900000000','张三'):self.assertNotIn(secret,text)
+        self.assertNotIn('key',safe_path('https://passport.jd.com/secret?token=key#fragment'))
+        self.assertNotIn('secret',safe_path('https://passport.jd.com/secret?token=key#fragment'))
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'report.json';write_report(p,response_info(data))
+            self.assertEqual(p.stat().st_mode & 0o777,0o600)
+            with self.assertRaises(FileExistsError):write_report(p,data)
+
+    def test_ecs_headed_login_fails_clearly_without_starting_browser(self):
+        with patch('sys.platform','linux'),patch.dict('os.environ',{},clear=True):
+            with self.assertRaisesRegex(RuntimeError,'ECS只运行后台'):probe('zheshang',True)
+
+    def test_live_account_boundary_never_initializes_from_simulation_and_survives_reset(self):
+        with tempfile.TemporaryDirectory() as d:
+            store=Store(Path(d)/'test.db');ensure_schema(store.conn)
+            result=accounts(store.conn)
+            self.assertEqual([a['bank'] for a in result],['zheshang','minsheng'])
+            for a in result:
+                self.assertIsNone(a['cash_cny']);self.assertIsNone(a['total_grams']);self.assertIsNone(a['orders'])
+                self.assertFalse(a['connected']);self.assertFalse(a['order_submission_enabled'])
+            store.conn.execute("update jd_live_readonly set checked_at='2026-11-01T00:00:00+00:00',public_status='reachable'");store.conn.commit()
+            before=accounts(store.conn);reset_experiment(store.conn);self.assertEqual(before,accounts(store.conn))
+            ensure_schema(store.conn);self.assertEqual(before,accounts(store.conn));store.conn.close()

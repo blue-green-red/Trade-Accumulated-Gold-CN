@@ -216,7 +216,9 @@ class TradingTests(unittest.TestCase):
         book.on_tick(bad, plan())
         self.assertIsNotNone(self.store.open_trade("zheshang", book.strategy))
 
-    def test_jd_market_quote_is_validated_and_keeps_last_mark_on_failure(self):
+    @patch("monitor.trading_hours.trading_session",return_value={"is_open":True})
+    @patch("monitor.execution.trading_session",return_value={"is_open":True})
+    def test_jd_market_quote_is_validated_and_keeps_last_mark_on_failure(self,_execution_session,_market_session):
         market = Market(self.settings, self.store)
         quote = dict(snap()["execution_quote"], price=901)
         with patch("monitor.market.fetch_tv_snapshot", return_value={"status": "error", "error": "offline"}), patch("monitor.market.fetch_spot_gold", return_value={"status": "ok", "price": 4000}), patch("monitor.market.fetch_jd_latest_price", return_value=quote):

@@ -66,6 +66,25 @@
 
 前端账户与AI页按风险场景筛选，显示预算与触线状态；操盘对比分别展示六种起点，避免只用模型总收益掩盖风险差异。通知按模型×风险档独立开关，新档默认关闭。
 
+### 浙商、民生真实账户只读接入准备
+
+账户页新增独立的“京东真实账户 · 只读接入”。目前只验证了公开H5入口及页面发出的查询路径，未登录、未建立真实账户同步，余额/持仓/订单保持未知；不使用模拟持仓、通用报价或初始10万元填充。`jd_live_readonly` 与模拟账本隔离，重置实验不删除其接入状态，常驻监控不额外启动浏览器或轮询这些页面。
+
+公开检查观察到 `queryStallForGoldNoLogin`、`getTotalHoldingStat`、`indexDataStd/indexData`、`queryStallForGold` 等页面内部查询路径。两款页面匿名可加载并显示“立即登录”，带账户查询返回`resultCode=3, success=false`；不能把HTTP 200或外层成功当作账户已登录。此处记录的是观察结果，并非京东承诺的开放API。资金、持仓、订单字段映射和产品买卖价绑定仍需本人登录后验证。
+
+ECS仅承担后台与只读账本，不安装常驻桌面；本阶段没有向ECS传递账户授权，也不代表已实现24小时账户同步。本地字段报告不能替代授权，后续须另行验证正式授权通道、本地同步桥接或临时SSH隧道远程浏览器方案；当前不开放远程调试端口。需要本人在**自己的电脑**完成登录。账户页可下载独立脚本 `jd_readonly_probe.py`，只需Python和Playwright，不加载本项目配置：
+
+```bash
+python -m pip install playwright
+python -m playwright install chromium
+python jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report.json
+python jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json
+```
+
+窗口打开京东官方页面后由本人手动完成登录，查看账户首页，返回终端按回车。脚本使用临时浏览器上下文，不导出或持久保存Cookie/登录配置，不记录请求体、响应金额、姓名、证件号或验证码；报告只含已知查询路径、HTTP状态、字段类型和有限业务状态码，权限600，不覆盖已有文件。报告用于下一步账户接口适配，生成报告不代表已经同步。
+
+业务API仅放行经过观察的精确查询路径，未知接口及交易/支付/签约请求阻断；登录认证域名仅在本人使用`--headed`时放行，验证码和身份校验按官方流程完成。不要在助手中买卖、开户或签约；如官方登录流程被阻断，保留错误供审核，不放宽到全域POST。未登录检查可用 `python -m monitor.jd_readonly_probe --bank zheshang --output monitor/data/unique-report.json`，不带`--headed`时不开放登录操作。不要上传Cookie、HAR或浏览器配置；完成上述检查后，只提供生成的字段结构报告即可。当前没有真实下单接口，也不把真实账户输入AI。
+
 ### 分析完整归档与训练数据导出
 
 每次正式分析都保存一份独立归档，不再只保留行情JSON：
@@ -398,9 +417,11 @@ python3 -m monitor.backtest            # 原有规则的历史回测
 # 安装浏览器供集成测试使用；常驻监控本身不需要 Chromium
 python3 -m playwright install chromium
 python3 -m unittest discover -s tests -v
+# 周末运行依赖可成交报价的业务用例；时段边界仍验证真实规则
+python3 tests/run_open_market.py
 ```
 
-最近一次完整验证通过188项测试，覆盖独立账户执行、保护权限、模型开关、事件队列、预测计分、京东预算与并发缓存、历史分页，以及桌面/手机页面。测试使用临时数据库与模拟响应，不调用真实模型或京东参考接口。
+最近一次验证通过192项测试（周末采用开市执行fixture，时段边界测试保留真实规则），覆盖独立账户执行、保护权限、模型开关、事件队列、预测计分、京东预算与并发缓存、历史分页，以及桌面/手机页面。测试使用临时数据库与模拟响应，不调用真实模型或京东参考接口。
 
 `.env` 与数据库被 Git 忽略；京东密钥不进入模型上下文，调用模型 CLI 时也从子进程环境移除。网页登录密码仅用于本机配置，不提交仓库。
 

@@ -419,6 +419,10 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertNotIn('中线',page.locator('#panel-compare .compare-mobile').inner_text())
                 page.get_by_role('tab',name='账户',exact=True).click()
                 self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),12)
+                self.assertEqual(page.get_by_role('heading',name='京东真实账户 · 只读接入',exact=True).count(),1)
+                page.get_by_text('在自己电脑登录并检查只读查询',exact=True).click()
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                self.assertEqual(page.get_by_role('link',name='下载电脑端只读助手',exact=True).get_attribute('href'),'/downloads/jd-readonly-probe.py')
                 page.get_by_role('combobox',name='风险场景').select_option('low')
                 self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),4)
                 page.get_by_role('tab',name='通知',exact=True).click()
@@ -523,7 +527,11 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertEqual(news.get_by_text('阅读全文',exact=True).count(),10)
                 page.get_by_role('button',name='京东逐日采样',exact=True).click()
                 page.get_by_text('逐日采样明细与缺口',exact=True).click()
-                self.assertIn('当日未结束',market.inner_text());self.assertIn('采样不完整',market.inner_text())
+                from monitor.trading_hours import trading_session
+                if trading_session(now)['is_open']:
+                    self.assertIn('当日未结束',market.inner_text());self.assertIn('采样不完整',market.inner_text())
+                else:
+                    self.assertIn('京东逐日采样尚未积累',market.inner_text())
                 self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                 page.get_by_role('tab',name='AI',exact=True).click()
                 page.get_by_text('本轮分析输入详情',exact=True).click()
