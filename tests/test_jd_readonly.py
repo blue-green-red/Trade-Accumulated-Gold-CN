@@ -75,3 +75,29 @@ class JDLoginLoopTests(unittest.TestCase):
             wait_for_login(page,lambda:requested.wait(timeout=3))
             self.assertTrue(requested.is_set(),'SMS fetch stalled while terminal waited')
             b.close()
+
+
+class JDLoginAllowlistTests(unittest.TestCase):
+    def test_reported_captcha_and_security_dependencies_are_available_only_for_login(self):
+        for host in ('jcap.m.jd.com','jcapmonitor.m.jd.com','sso.jd.com','cactus.jd.com','sgm-taihang.jd.com','h5speed.m.jd.com'):
+            with self.subTest(host=host):
+                self.assertTrue(allowed('POST','https://'+host+'/check',login=True))
+                self.assertFalse(allowed('POST','https://'+host+'/check',login=False))
+                self.assertFalse(allowed('POST','https://'+host+'.evil.example/check',login=True))
+        self.assertTrue(allowed('GET','https://storage.360buyimg.com/config.json','fetch',True))
+        self.assertTrue(allowed('GET','https://qdsdk.jd.com/pageid/config.json','xhr',True))
+
+    def test_generic_gateway_does_not_allow_unknown_or_conflicting_functions(self):
+        from monitor.jd_readonly_probe import gateway_function_id
+        base='https://api.m.jd.com/'
+        for name in ('h5Config','getCustomCtrl','wsgw_getinfo'):
+            self.assertTrue(allowed('POST',base+'?functionId='+name,login=True,post_data='functionId='+name))
+        for url,data in [(base,None),(base+'?functionId=submitOrder',None),
+                         (base+'?functionId=h5Config&functionId=buy',None),
+                         (base+'?functionId=h5Config','functionId=buy'),
+                         (base+'pay?functionId=h5Config',None),
+                         ('https://api.m.jd.com.evil/?functionId=h5Config',None)]:
+            with self.subTest(url=url):self.assertFalse(allowed('POST',url,login=True,post_data=data))
+        self.assertIsNone(gateway_function_id(base+'?functionId=13800000000'))
+        self.assertNotIn('13800000000',json.dumps(response_info({'err_code':23,'phone':'13800000000','message':'private'})))
+        self.assertNotIn('654321',json.dumps(response_info({'code':'654321','err_code':23})))

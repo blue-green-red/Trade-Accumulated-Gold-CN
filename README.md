@@ -81,7 +81,7 @@ python jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report
 python jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json
 ```
 
-若内置Chromium登录异常，可在命令中增加 `--browser chrome` 或 `--browser msedge`，使用本机安装的浏览器（独立临时会话，不读取已有浏览器配置）。登录模式使用浏览器原生桌面标识，不伪装Safari；等待终端回车时持续处理浏览器事件，避免验证码/扫码请求被拦截器挂起。
+若内置Chromium登录异常，可在命令中增加 `--browser chrome` 或 `--browser msedge`，使用本机安装的浏览器（独立临时会话，不读取已有浏览器配置）。登录白名单包含报告已确认的SSO、验证码及校验服务；通用 `api.m.jd.com` 仅允许官方公开登录脚本中确认的 `h5Config/getCustomCtrl/wsgw_getinfo`，缺少、冲突或未知functionId均拦截，不整域放行。v3报告新增脱敏功能名及数字登录错误码，仍不保存验证码、手机号、请求体或Cookie。登录模式使用浏览器原生桌面标识，不伪装Safari；等待终端回车时持续处理浏览器事件，避免验证码/扫码请求被拦截器挂起。
 
 窗口打开京东官方页面后由本人手动完成登录，查看账户首页，返回终端按回车。脚本使用临时浏览器上下文，不导出或持久保存Cookie/登录配置，不记录请求体、响应金额、姓名、证件号或验证码；报告只含已知查询路径、HTTP状态、字段类型和有限业务状态码，权限600，不覆盖已有文件。报告用于下一步账户接口适配，生成报告不代表已经同步。
 

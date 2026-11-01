@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,parse_qs
 
 BANKS={
  'zheshang':{'name':'浙商积存金','url':'https://m.jdjygold.com/finance-gold/gold-standard/home/?productSku=1961543816'},
@@ -24,8 +24,12 @@ READ_PATHS={
  '/gw2/generic/jrm/newh5/m/indexData',
  '/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
 }
-AUTH_HOSTS={'plogin.m.jd.com','passport.jd.com','passport.m.jd.com','iv.jd.com'}
-AUTH_SUPPORT_PATHS={'sgm-m.jd.com':{'/h5/init'},'jra.jd.com':{'/jsTk.do'}}
+AUTH_HOSTS={'plogin.m.jd.com','passport.jd.com','passport.m.jd.com','iv.jd.com','sso.jd.com'}
+AUTH_SERVICE_HOSTS={'jcap.m.jd.com','jcapmonitor.m.jd.com','cactus.jd.com','sgm-taihang.jd.com','h5speed.m.jd.com'}
+# Public official login scripts call these functions; this gateway also serves commerce.
+AUTH_GATEWAY_FUNCTIONS={'h5Config','getCustomCtrl','wsgw_getinfo'}
+AUTH_SUPPORT_PATHS={'sgm-m.jd.com':{'/h5/init'},'jra.jd.com':{'/jsTk.do'},
+ 'uranus.jd.com':{'/log/m','/log/m/v3'},'payrisk.jd.com':{'/m.html','/js/m.js'}}
 ACTION=re.compile(r'/(?:buy|sell|pay|payment|submit|create|cancel|redeem|sign|confirm)(?:/|$)',re.I)
 
 
@@ -36,17 +40,31 @@ def safe_path(url):
  return host+(path if host=='api.jdjygold.com' else '/[page]')  # no queries or authentication paths
 
 
-def allowed(method,url,resource_type='xhr',login=False):
+def gateway_function_id(url,post_data=None):
+ values=list(parse_qs(urlsplit(url).query,keep_blank_values=True).get('functionId',[]))
+ if post_data:
+  try:
+   body=json.loads(post_data)
+   if isinstance(body,dict) and 'functionId' in body:values.append(body['functionId'])
+  except (ValueError,TypeError):values.extend(parse_qs(post_data,keep_blank_values=True).get('functionId',[]))
+ if not values or any(not isinstance(v,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}',v) for v in values):return None
+ return values[0] if len(set(values))==1 else None
+
+
+def allowed(method,url,resource_type='xhr',login=False,post_data=None):
  u=urlsplit(url);host=u.hostname or '';method=method.upper()
  if u.scheme not in ('https','http','data','blob'):return False
  if u.scheme in ('data','blob'):return method=='GET'
  if u.scheme!='https':return False
  if host=='api.jdjygold.com':return u.path in READ_PATHS and method in ('GET','POST','OPTIONS')
- if login and host in AUTH_HOSTS:return True  # user-operated official authentication only
+ if login and host=='api.m.jd.com':
+  return u.path in ('','/','/client.action') and method in ('GET','POST','OPTIONS') and gateway_function_id(url,post_data) in AUTH_GATEWAY_FUNCTIONS
+ if login and host in AUTH_HOSTS:return method in ('GET','POST','HEAD','OPTIONS')
+ if login and host in AUTH_SERVICE_HOSTS:return method in ('GET','POST','HEAD','OPTIONS') and not ACTION.search(u.path)
  if login and u.path in AUTH_SUPPORT_PATHS.get(host,set()):return method in ('GET','POST','OPTIONS')
  if method not in ('GET','HEAD','OPTIONS') or ACTION.search(u.path):return False
  if resource_type in ('document','xhr','fetch'):
-  return host in ('m.jdjygold.com','m.jr.jd.com',*AUTH_HOSTS)
+  return host in ('m.jdjygold.com','m.jr.jd.com','qdsdk.jd.com','storage.360buyimg.com',*AUTH_HOSTS)
  return host.endswith(('.jd.com','.360buyimg.com','.jdjygold.com'))
 
 
@@ -61,7 +79,8 @@ def shape(value,depth=0):
 def response_info(payload):
  if not isinstance(payload,dict):return {'shape':shape(payload)}
  return {'shape':shape(payload),'success':payload.get('success') if type(payload.get('success')) is bool else None,
-         'result_code':str(payload.get('resultCode','')) if isinstance(payload.get('resultCode'),(int,str)) and re.fullmatch(r'[0-9]{1,6}',str(payload.get('resultCode'))) else None}
+         'result_code':str(payload.get('resultCode','')) if isinstance(payload.get('resultCode'),(int,str)) and re.fullmatch(r'[0-9]{1,6}',str(payload.get('resultCode'))) else None,
+         'auth_codes':{k:str(payload[k]) for k in ('err_code','errcode') if k in payload and re.fullmatch(r'-?[0-9]{1,6}',str(payload[k]))}}
 
 
 def wait_for_login(page,read_input=None):
@@ -98,15 +117,20 @@ def probe(bank,headed=False,channel='chromium'):
   context=browser.new_context(**options)
   def route(r):
    q=r.request
-   if not allowed(q.method,q.url,q.resource_type,headed):
-    if q.resource_type in ('xhr','fetch','document'):events.append({'blocked':True,'method':q.method,'path':safe_path(q.url)})
+   if not allowed(q.method,q.url,q.resource_type,headed,q.post_data):
+    if q.resource_type in ('xhr','fetch','document'):events.append({'blocked':True,'method':q.method,'path':safe_path(q.url),
+      'gateway_function':gateway_function_id(q.url,q.post_data) if urlsplit(q.url).hostname=='api.m.jd.com' else None})
     r.abort()
    else:r.continue_()
   context.route('**/*',route)
   page=context.new_page()
   def response(r):
-   if urlsplit(r.url).hostname!='api.jdjygold.com' or urlsplit(r.url).path not in READ_PATHS:return
+   host=urlsplit(r.url).hostname
+   bank_query=host=='api.jdjygold.com' and urlsplit(r.url).path in READ_PATHS
+   auth_query=headed and host in (AUTH_HOSTS|AUTH_SERVICE_HOSTS|set(AUTH_SUPPORT_PATHS)|{'api.m.jd.com'})
+   if not (bank_query or auth_query):return
    item={'status':r.status,'method':r.request.method,'path':safe_path(r.url)}
+   if host=='api.m.jd.com':item['gateway_function']=gateway_function_id(r.url,r.request.post_data)
    try:item.update(response_info(r.json()))
    except Exception:item['response_format']='unreadable'
    events.append(item)
@@ -123,7 +147,7 @@ def probe(bank,headed=False,channel='chromium'):
    login_visible='立即登录' in page.locator('body').inner_text(timeout=5000)
   except Exception as exc:error=type(exc).__name__
   finally:context.close();browser.close()
- return {'format_version':2,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
+ return {'format_version':3,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
          'mode':'local_login_schema_review' if headed else 'anonymous_public_probe',
          'login_button_visible':login_visible,'connected':False,'order_submission_enabled':False,
          'error_type':error,'requests':events}
@@ -137,6 +161,7 @@ def write_report(path,report):
 
 def main():
  p=argparse.ArgumentParser(description='京东浙商/民生只读查询结构检查，不保存登录状态，不含下单功能')
+ p.add_argument('--version',action='version',version='jd-readonly-probe 3')
  p.add_argument('--bank',choices=BANKS,required=True)
  p.add_argument('--headed',action='store_true',help='在自己的电脑打开官方页面，由本人手动登录')
  p.add_argument('--browser',choices=('chromium','chrome','msedge'),default='chromium',help='可用本机已安装的Chrome或Edge，仍使用独立临时会话')
