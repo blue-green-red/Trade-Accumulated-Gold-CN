@@ -538,7 +538,7 @@ function liveReadonlyPanel(d) {
     el("div",{class:"sub"},"登录须在你自己的京东官方页面完成。本地浏览器登录不会自动授权服务器；只读助手报告不含Cookie或账户金额，字段确认后才接通同步。"),
     el("details",{class:"more","data-detail-key":"jd-readonly-setup"},el("summary",{},"在自己电脑登录并检查只读查询"),
       el("a",{href:"/downloads/jd-readonly-probe.py",download:"jd_readonly_probe.py",class:"link-btn"},"下载电脑端只读助手"),
-      el("div",{class:"sub"},"在下载目录打开终端，安装依赖并依次运行两款产品。登录后查看账户首页，再回终端按回车；生成的报告只含字段结构，用于下一步适配审核。"),
+      el("div",{class:"sub"},"在下载目录打开终端，安装依赖并依次运行两款产品。新版等待回车时仍处理验证码请求；可用 --browser chrome 或 --browser msedge 选择本机浏览器。登录后查看账户首页，再回终端按回车；报告只含字段结构。"),
       el("code",{style:"display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px"},"python -m pip install playwright\npython -m playwright install chromium\npython jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report.json\npython jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json")));
 
 }

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 from urllib.parse import urlsplit
 
 BANKS={
@@ -24,6 +25,7 @@ READ_PATHS={
  '/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
 }
 AUTH_HOSTS={'plogin.m.jd.com','passport.jd.com','passport.m.jd.com','iv.jd.com'}
+AUTH_SUPPORT_PATHS={'sgm-m.jd.com':{'/h5/init'},'jra.jd.com':{'/jsTk.do'}}
 ACTION=re.compile(r'/(?:buy|sell|pay|payment|submit|create|cancel|redeem|sign|confirm)(?:/|$)',re.I)
 
 
@@ -41,7 +43,7 @@ def allowed(method,url,resource_type='xhr',login=False):
  if u.scheme!='https':return False
  if host=='api.jdjygold.com':return u.path in READ_PATHS and method in ('GET','POST','OPTIONS')
  if login and host in AUTH_HOSTS:return True  # user-operated official authentication only
- if login and host=='sgm-m.jd.com' and u.path=='/h5/init':return method in ('POST','OPTIONS')
+ if login and u.path in AUTH_SUPPORT_PATHS.get(host,set()):return method in ('GET','POST','OPTIONS')
  if method not in ('GET','HEAD','OPTIONS') or ACTION.search(u.path):return False
  if resource_type in ('document','xhr','fetch'):
   return host in ('m.jdjygold.com','m.jr.jd.com',*AUTH_HOSTS)
@@ -62,16 +64,38 @@ def response_info(payload):
          'result_code':str(payload.get('resultCode','')) if isinstance(payload.get('resultCode'),(int,str)) and re.fullmatch(r'[0-9]{1,6}',str(payload.get('resultCode'))) else None}
 
 
-def probe(bank,headed=False):
+def wait_for_login(page,read_input=None):
+ """Pump Playwright while the terminal waits, so intercepted SMS/QR requests continue."""
+ done=threading.Event();errors=[]
+ def read():
+  try:(read_input or input)()
+  except (EOFError,KeyboardInterrupt) as exc:errors.append(exc)
+  finally:done.set()
+ threading.Thread(target=read,daemon=True).start()
+ while not done.is_set():
+  if page.is_closed():raise RuntimeError('浏览器已关闭，请重新运行助手。')
+  page.wait_for_timeout(100)
+ if errors:raise RuntimeError('终端输入已结束，登录检查取消。')
+
+
+def browser_options(headed=False,channel='chromium'):
+ launch={'headless':not headed,'args':['--no-sandbox'] if hasattr(os,'geteuid') and os.geteuid()==0 else []}
+ if channel!='chromium':launch['channel']=channel
+ if headed:return launch,{'viewport':{'width':1100,'height':850}}
+ return launch,{'viewport':{'width':430,'height':932},'is_mobile':True,
+  'user_agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'}
+
+
+def probe(bank,headed=False,channel='chromium'):
  if headed and sys.platform.startswith('linux') and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
   raise RuntimeError('当前Linux没有桌面显示。请在自己的电脑运行--headed登录；ECS只运行后台。')
  from playwright.sync_api import sync_playwright
  events=[]
  with sync_playwright() as p:
   # A temporary context deliberately avoids saving a browser profile or exporting auth state.
-  browser=p.chromium.launch(headless=not headed,args=['--no-sandbox'] if hasattr(os,'geteuid') and os.geteuid()==0 else [])
-  context=browser.new_context(viewport={'width':430,'height':932},is_mobile=True,
-    user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1')
+  launch,options=browser_options(headed,channel)
+  browser=p.chromium.launch(**launch)
+  context=browser.new_context(**options)
   def route(r):
    q=r.request
    if not allowed(q.method,q.url,q.resource_type,headed):
@@ -94,12 +118,12 @@ def probe(bank,headed=False):
    if headed:
     print('请在京东官方页面自行登录。不要买卖、开户、签约或输入支付密码。')
     print('查看账户首页后回到此终端按回车，生成仅含字段结构的报告。')
-    input()
-    page.reload(wait_until='domcontentloaded',timeout=45000);page.wait_for_timeout(3000)
+    wait_for_login(page)
+    page.goto(BANKS[bank]['url'],wait_until='domcontentloaded',timeout=45000);page.wait_for_timeout(3000)
    login_visible='立即登录' in page.locator('body').inner_text(timeout=5000)
   except Exception as exc:error=type(exc).__name__
   finally:context.close();browser.close()
- return {'format_version':1,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
+ return {'format_version':2,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
          'mode':'local_login_schema_review' if headed else 'anonymous_public_probe',
          'login_button_visible':login_visible,'connected':False,'order_submission_enabled':False,
          'error_type':error,'requests':events}
@@ -115,8 +139,9 @@ def main():
  p=argparse.ArgumentParser(description='京东浙商/民生只读查询结构检查，不保存登录状态，不含下单功能')
  p.add_argument('--bank',choices=BANKS,required=True)
  p.add_argument('--headed',action='store_true',help='在自己的电脑打开官方页面，由本人手动登录')
+ p.add_argument('--browser',choices=('chromium','chrome','msedge'),default='chromium',help='可用本机已安装的Chrome或Edge，仍使用独立临时会话')
  p.add_argument('--output',type=Path,required=True)
- args=p.parse_args();report=probe(args.bank,args.headed);write_report(args.output,report)
+ args=p.parse_args();report=probe(args.bank,args.headed,args.browser);write_report(args.output,report)
  print('报告已保存：',args.output,'；尚未接通账户同步，请审核查询字段后再配置适配器。')
 
 

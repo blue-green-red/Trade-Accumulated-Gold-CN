@@ -47,3 +47,31 @@ class JDReadonlyTests(unittest.TestCase):
             store.conn.execute("update jd_live_readonly set checked_at='2026-11-01T00:00:00+00:00',public_status='reachable'");store.conn.commit()
             before=accounts(store.conn);reset_experiment(store.conn);self.assertEqual(before,accounts(store.conn))
             ensure_schema(store.conn);self.assertEqual(before,accounts(store.conn));store.conn.close()
+
+
+class JDLoginLoopTests(unittest.TestCase):
+    def test_headed_uses_native_identity_and_auth_support_stays_scoped(self):
+        from monitor.jd_readonly_probe import browser_options
+        launch,context=browser_options(True,'chrome')
+        self.assertEqual(launch['channel'],'chrome');self.assertFalse(launch['headless'])
+        self.assertNotIn('user_agent',context);self.assertNotIn('is_mobile',context)
+        self.assertTrue(allowed('POST','https://jra.jd.com/jsTk.do',login=True))
+        self.assertFalse(allowed('POST','https://jra.jd.com/pay',login=True))
+        self.assertFalse(allowed('POST','https://jra.jd.com/jsTk.do',login=False))
+
+    def test_sms_request_is_processed_while_waiting_for_terminal(self):
+        import threading
+        from playwright.sync_api import sync_playwright
+        from monitor.jd_readonly_probe import wait_for_login
+        requested=threading.Event()
+        with sync_playwright() as p:
+            b=p.chromium.launch(headless=True,args=['--no-sandbox'])
+            page=b.new_page()
+            def sms(route):
+                requested.set();route.fulfill(status=200,body='{}',headers={'Access-Control-Allow-Origin':'*'})
+            page.route('https://passport.jd.com/local-test-sms',sms)
+            page.goto('about:blank')
+            page.evaluate("setTimeout(()=>fetch('https://passport.jd.com/local-test-sms'),50)")
+            wait_for_login(page,lambda:requested.wait(timeout=3))
+            self.assertTrue(requested.is_set(),'SMS fetch stalled while terminal waited')
+            b.close()

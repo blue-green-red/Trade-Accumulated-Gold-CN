@@ -81,6 +81,8 @@ python jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report
 python jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json
 ```
 
+若内置Chromium登录异常，可在命令中增加 `--browser chrome` 或 `--browser msedge`，使用本机安装的浏览器（独立临时会话，不读取已有浏览器配置）。登录模式使用浏览器原生桌面标识，不伪装Safari；等待终端回车时持续处理浏览器事件，避免验证码/扫码请求被拦截器挂起。
+
 窗口打开京东官方页面后由本人手动完成登录，查看账户首页，返回终端按回车。脚本使用临时浏览器上下文，不导出或持久保存Cookie/登录配置，不记录请求体、响应金额、姓名、证件号或验证码；报告只含已知查询路径、HTTP状态、字段类型和有限业务状态码，权限600，不覆盖已有文件。报告用于下一步账户接口适配，生成报告不代表已经同步。
 
 业务API仅放行经过观察的精确查询路径，未知接口及交易/支付/签约请求阻断；登录认证域名仅在本人使用`--headed`时放行，验证码和身份校验按官方流程完成。不要在助手中买卖、开户或签约；如官方登录流程被阻断，保留错误供审核，不放宽到全域POST。未登录检查可用 `python -m monitor.jd_readonly_probe --bank zheshang --output monitor/data/unique-report.json`，不带`--headed`时不开放登录操作。不要上传Cookie、HAR或浏览器配置；完成上述检查后，只提供生成的字段结构报告即可。当前没有真实下单接口，也不把真实账户输入AI。
