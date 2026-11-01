@@ -23,6 +23,17 @@ READ_PATHS={
  '/gw2/generic/jrm/newh5/m/indexDataStd',
  '/gw2/generic/jrm/newh5/m/indexData',
  '/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
+ # Read-only detail requests observed after authentication on the official bank page.
+ '/gw2/generic/hj/h5/m/cfQueryConditionWaittingNum',
+ '/gw2/generic/CfGoldWeb/h5/m/cfQueryGoldProductInfo',
+ '/gw2/generic/hj/h5/m/getKlineConfig',
+ '/gw2/generic/jrm/h5/m/queryTradeDescStd',
+ '/gw2/generic/CreatorSer/newh5/m/queryGoldPageDetailComponent',
+ '/gw2/generic/CfGoldWeb/newh5/m/cfQueryLastTrade',
+ '/gw2/generic/jrm/h5/m/getTradePeriodStd',
+ '/gw2/generic/hj/h5/m/cfGetPriceTrendChart',
+ '/gw2/generic/hj/h5/m/bankTagListSort',
+ '/gw/generic/aladdin/h5/m/getPageMultiDataForH5',
 }
 AUTH_HOSTS={'plogin.m.jd.com','passport.jd.com','passport.m.jd.com','iv.jd.com','sso.jd.com'}
 # Gold-business SSO callback observed after successful interactive JD authentication.
@@ -86,6 +97,28 @@ def response_info(payload):
          'auth_codes':{k:str(payload[k]) for k in ('err_code','errcode') if k in payload and re.fullmatch(r'-?[0-9]{1,6}',str(payload[k]))}}
 
 
+def account_evidence(payload):
+ """Evidence only; field presence does not mean that account synchronization works."""
+ result=payload.get('resultData') if isinstance(payload,dict) else None
+ result=result if isinstance(result,dict) else {}
+ data=result.get('datas');data=data if isinstance(data,dict) else {}
+ quote=result.get('data');quote=quote if isinstance(quote,dict) else {}
+ stock=data.get('goldStockStat');stock=stock if isinstance(stock,dict) else {}
+ return {'login_confirmed':data.get('login') if type(data.get('login')) is bool else None,
+  'holdings_fields_observed':all(k in stock for k in ('totalGram','availableGram','frozenGram')),
+  'product_fields_observed':isinstance(data.get('goldProductInfo'),dict),
+  'quote_fields_observed':all(k in quote for k in ('buyPrice','sellPrice','productSku'))}
+
+
+def summarize_evidence(events):
+ evidence={'login_confirmed':None,'holdings_fields_observed':False,'product_fields_observed':False,'quote_fields_observed':False}
+ for event in events:
+  item=event.get('account_evidence') or {}
+  if isinstance(item.get('login_confirmed'),bool):evidence['login_confirmed']=item['login_confirmed']
+  for key in ('holdings_fields_observed','product_fields_observed','quote_fields_observed'):evidence[key]=evidence[key] or item.get(key) is True
+ return evidence
+
+
 def wait_for_login(page,read_input=None):
  """Pump Playwright while the terminal waits, so intercepted SMS/QR requests continue."""
  done=threading.Event();errors=[]
@@ -134,7 +167,9 @@ def probe(bank,headed=False,channel='chromium'):
    if not (bank_query or auth_query):return
    item={'status':r.status,'method':r.request.method,'path':safe_path(r.url)}
    if host=='api.m.jd.com':item['gateway_function']=gateway_function_id(r.url,r.request.post_data)
-   try:item.update(response_info(r.json()))
+   try:
+    payload=r.json();item.update(response_info(payload))
+    if bank_query:item['account_evidence']=account_evidence(payload)
    except Exception:item['response_format']='unreadable'
    events.append(item)
   page.on('response',response)
@@ -150,10 +185,10 @@ def probe(bank,headed=False,channel='chromium'):
    login_visible='立即登录' in page.locator('body').inner_text(timeout=5000)
   except Exception as exc:error=type(exc).__name__
   finally:context.close();browser.close()
- return {'format_version':4,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
+ return {'format_version':5,'bank':bank,'checked_at':datetime.now(timezone.utc).isoformat(),
          'mode':'local_login_schema_review' if headed else 'anonymous_public_probe',
          'login_button_visible':login_visible,'connected':False,'order_submission_enabled':False,
-         'error_type':error,'requests':events}
+         'error_type':error,'capabilities':summarize_evidence(events),'requests':events}
 
 
 def write_report(path,report):
@@ -164,7 +199,7 @@ def write_report(path,report):
 
 def main():
  p=argparse.ArgumentParser(description='京东浙商/民生只读查询结构检查，不保存登录状态，不含下单功能')
- p.add_argument('--version',action='version',version='jd-readonly-probe 4')
+ p.add_argument('--version',action='version',version='jd-readonly-probe 5')
  p.add_argument('--bank',choices=BANKS,required=True)
  p.add_argument('--headed',action='store_true',help='在自己的电脑打开官方页面，由本人手动登录')
  p.add_argument('--browser',choices=('chromium','chrome','msedge'),default='chromium',help='可用本机已安装的Chrome或Edge，仍使用独立临时会话')

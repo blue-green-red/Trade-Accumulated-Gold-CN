@@ -140,3 +140,29 @@ class JDGoldCallbackTests(unittest.TestCase):
             self.assertEqual(blocked,[])
             self.assertEqual(seen[:3],['https://plogin.m.jd.com/local-test-login','https://plogin.jdjygold.com/callback',BANKS['zheshang']['url'].split('?')[0]])
             context.close();b.close()
+
+
+class JDPostLoginReadTests(unittest.TestCase):
+    def test_readonly_details_available_but_mutations_and_unknown_gateways_stay_blocked(self):
+        reads=('/gw2/generic/CfGoldWeb/h5/m/cfQueryGoldProductInfo',
+               '/gw2/generic/jrm/h5/m/getTradePeriodStd',
+               '/gw2/generic/hj/h5/m/cfQueryConditionWaittingNum',
+               '/gw2/generic/CfGoldWeb/newh5/m/cfQueryLastTrade',
+               '/gw2/generic/hj/h5/m/cfGetPriceTrendChart',
+               '/gw/generic/aladdin/h5/m/getPageMultiDataForH5')
+        for path in reads:self.assertTrue(allowed('POST','https://api.jdjygold.com'+path,login=True))
+        for name in ('submitOrder','cfBuyGold','cfSellGold','cancelCondition','signAgreement','res-ms'):
+            self.assertFalse(allowed('POST','https://api.jdjygold.com/gw2/generic/hj/h5/m/'+name,login=True))
+        self.assertFalse(allowed('POST','https://api.jdjygold.com/gw2/generic/bge/h5/m/res-ms',login=True))
+        self.assertFalse(allowed('POST','https://ms.jr.jd.com/submit',login=True))
+
+    def test_capabilities_do_not_export_balances_or_claim_connected(self):
+        from monitor.jd_readonly_probe import account_evidence,summarize_evidence
+        payload={'resultData':{'datas':{'login':True,'goldStockStat':{'totalGram':123.456,'availableGram':100,'frozenGram':23.456},'goldProductInfo':{'productSku':1961543816}}}}
+        evidence=account_evidence(payload)
+        self.assertTrue(evidence['login_confirmed']);self.assertTrue(evidence['holdings_fields_observed'])
+        self.assertNotIn('123.456',json.dumps(evidence));self.assertNotIn('1961543816',json.dumps(evidence))
+        quote=account_evidence({'resultData':{'data':{'buyPrice':'830.62','sellPrice':'827.3','productSku':'1961543816'}}})
+        merged=summarize_evidence([{'account_evidence':evidence},{'account_evidence':quote}])
+        self.assertTrue(merged['quote_fields_observed']);self.assertTrue(merged['login_confirmed'])
+        self.assertIsNone(summarize_evidence([])['login_confirmed'])
