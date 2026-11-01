@@ -78,7 +78,7 @@ ECS提供临时远程浏览器，优先使用下述方式，避免本地反复�
 
 部署组件为Xvfb、Chrome、x11vnc、noVNC/websockify与nginx（Ubuntu可用 `apt-get install -y xvfb x11vnc novnc websockify nginx` 安装，另需Chrome和Python Playwright）；安装服务模板后手动 `systemctl start gold-jd-readonly`。不启用开机启动，最长60分钟自动退出，650MB内存和512MB交换空间上限；主监控与模型开关不变。仅启动一个浏览器/显示会话，现有会话未停止时不会抢占端口。
 
-默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS，并要求临时访问用户名与密码。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址；输入用户名 `jd` 及本次临时访问密码，noVNC再次询问密码时填临时VNC密码。两个密码保存在权限600的 `/run/gold-jd-readonly/access.txt`，不提交代码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
+默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS，并要求临时访问用户名与密码。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址；输入用户名 `jd` 及本次临时访问密码即可，不再要求第二次VNC密码；VNC只监听回环，由HTTPS入口统一认证。密码保存在权限600的 `/run/gold-jd-readonly/access.txt`，不提交代码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
 
 部署模板可复制到 `/etc/systemd/system/` 后执行 `systemctl daemon-reload`。若仅通过SSH访问，可移除模板中的 `--public-host` 参数，重载并重启后使用下列方式（此时1455也只监听回环，无需安全组放行）：
 

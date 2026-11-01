@@ -105,7 +105,7 @@ def run(port=1455,ttl=3600,public_host=None):
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=20)
         private_write(RUNTIME/'nginx.conf',public_config(port,backend,public_host))
     url=f'https://{public_host}:{port}/' if public_host else f'http://127.0.0.1:{port}/vnc.html?autoconnect=1&resize=scale'
-    private_write(RUNTIME/'access.txt',f'URL: {url}\nUsername: jd\nAccess password: {password}\nVNC password: {vnc_password}\nLifetime: {ttl} seconds\n')
+    private_write(RUNTIME/'access.txt',f'URL: {url}\nUsername: jd\nAccess password: {password}\nVNC password: {"not required" if public_host else vnc_password}\nLifetime: {ttl} seconds\n')
     children=[];stopping=False;events=[];started=time.monotonic()
     def stop(*_):
         nonlocal stopping
@@ -169,8 +169,10 @@ def run(port=1455,ttl=3600,public_host=None):
                 events.append(item)
             context.on('response',response)
             # The read-only guard is active before any JD page is opened or VNC is reachable.
+            # Public HTTPS authenticates both HTTP and WebSocket. Avoid a second VNC password prompt.
+            vnc_auth=['-nopw'] if public_host else ['-rfbauth',str(RUNTIME/'vnc.pass')]
             vnc=spawn(['x11vnc','-display',display,'-localhost','-listen','127.0.0.1','-rfbport','5905',
-                '-rfbauth',str(RUNTIME/'vnc.pass'),'-forever','-shared','-noxdamage','-repeat','-quiet'])
+                *vnc_auth,'-forever','-shared','-noxdamage','-repeat','-quiet'])
             wait_port(5905,vnc)
             web=spawn(['websockify','--web=/usr/share/novnc','127.0.0.1:'+str(backend),'127.0.0.1:5905'])
             wait_port(backend,web)
