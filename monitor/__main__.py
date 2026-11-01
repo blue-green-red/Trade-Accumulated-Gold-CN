@@ -16,6 +16,7 @@ import queue
 import sys
 import threading
 import time
+from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -154,6 +155,9 @@ class Monitor:
                 "status": {kind: "available" if valid[kind] else "stale_or_missing" for kind in valid},
                 "errors": macro.get("errors")}
             ctx["jd_research"] = jd_snapshot(store, self.settings.clawx_api_key, daily_cap=self.settings.jd_research_max_requests_per_day)
+            from .jd_live_readonly import model_input as live_account_input
+            live_input=live_account_input(store.conn)
+            if live_input:ctx["live_readonly_accounts"]=live_input
         finally:
             store.conn.close()
         ctx["jin10_flash_recent"] = jin10_recent or []
@@ -323,6 +327,9 @@ class Monitor:
             self._ai_results.put({"key":f"ai:{name}:{run_id}","notification_topic":name+":analysis",
                 "title":f"🧠{ANALYST_NAMES.get(name,name)}短期{axis_m_from_view(view)['axis']}",
                 "body":f"## {ANALYST_NAMES.get(name,name)}\n\n{format_view(view)}"})
+            from .jd_live_advice import notification_events as live_advice_events
+            with closing(Store(self.settings.db_path).conn) as live_conn:
+                for event in live_advice_events(live_conn,name,view.get('_view_id')):self._ai_results.put(event)
 
     def wait_for_ai(self) -> None:
         if self._ai_thread:

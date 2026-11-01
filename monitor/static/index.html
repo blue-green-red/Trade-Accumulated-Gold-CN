@@ -187,6 +187,89 @@ td.wrap, th.wrap { white-space: normal; text-align: left; }
 .asset-legend .chip-btn {min-width:0;white-space:normal;text-align:left;justify-content:flex-start}
 @media(max-width:600px) {.asset-overview {grid-template-columns:repeat(2,minmax(0,1fr))}.asset-overview .v {font-size:20px}.asset-legend {grid-template-columns:repeat(2,minmax(0,1fr))}.asset-detail-grid {grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* Real accounts: bank assets first; quotes, advice and history have distinct boundaries. */
+.live-panel {padding:20px}
+.live-toolbar {display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 16px;flex-wrap:wrap}
+.live-toolbar .sub {max-width:620px;line-height:1.7}
+.live-refresh {flex:none;display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border:1px solid var(--border);border-radius:9px;background:var(--surface);font-size:13px;cursor:pointer;white-space:nowrap}
+.live-refresh:disabled {opacity:.6;cursor:wait}
+.live-refresh:focus-visible {outline:2px solid var(--brand);outline-offset:2px}
+.live-policy {display:flex;align-items:center;gap:12px 24px;flex-wrap:wrap;padding:12px 15px;margin-bottom:18px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}
+.live-policy-title {font-size:13px;font-weight:650;color:var(--brand)}
+.live-policy-item {font-size:12px;color:var(--text-2)}
+.live-policy-item strong {font-size:17px;color:var(--text);margin-left:6px}
+.live-policy-note {flex-basis:100%;font-size:11.5px;color:var(--text-3);margin-top:-6px}
+.live-bank-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+.live-bank {min-width:0;border:1px solid var(--border);border-radius:13px;background:var(--surface);overflow:hidden}
+.live-bank-head {display:flex;align-items:center;gap:10px;padding:17px 17px 13px}
+.live-bank-mark {display:grid;place-items:center;flex:none;width:37px;height:37px;border-radius:11px;background:color-mix(in srgb,var(--live-accent,var(--brand)) 12%,var(--surface));color:var(--live-accent,var(--brand));font-size:18px;font-weight:700}
+.live-bank-name {flex:1;min-width:0}
+.live-bank-name h3 {font-size:16px;line-height:1.4;margin:0;overflow-wrap:anywhere}
+.live-bank-name .sub {font-size:11px;margin-top:2px}
+.live-state {display:inline-flex;align-items:center;gap:5px;flex:none;border:1px solid var(--border);border-radius:6px;padding:3px 7px;font-size:11px;line-height:1.4;color:var(--text-2);background:var(--surface)}
+.live-state::before {content:"";width:5px;height:5px;flex:none;border-radius:50%;background:var(--text-3)}
+.live-state.fresh::before {background:var(--good)}
+.live-state.warn::before {background:var(--serious)}
+.live-bank-body {padding:0 17px 17px}
+.live-snapshot {font-size:11.5px;color:var(--text-3);margin-bottom:14px;overflow-wrap:anywhere}
+.live-stale-note {font-size:12px;line-height:1.6;color:var(--text-2);border-left:2px solid var(--warning);padding-left:9px;margin:0 0 14px}
+.live-gold-label {font-size:12px;color:var(--text-2)}
+.live-gold-value {font-size:31px;font-weight:700;line-height:1.35;letter-spacing:-.5px;overflow-wrap:anywhere;margin:3px 0 5px}
+.live-holding-meta {display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--text-3)}
+.live-balances {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:16px 0}
+.live-metric {min-width:0;padding:11px 12px;border-radius:9px;background:var(--surface-2)}
+.live-metric-label {font-size:11.5px;color:var(--text-2);line-height:1.6}
+.live-metric-value {font-size:21px;font-weight:650;line-height:1.5;letter-spacing:-.3px;overflow-wrap:anywhere}
+.live-metric-unit {font-size:11px;font-weight:400;letter-spacing:0;margin-left:3px}
+.live-metric-note {font-size:10.5px;color:var(--text-3);line-height:1.6;margin-top:2px}
+.live-pnl-positive {color:var(--critical)}
+.live-pnl-negative {color:var(--good)}
+.live-quote {border:1px solid var(--border);border-radius:9px;padding:10px 12px}
+.live-section-heading {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;font-weight:600;margin-bottom:8px}
+.live-quote-prices {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;font-size:12px;color:var(--text-3)}
+.live-quote-prices strong {display:block;font-size:17px;font-weight:600;line-height:1.7;color:var(--text)}
+.live-quote-time {font-size:10.5px;color:var(--text-3);margin-top:6px;overflow-wrap:anywhere}
+.live-orders {display:flex;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;font-size:12px;padding:12px 0;border-bottom:1px solid var(--grid);color:var(--text-2)}
+.live-orders .sub {font-size:11px}
+.live-advice-section {padding-top:15px}
+.live-section-title {font-size:13px;font-weight:650;margin:0}
+.live-advice-empty {padding:17px 12px;border:1px dashed var(--border);border-radius:9px;margin-top:10px}
+.live-advice-empty strong {display:block;font-size:12.5px;font-weight:500;margin-bottom:5px;color:var(--text-2)}
+.live-advice-empty .sub {font-size:11.5px;line-height:1.7}
+.live-advice {margin-top:10px;border:1px solid var(--border);border-left:3px solid var(--brand);border-radius:9px;padding:12px}
+.live-advice.inactive {border-left-color:var(--text-3)}
+.live-advice.needs-review {border-left-color:var(--serious)}
+.live-advice-heading {display:flex;gap:7px 10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.live-advice-heading strong {font-size:13px}
+.live-advice-status {font-size:11px;color:var(--brand)}
+.live-advice.inactive .live-advice-status {color:var(--text-3)}
+.live-advice.needs-review .live-advice-status {color:var(--serious)}
+.live-advice-values {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0 9px}
+.live-advice-values .l {color:var(--text-3);font-size:11px}
+.live-advice-values .v {font-size:13px;font-weight:550;margin-top:3px;overflow-wrap:anywhere}
+.live-advice-time {font-size:10.5px;color:var(--text-3);line-height:1.7}
+.live-advice-check {font-size:11.5px;line-height:1.7;color:var(--text-2);margin-top:8px;padding-left:8px;border-left:2px solid var(--warning)}
+.live-advice .more > summary {font-size:11.5px}
+.live-advice-reason {font-size:12px;line-height:1.8;overflow-wrap:anywhere;margin:9px 0 6px}
+.live-history {padding-top:12px;margin-top:15px;border-top:1px solid var(--grid)}
+.live-history .more > summary {font-size:12px;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.live-history-count {margin-left:auto;font-size:10.5px;color:var(--text-3)}
+.live-history-note {font-size:11px;color:var(--text-3);margin-top:8px;line-height:1.7}
+.live-history .list {font-size:12px}
+.live-history .list > li {padding:9px 0;overflow-wrap:anywhere}
+.live-history-row {display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.live-bank-footer {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:15px;font-size:11px;color:var(--text-3)}
+.live-bank-footer .link-btn {font-size:11.5px}
+.live-setup {padding-top:3px;margin-top:12px;border-top:1px solid var(--grid)}
+@media(max-width:819px) {.live-bank-grid {grid-template-columns:minmax(0,1fr)}}
+@media(max-width:450px) {
+  .live-panel {padding:14px}.live-toolbar {gap:10px}.live-toolbar .sub {font-size:11.5px;flex-basis:100%}
+  .live-refresh {font-size:12px;padding:7px 11px}.live-policy {gap:8px 16px;padding:10px 12px}.live-policy-title {flex-basis:100%}
+  .live-policy-note {margin-top:0}.live-bank-head {padding:15px 13px 11px;gap:8px}.live-bank-body {padding:0 13px 14px}
+  .live-bank-name h3 {font-size:15px}.live-state {font-size:10px;padding:3px 6px}.live-bank-mark {width:32px;height:32px;font-size:16px}
+  .live-gold-value {font-size:28px}.live-balances {gap:8px}.live-metric {padding:9px 10px}.live-metric-value {font-size:19px}.live-metric-label {font-size:10.5px}
+}
+
 /* ── AI ── */
 .bias { font-weight: 700; }
 .bar { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; position: relative; }
@@ -258,7 +341,7 @@ td.wrap, th.wrap { white-space: normal; text-align: left; }
   <section class="panel stack" id="panel-market" role="tabpanel" aria-label="行情" hidden></section>
   <section class="panel stack" id="panel-notifications" role="tabpanel" aria-label="通知" hidden></section>
   <section class="panel stack" id="panel-records" role="tabpanel" aria-label="记录" hidden></section>
-  <div class="foot">模拟盘为虚拟交易，不构成投资建议 · 每 60 秒自动刷新</div>
+  <div class="foot">模拟盘为虚拟交易 · 真实账户建议需自行确认 · 每 60 秒自动刷新</div>
 </main>
 
 <nav class="tabbar" role="tablist" aria-label="页面" id="tabbar"></nav>
@@ -465,6 +548,7 @@ let DATA = null;
 const hiddenSeries = new Set();
 let priceRange = "1d";
 let calendarFilter = "upcoming", flashFilter = "important", flashLimit=8;
+let assetLedger="auto";
 let strategyScope = "ai", assetModel="all", assetPeriod="all", assetStart="all";
 const modelChoices=(d,label="全部模型")=>[["all",label],...(d.model_controls || []).filter(c=>c.enabled).map(c=>[c.key,c.name])];
 const visibleModel=(d,key)=>key==="all" || key==="rules" || (d.model_controls || []).some(c=>c.key===key && c.enabled);
@@ -529,24 +613,115 @@ function assetLegendLabel(series) {
   return assetModel==="all" ? `${ANALYST[model]} · ${{short:"短",medium:"中",long:"长",low:"低风险",standard:"标准",high:"高风险"}[match[1]]}/${match[2]==="full"?"满":"空"}` : ACCOUNT_LABELS[mode];
 }
 function liveReadonlyPanel(d) {
-  return card("京东真实账户 · 只读接入",el("span",{class:"tag"},"待登录验证"),
-    el("div",{class:"sub"},"浙商与民生独立于模拟盘。当前尚未同步账户，金额和持仓未知；此处没有下单或接收密码的入口。"),
-    el("div",{class:"grid-2"},(d.live_readonly || []).map(a=>el("div",{class:"mini-stat"},
-      el("strong",{},a.name),el("div",{class:"sub"},a.public_status==="reachable"?"官方页面已验证 · 等待本人登录":"尚未验证账户查询"),
-      el("div",{},"可用资金 — · 持仓 — · 可卖 —"),
-      el("a",{href:a.official_url,target:"_blank",rel:"noopener noreferrer",class:"link-btn"},"打开京东官方页面 ↗")))),
-    el("div",{class:"sub"},"登录须在你自己的京东官方页面完成。本地浏览器登录不会自动授权服务器；只读助手报告不含Cookie或账户金额，字段确认后才接通同步。"),
-    el("details",{class:"more","data-detail-key":"jd-readonly-setup"},el("summary",{},"在自己电脑登录并检查只读查询"),
-      el("a",{href:"/downloads/jd-readonly-probe.py",download:"jd_readonly_probe.py",class:"link-btn"},"下载电脑端只读助手"),
-      el("div",{class:"sub"},"在下载目录打开终端，安装依赖并依次运行两款产品。新版等待回车时仍处理验证码请求；可用 --browser chrome 或 --browser msedge 选择本机浏览器。登录后查看账户首页，再回终端按回车；报告只含字段结构。"),
-      el("code",{style:"display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px"},"python -m pip install playwright\npython -m playwright install chromium\npython jd_readonly_probe.py --bank zheshang --headed --output jd-zheshang-report.json\npython jd_readonly_probe.py --bank minsheng --headed --output jd-minsheng-report.json")));
-
+  const rows=d.live_readonly || [], fresh=rows.filter(a=>a.connected).length;
+  const labels={fresh:"已同步",stale:"快照已过期",login_required:"需要京东登录",unavailable:"查询失败",not_checked:"待首次同步"};
+  const actions={buy:"买入建议",sell:"卖出建议",hold:"持有建议",wait:"观望建议"};
+  const states={current:"有效 · 人工参考",review_required:"建议需核对",expired:"建议已到期",account_changed:"账户已变化 · 需重分析",data_unavailable:"账户数据待更新"};
+  const pending=d.live_readonly_refresh || {}, syncing=d.live_readonly_sync || {};
+  const recently=stamp=>stamp && Date.now()-new Date(stamp).getTime()>=0 && Date.now()-new Date(stamp).getTime()<180000;
+  const busy=(["queued","running"].includes(pending.status) && recently(pending.requested_at)) || (syncing.status==="running" && recently(syncing.at));
+  const interval=Number(syncing.interval_seconds), cadence=Number.isFinite(interval) && interval>0?`约每${num(interval/60,0)}分钟采集` : "约每15分钟采集";
+  const message=el("div",{class:"sub",role:"status"},busy?"正在更新账户数据…":syncing.status==="waiting_for_resources"?"等待模型分析结束后恢复采集":pending.status==="completed"?"上次手动刷新已完成 · 手动交易后可再次刷新":`${cadence} · 手动交易后可立即刷新`);
+  const refresh=el("button",{class:"live-refresh",type:"button","aria-label":busy?"更新中…":"刷新真实账户",disabled:busy,onclick:async()=>{
+    refresh.disabled=true;
+    try {
+      const r=await fetch("/api/live-readonly/refresh",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Gold-Control":"1"},body:"{}"});
+      const value=await r.json();if(!r.ok)throw new Error(value.error || "刷新请求失败");
+      message.textContent="刷新已排队，通常数秒后更新";refresh.textContent="更新中…";await load(true);
+    } catch(error){message.textContent=error.message;refresh.disabled=false;}
+  }},busy?"更新中…":"刷新真实账户");
+  const stamp=raw=>{
+    const date=new Date(raw);return raw && Number.isFinite(date.getTime())?date.getTime():null;
+  };
+  const quoteCurrent=a=>a.connected && a.quote?.status!=="historical" && stamp(a.quote?.quoted_at)!==null &&
+    Date.now()-stamp(a.quote.quoted_at)>=-30000 && Date.now()-stamp(a.quote.quoted_at)<=180000;
+  const quantity=value=>value==null?"未知":num(value,4)+" 克";
+  const metric=(label,value,note,extra="")=>el("div",{class:"live-metric"},
+    el("div",{class:"live-metric-label"},label),el("div",{class:"live-metric-value "+extra},value.endsWith(" 元")?value.slice(0,-2):value,value.endsWith(" 元")?el("span",{class:"live-metric-unit"},"元"):null),el("div",{class:"live-metric-note"},note));
+  const panels=rows.map(a=>{
+    const current=quoteCurrent(a), q=a.quote, declared=a.cash_source==="user_declared_full_position";
+    const cashSource=a.cash_source==="jd_electronic_account_api"?"银行黄金电子户接口 · 不含绑定银行卡":declared?`用户确认当前满仓 · ${fmtTs(a.cash_declared_at)}`:a.cash_source==="user_declaration_invalidated"?"账户已变化 · 原满仓声明失效":"未取得可用资金，保留未知";
+    const pnlTone=a.holding_pnl_cny>0?"live-pnl-positive":a.holding_pnl_cny<0?"live-pnl-negative":"";
+    const body=el("div",{class:"live-bank-body"},
+      el("div",{class:"live-snapshot"},`账户采集 ${fmtTs(a.fetched_at)} · 北京时间`),
+      !a.connected?el("div",{class:"live-stale-note"},a.fetched_at?"当前显示上次成功快照，刷新成功前请勿沿用旧建议。":"账户尚未接通，持仓与资金保持未知。"):null,
+      el("div",{class:"live-gold-label"},"黄金持仓"),
+      el("div",{class:"live-gold-value"},quantity(a.total_grams)),
+      el("div",{class:"live-holding-meta"},el("span",{},`可卖 ${quantity(a.sellable_grams)}`),el("span",{},`冻结 ${quantity(a.frozen_grams)}`)),
+      el("div",{class:"live-holding-meta",style:"margin-top:5px"},`成本均价 ${a.average_cost_cny==null?"未知":num(a.average_cost_cny,2)+" 元/克"}`),
+      el("div",{class:"live-balances"},
+        metric(declared?"可用现金 · 用户声明":"电子户可用现金",a.cash_cny==null?"未知":assetMoney(a.cash_cny),cashSource),
+        metric("浮动盈亏估算",a.holding_pnl_cny==null?"未知":assetMoney(a.holding_pnl_cny,true),`未扣卖费 · ${q?(current?"按银行卖价":"按历史卖价估算"):"缺银行报价"}`,pnlTone)),
+      el("div",{class:"live-quote"},
+        el("div",{class:"live-section-heading"},el("span",{},"银行报价 · 元/克"),el("span",{class:"live-state "+(current?"fresh":q?"warn":"")},current?"3分钟内报价":q?"历史报价":"报价未知")),
+        el("div",{class:"live-quote-prices"},el("div",{},"买入价",el("strong",{},q?num(q.buy_price_cny,2):"—")),el("div",{},"卖出价",el("strong",{},q?num(q.sell_price_cny,2):"—"))),
+        el("div",{class:"live-quote-time"},q?`报价时刻 ${fmtTs(q.quoted_at)} · 北京时间${current?"":" · 仅作历史估算"}`:"未取得该银行报价，不使用其他银行价格替代")),
+      el("div",{class:"live-orders"},el("span",{},`待处理条件单 ${a.pending_order_count==null?"未知":a.pending_order_count+" 笔"}`),el("span",{class:"sub"},"完整委托明细未知")));
+    const section=el("section",{class:"live-advice-section","aria-label":`${a.name} 人工执行建议`},
+      el("div",{class:"live-section-heading"},el("h4",{class:"live-section-title"},"AI 账户建议"),el("span",{class:"sub"},"由你确认执行")));
+    const advice=a.advice || [];
+    if(!advice.length)section.appendChild(el("div",{class:"live-advice-empty"},
+      el("strong",{},"尚未生成真实账户建议"),
+      el("div",{class:"sub"},a.connected?"等待下一轮已开启模型的分析，沿用开盘调度。未生成建议不代表持有或观望。":"先恢复账户数据，再等待已开启模型分析。")));
+    for(const v of advice){
+      const condition={at_or_above:"价格 ≥",at_or_below:"价格 ≤",reference:"参考价",none:"未设价格条件"}[v.price_condition] || "价格条件待核对";
+      const expired=stamp(v.expires_at)!==null && stamp(v.expires_at)<=Date.now();
+      const state=expired?"expired":v.status==="current" && !a.connected?"data_unavailable":v.status;
+      const inactive=["expired","account_changed","data_unavailable"].includes(state), review=state==="review_required";
+      section.appendChild(el("article",{class:"live-advice"+(inactive?" inactive":review?" needs-review":"")},
+        el("div",{class:"live-advice-heading"},el("strong",{},`${ANALYST[v.analyst] || v.analyst} · ${actions[v.action] || v.action}`),el("span",{class:"live-advice-status"},states[state] || "状态待核对")),
+        el("div",{class:"live-advice-values"},
+          el("div",{},el("div",{class:"l"},"建议数量"),el("div",{class:"v"},v.grams==null?(["buy","sell"].includes(v.action)?"数量待确认":"不涉及买卖"):quantity(v.grams))),
+          el("div",{},el("div",{class:"l"},"建议价格条件"),el("div",{class:"v"},`${condition}${v.price_cny==null?"":" "+num(v.price_cny,2)+" 元/克"}`))),
+        el("div",{class:"live-advice-time"},`分析 ${fmtTs(v.created_at)} · 到期 ${fmtTs(v.expires_at)} · 北京时间`),
+        inactive?el("div",{class:"live-advice-check"},state==="expired"?"有效期已结束，请等待新建议。":state==="account_changed"?"持仓或资金已变化，请基于新快照重新分析。":"账户数据待刷新，暂勿沿用此建议。"):null,
+        ...(v.checks || []).map(x=>el("div",{class:"live-advice-check"},"需核对："+x)),
+        el("details",{class:"more","data-detail-key":`live-advice-${a.bank}-${v.analyst}-${v.id}`},el("summary",{},"查看依据与风险"),
+          el("p",{class:"live-advice-reason"},v.reason || "本轮未提供判断依据"),v.risk_note?el("div",{class:"sub"},v.risk_note):null)));
+    }
+    body.appendChild(section);
+    const historySection=el("div",{class:"live-history"});
+    for(const [kind,title,limit] of [["holding_details","持仓批次",3],["closed_positions","已清仓记录",5]]){
+      const history=a[kind], records=Array.isArray(history?.records)?history.records:[];
+      historySection.appendChild(el("details",{class:"more","data-detail-key":`live-${a.bank}-${kind}`},
+        el("summary",{},el("span",{},title),el("span",{class:"live-history-count"},history?`本页 ${records.length} / 共 ${history.total_count ?? "未知"} 条`:"未取得")),
+        el("div",{class:"live-history-note"},history?`仅展示首页最多20条；模型最多选取前${limit}条作为参考，不代表完整成交历史。`:"本次未取得记录，数量保持未知。"),
+        records.length?el("ul",{class:"list"},records.map(r=>el("li",{},
+          el("div",{class:"live-history-row"},el("span",{},fmtTs(r.time)),el("strong",{},quantity(r.orderGram))),
+          el("div",{class:"sub"},`买入 ${r.buyPrice==null?"未知":num(r.buyPrice,2)+" 元/克"}${r.sellAvgPrice!=null?" · 卖出 "+num(r.sellAvgPrice,2)+" 元/克":""}${r.totalGram!=null?" · 剩余 "+quantity(r.totalGram):""}`)))):el("div",{class:"live-history-note"},history?"接口本页未返回记录":"刷新账户后重试")));
+    }
+    const trade=a.recent_trade;
+    if(trade)historySection.appendChild(el("div",{class:"live-history-note"},`最近一笔 · ${fmtTs(trade.transactionTime)} · ${trade.trade_label || "类型待核对"}${trade.orderGram!=null?" · "+quantity(trade.orderGram):""}${trade.orderAmount!=null?" · "+assetMoney(trade.orderAmount):""}`));
+    body.appendChild(historySection);
+    body.appendChild(el("div",{class:"live-bank-footer"},el("span",{},"只读查询 · 真实资产"),
+      el("a",{href:a.official_url,target:"_blank",rel:"noopener noreferrer",class:"link-btn"},"打开京东官方页面 ↗")));
+    return el("article",{class:"live-bank",style:`--live-accent:var(${a.bank==="minsheng"?"--series-1":"--brand"})`},
+      el("header",{class:"live-bank-head"},el("span",{class:"live-bank-mark","aria-hidden":"true"},a.bank==="minsheng"?"民":"浙"),
+        el("div",{class:"live-bank-name"},el("h3",{},a.name),el("div",{class:"sub"},"独立银行账户")),
+        el("span",{class:"live-state "+(a.connected?"fresh":"warn")},labels[a.status] || "待同步")),body);
+  });
+  const profile=rows.find(a=>a.risk_profile)?.risk_profile;
+  const panel=card("京东真实账户 · 只读接入",el("span",{class:"tag"},`${fresh}/${rows.length} 户已同步 · 人工执行`),
+    el("div",{class:"live-toolbar"},el("div",{},el("div",{class:"sub"},"两家资金独立 · 与模拟账户分开 · 建议由你在官方页面确认"),message),refresh),
+    el("div",{class:"live-policy"},el("span",{class:"live-policy-title"},`${profile?.name || "高风险"}建议参考`),
+      el("span",{class:"live-policy-item"},"单次计划风险",el("strong",{},`${num(profile?.trade_risk_pct ?? 4,0)}%`)),
+      el("span",{class:"live-policy-item"},"回撤参考线",el("strong",{},`${num(profile?.drawdown_limit_pct ?? 20,0)}%`)),
+      el("span",{class:"live-policy-note"},"用于建议风格，不自动交易；历史净值不完整，不能据此判断是否触线。")),
+    panels.length?el("div",{class:"live-bank-grid"},panels):el("div",{class:"empty"},"真实账户数据待接入"),
+    el("details",{class:"more live-setup","data-detail-key":"jd-readonly-setup"},el("summary",{},"在自己电脑登录并检查只读查询"),
+      el("div",{class:"sub"},"服务器专用会话失效时，需要本人重新登录京东；此看板不接收京东密码或验证码。电脑助手仅供备用诊断。"),
+      el("a",{href:"/downloads/jd-readonly-probe.py",download:"jd_readonly_probe.py",class:"link-btn"},"下载电脑端只读助手")));
+  panel.classList.add("live-panel");return panel;
 }
 function renderStrategies(d) {
   if(!visibleModel(d,assetModel)) assetModel="all";
   if((fourAccounts(d) && assetPeriod==="long") || (riskAccounts(d) && !periodChoices(d).some(([k])=>k===assetPeriod))) assetPeriod="all";
   const panel = clear(document.getElementById("panel-strategies"));
-  if(d.live_readonly?.length)panel.appendChild(liveReadonlyPanel(d));
+  const ledger=assetLedger==="auto" ? ((d.live_readonly || []).some(a=>a.fetched_at)?"live":"simulation") : assetLedger;
+  panel.appendChild(card("账户视图",null,el("div",{class:"chips"},[["live","真实账户"],["simulation","模拟账户"]].map(([key,label])=>
+    el("button",{type:"button",class:"filter-btn","aria-label":`账户视图：${label}`,"aria-pressed":String(ledger===key),onclick:()=>{assetLedger=key;renderStrategies(DATA);drawEquity();}},label))),
+    el("div",{class:"sub"},ledger==="live"?"银行实际资产与人工执行建议":"每个模型六个独立模拟账户，资金与真实银行账户分开")));
+  if(ledger==="live"){panel.appendChild(liveReadonlyPanel(d));return;}
   const scopeMatches = (key) => assetMatches(key) && (strategyScope === "all" || (strategyScope === "ai" ? key.includes(":") : !key.includes(":")));
   const series = d.equity.series.filter((s) => scopeMatches(s.key)).map((s) => ({ ...s, color: seriesColor(s.key) }));
   const scope = el("div", { class: "chips", style: "margin-bottom:12px" }, [["ai", "AI 账户"], ["rules", "对照组"], ["all", `全部 ${d.leaderboard.length + d.short.length} 个账户`]].map(([key, label]) =>
@@ -866,8 +1041,17 @@ const notificationPending=new Set();
 let notificationError="";
 function notificationControls(d) {
   const n=d.notifications || {},message=el("div",{class:"sub",role:"status"},n.configured ? `已配置 ${n.channel} · 修改后即时生效` : "尚未配置推送密钥，请在服务器配置后重启监控服务。"),
-    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"默认关闭。每个风险档包含满仓/空仓两户，操作通知仅含实际成交及保护退出；分析摘要由单独开关控制，行情提醒与定时报告也独立设置。通知开关不改变操盘开关。")),grid=el("div",{class:"grid-2"});
-  (n.subscriptions || []).forEach(c=>{
+    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"按事件独立订阅，新增项默认关闭。真实建议需人工确认，各类通知与模型开关互不影响。")),grid=el("div",{class:"grid-2"});
+  const categories=[
+    ["真实账户建议 · 人工执行",c=>c.key.includes(":live_"),"按模型与银行分别订阅。买卖或价格/数量实质调整才提醒；建议到期、数据过期或账户变化后，不发送旧建议。"],
+    ["模型分析摘要",c=>c.key.endsWith(":analysis"),"每轮成功分析的研究摘要，与真实建议和模拟成交独立。"],
+    ["模拟盘成交与保护退出",c=>!c.key.includes(":live_") && !c.key.endsWith(":analysis") && (c.key.startsWith("codex:") || c.key.startsWith("claude:")),"每个风险档包含初始满仓和空仓两户，这些是模拟账户内的成交。"],
+    ["对照策略、行情与报告",c=>!c.key.startsWith("codex:") && !c.key.startsWith("claude:"),"规则对照、行情提醒与定时报告。"]
+  ];
+  categories.forEach(([title,matches,description])=>{
+    const rows=(n.subscriptions || []).filter(matches);if(!rows.length)return;
+    const group=el("section",{},el("div",{class:"row"},el("strong",{class:"grow"},title),el("span",{class:"tag"},`${rows.filter(c=>c.enabled).length}/${rows.length} 已开启`)),el("p",{class:"sub"},description));
+    rows.forEach(c=>{
     const button=el("button",{class:"chip-btn",type:"button",role:"switch","aria-checked":String(c.enabled),"aria-label":`${c.name} 通知`,disabled:notificationPending.has(c.key),onclick:async()=>{
       if(notificationPending.has(c.key))return;
       notificationPending.add(c.key);notificationError="";button.disabled=true;
@@ -881,12 +1065,21 @@ function notificationControls(d) {
       }catch(error){notificationError=error.message;}
       finally{notificationPending.delete(c.key);renderPage("notifications",true);}
     }},c.enabled ? "已开启通知" : "已关闭通知");
-    grid.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
+    group.appendChild(el("div",{class:"row",style:"margin-bottom:10px"},el("strong",{class:"grow"},c.name),button));
+    });grid.appendChild(group);
   });box.appendChild(grid);return box;
 }
 function renderNotifications(d) {
   const panel=clear(document.getElementById("panel-notifications"));
   panel.appendChild(notificationControls(d));
+  const recent=d.notifications?.recent || [];
+  const category=k=>k.startsWith("live-advice:")?"真实账户建议":k.startsWith("autonomous:")?"模拟盘操作":k.startsWith("ai:")?"模型摘要":"行情/报告";
+  const noticeRow=r=>el("li",{},el("div",{class:"row"},el("strong",{class:"grow"},r.title),el("span",{class:"tag"},r.delivered?"已发送":"仅记录")),el("div",{class:"sub"},`${fmtTs(r.ts)} · ${category(r.key)}`));
+  panel.appendChild(card("最近通知记录",null,
+    el("div",{class:"sub"},"同轮事件可能合并，记录条数不等于微信消息条数。已发送表示推送服务已接收。"),
+    recent.length?el("ul",{class:"list"},recent.slice(0,6).map(noticeRow)):el("div",{class:"empty"},"暂无发送记录"),
+    recent.length>6?el("details",{class:"more","data-detail-key":"notice-history"},el("summary",{},`较早记录 · ${recent.length-6} 条`),el("ul",{class:"list"},recent.slice(6).map(noticeRow))):null));
+
 }
 function renderAI(d) {
   const panel = clear(document.getElementById("panel-ai"));
@@ -924,6 +1117,7 @@ function renderAI(d) {
         el("strong", {}, "本模型交易计划"), el("p", {}, p.summary),
         p.buy && p.buy.zone_cny ? el("div", { class: "sub" }, `低吸 ${num(p.buy.zone_cny[0])}–${num(p.buy.zone_cny[1])} · 止损 ${num(p.buy.stop_cny)} · T1 ${num(p.buy.t1_cny)} · 扣费 R:R ${num(p.buy.rr1)}`) : null));
       else box.appendChild(el("div", { class: "sub", style: "margin-top:8px" }, "暂无有效交易计划（休市、判断过期或点位不足）"));
+      if(Object.values(v.live_account_advice || {}).some(Boolean))box.appendChild(el("a",{href:"#strategies",class:"link-btn",onclick:()=>{assetLedger="live";}},"查看真实账户建议 →"));
       return box;
     })));
   }
@@ -1290,7 +1484,7 @@ function preservePanel(panel,fn) {
 function renderPage(id,force=false) {
   if(!DATA) return;
   const dependencies={overview:[DATA.snapshot,DATA.execution,DATA.wave_evidence?.daily_reference,DATA.comparison,DATA.model_controls,DATA.fills,DATA.autonomous?.plans,DATA.autonomous?.recent_expired,DATA.macro?.hard_events_24h],
-    strategies:[DATA.live_readonly,DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
+    strategies:[assetLedger,DATA.live_readonly,DATA.live_readonly_sync,DATA.live_readonly_refresh,DATA.leaderboard,DATA.equity,DATA.short,DATA.model_controls,DATA.snapshot?.plan],
     compare:[DATA.comparison,DATA.model_controls,DATA.equity],
     notifications:[DATA.notifications],
     ai:[DATA.ai,DATA.model_controls,(DATA.autonomous?.accounts || []).map(({key,model,start_mode,paused,started,stop_price,target_price,plan})=>({key,model,start_mode,paused,started,stop_price,target_price,plan})),DATA.ai_inputs,DATA.cadence,DATA.scorecard && Object.fromEntries(Object.entries(DATA.scorecard).filter(([k])=>k!=="evaluated_at"))],

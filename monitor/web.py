@@ -352,11 +352,14 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "bank": settings.paper_bank, "bank_name": EXECUTION_NAME,
             "live_readonly":live_readonly_accounts(conn),
+            "live_readonly_sync":get_state(conn,"jd_live_sync_status") or {},
+            "live_readonly_refresh":get_state(conn,"jd_live_refresh") or {},
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
                           "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
-                "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode)},
+                "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode),
+                "recent": [dict(r) for r in conn.execute("SELECT ts,key,title,delivered FROM alerts WHERE delivered=1 OR key LIKE 'live-advice:%' ORDER BY rowid DESC LIMIT 20")]},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,
             "trading_mode": settings.ai_trading_mode,
@@ -564,6 +567,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 log.exception("notification control failed")
                 self._send(503,b'{"error":"notification settings unavailable"}',"application/json")
+            return
+        if self.path == "/api/live-readonly/refresh":
+            try:
+                length=int(self.headers.get("Content-Length","0"))
+                if not 0 < length <= 128 or json.loads(self.rfile.read(length))!={}:raise ValueError("empty object required")
+                from .jd_live_sync import request_refresh
+                with closing(sqlite3.connect(str(self.settings.db_path),timeout=10)) as conn:
+                    result=request_refresh(conn)
+                invalidate_dashboard(self.settings)
+                self._send(202,json.dumps(result).encode(),"application/json")
+            except (ValueError,TypeError):self._send(400,b'{"error":"empty object required"}',"application/json")
+            except Exception:self._send(503,b'{"error":"account refresh unavailable"}',"application/json")
             return
         manual_route=self.path.endswith("/analyze")
         name = self.path.removeprefix("/api/models/").removesuffix("/analyze")

@@ -1,5 +1,6 @@
 # gold-analysis skill 脚本依赖
 requests>=2.28
+websockets>=15    # 本机CDP恢复京东只读会话；Cookie仅在采集进程内存使用
 playwright>=1.40   # 安装后还需执行: python -m playwright install chromium
 yfinance>=0.2      # 仅 scripts/test_yf_spot.py 探活脚本使用
 anthropic>=1.14   # monitor/ai.py：AI 消息面分析（需 ANTHROPIC_API_KEY）

@@ -143,7 +143,8 @@ def run_locked(analyst,context,usage):
         with sqlite3.connect(settings.db_path,timeout=10) as conn:
             generation=control(conn,name)['generation'];previous=read_state(conn,key)
     schema=strict_schema(analyst.result_type(context).model_json_schema())
-    system=analyst.research_system()+'\n\n'+STRUCTURE_SYSTEM+analyst.trading_system(context)+'\n\n'+analyst.result_instructions()
+    from .jd_live_advice import prompt_for as live_advice_prompt
+    system=analyst.research_system()+'\n\n'+STRUCTURE_SYSTEM+analyst.trading_system(context)+'\n\n'+analyst.result_instructions()+live_advice_prompt(context)
     fingerprint=hashlib.sha256(dumps([system,schema,analyst.model,settings.ai_max_searches,settings.ai_history_max_queries]).encode()).hexdigest()
     session,reset=choose_session(previous,fingerprint,generation,settings,now) if persistent else (None,'disabled')
     if session and not isinstance(session.get('usage_totals'),dict):session,reset=None,'usage_state_missing'

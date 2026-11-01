@@ -1,0 +1,20 @@
+[Unit]
+Description=JD bank account read-only snapshot collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Trade-Accumulated-Gold-CN
+ExecStart=/usr/bin/python3 -m monitor.jd_live_sync
+User=root
+UMask=0077
+Restart=on-failure
+RestartSec=30
+KillMode=control-group
+TimeoutStopSec=20
+MemoryMax=500M
+MemorySwapMax=256M
+
+[Install]
+WantedBy=multi-user.target
