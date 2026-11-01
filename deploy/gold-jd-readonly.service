@@ -1,0 +1,18 @@
+[Unit]
+Description=Temporary JD read-only login browser (authenticated HTTPS)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Trade-Accumulated-Gold-CN
+ExecStart=/usr/bin/python3 -m monitor.jd_remote_browser --port 1455 --ttl 3600 --public-host 8.218.117.20
+User=root
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=20
+RuntimeMaxSec=3600
+MemoryMax=650M
+MemorySwapMax=512M
+Restart=no
+
+# Start manually for an interactive login session. Do not enable on boot.

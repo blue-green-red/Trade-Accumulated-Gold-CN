@@ -72,7 +72,32 @@
 
 公开检查观察到 `queryStallForGoldNoLogin`、`getTotalHoldingStat`、`indexDataStd/indexData`、`queryStallForGold` 等页面内部查询路径。两款页面匿名可加载并显示“立即登录”，带账户查询返回`resultCode=3, success=false`；不能把HTTP 200或外层成功当作账户已登录。此处记录的是观察结果，并非京东承诺的开放API。资金、持仓、订单字段映射和产品买卖价绑定仍需本人登录后验证。
 
-ECS仅承担后台与只读账本，不安装常驻桌面；本阶段没有向ECS传递账户授权，也不代表已实现24小时账户同步。本地字段报告不能替代授权，后续须另行验证正式授权通道、本地同步桥接或临时SSH隧道远程浏览器方案；当前不开放远程调试端口。需要本人在**自己的电脑**完成登录。账户页可下载独立脚本 `jd_readonly_probe.py`，只需Python和Playwright，不加载本项目配置：
+ECS提供临时远程浏览器，优先使用下述方式，避免本地反复导出报告。一次京东登录后在页面切换浙商/民生，查询与账本仍须按银行分别识别。浏览器按需启动，不常驻；本地字段报告不能替代账户授权，完成登录也不代表已实现持续账户同步或真实交易。远程入口使用临时HTTPS密码保护，VNC与调试端口只监听本机。
+
+### ECS临时远程只读浏览器（1455）
+
+部署组件为Xvfb、Chrome、x11vnc、noVNC/websockify与nginx（Ubuntu可用 `apt-get install -y xvfb x11vnc novnc websockify nginx` 安装，另需Chrome和Python Playwright）；安装服务模板后手动 `systemctl start gold-jd-readonly`。不启用开机启动，最长60分钟自动退出，650MB内存和512MB交换空间上限；主监控与模型开关不变。仅启动一个浏览器/显示会话，现有会话未停止时不会抢占端口。
+
+默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS，并要求临时访问用户名与密码。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址；输入用户名 `jd` 及本次临时访问密码，noVNC再次询问密码时填临时VNC密码。两个密码保存在权限600的 `/run/gold-jd-readonly/access.txt`，不提交代码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
+
+部署模板可复制到 `/etc/systemd/system/` 后执行 `systemctl daemon-reload`。若仅通过SSH访问，可移除模板中的 `--public-host` 参数，重载并重启后使用下列方式（此时1455也只监听回环，无需安全组放行）：
+
+```bash
+# 在自己的电脑终端运行，按实际SSH配置调整用户名/主机/SSH端口
+ssh -L 1455:127.0.0.1:1455 root@8.218.117.20
+# SSH连接后在同一个终端读取临时访问密码；不要把文件内容发到聊天
+cat /run/gold-jd-readonly/access.txt
+```
+
+SSH模式需保持终端连接，用本机浏览器访问 `http://127.0.0.1:1455/vnc.html?autoconnect=1&resize=scale`，输入上一步的VNC临时密码，在远程京东页面由本人完成扫码/验证码/身份验证。**不要点击买卖、开户或签约**。登录完成后在页面切换两家银行，由服务器继续检查查询，无需导出本地报告。
+
+执行 `systemctl stop gold-jd-readonly` 或关闭Chrome会结束会话。退出清除临时VNC密码文件；京东浏览器会话只保存在被Git忽略的 `monitor/data/jd-remote-browser/chrome-profile`（目录700），不导出Cookie、不进入模型输入或网页接口，不启用浏览器密码保存。诊断状态仅记录脱敏字段结构，不包含持仓金额。后续是否复用此会话及能保持多久，仍需实际验证。当前 `connected=false` 表示尚未接通后台账户同步，并非假定登录成功。
+
+浏览器导航前先安装与本地助手相同的只读查询白名单，并绕过已保存的Service Worker缓存代理，再开放远程入口；拦截器进程、Chrome或任一组件退出时整个会话停止。没有真实下单能力。需要更新白名单时先停止会话，修改并重新测试后再启动。
+
+### 本地助手备用方式
+
+需要本人在**自己的电脑**完成登录。账户页可下载独立脚本 `jd_readonly_probe.py`，只需Python和Playwright，不加载本项目配置：
 
 ```bash
 python -m pip install playwright
