@@ -106,7 +106,7 @@ def run(port=1455,ttl=3600,public_host=None):
         private_write(RUNTIME/'nginx.conf',public_config(port,backend,public_host))
     url=f'https://{public_host}:{port}/' if public_host else f'http://127.0.0.1:{port}/vnc.html?autoconnect=1&resize=scale'
     private_write(RUNTIME/'access.txt',f'URL: {url}\nUsername: jd\nAccess password: {password}\nVNC password: {"not required" if public_host else vnc_password}\nLifetime: {ttl} seconds\n')
-    children=[];stopping=False;events=[];started=time.monotonic()
+    children=[];stopping=False;events=[];started=time.monotonic();stage='display'
     def stop(*_):
         nonlocal stopping
         stopping=True
@@ -119,7 +119,8 @@ def run(port=1455,ttl=3600,public_host=None):
                 'port':port,'bind':'0.0.0.0' if public_host else '127.0.0.1','https':bool(public_host),
                 'expires_in_seconds':max(0,int(ttl-(time.monotonic()-started))),
                 'connected':False,'order_submission_enabled':False,'capabilities':summarize_evidence(events),
-                'error_type':error,'requests':events[-500:]}
+                'error_type':error,'stage':stage,
+                'components':{Path(c.args[0]).name:c.poll() for c in children},'requests':events[-500:]}
         private_write(DATA/'status.json',json.dumps(report,ensure_ascii=False,indent=2))
     try:
         display=':105'
@@ -131,11 +132,13 @@ def run(port=1455,ttl=3600,public_host=None):
             time.sleep(.1)
         env=dict(os.environ,DISPLAY=display)
         for k in ('http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY','all_proxy','ALL_PROXY'):env.pop(k,None)
+        stage='chrome'
         chrome=spawn(['/usr/bin/google-chrome','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check',
              '--disable-sync','--disable-background-networking','--disable-component-update',
              '--remote-debugging-address=127.0.0.1','--remote-debugging-port=9225',
              '--user-data-dir='+str(profile),'--window-size=1200,850','about:blank'],env=env)
         wait_port(9225,chrome)
+        stage='readonly_guard'
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser=p.chromium.connect_over_cdp('http://127.0.0.1:9225')
@@ -169,19 +172,23 @@ def run(port=1455,ttl=3600,public_host=None):
                 events.append(item)
             context.on('response',response)
             # The read-only guard is active before any JD page is opened or VNC is reachable.
+            stage='vnc'
             # Public HTTPS authenticates both HTTP and WebSocket. Avoid a second VNC password prompt.
             vnc_auth=['-nopw'] if public_host else ['-rfbauth',str(RUNTIME/'vnc.pass')]
             vnc=spawn(['x11vnc','-display',display,'-localhost','-listen','127.0.0.1','-rfbport','5905',
                 *vnc_auth,'-forever','-shared','-noxdamage','-repeat','-quiet'])
             wait_port(5905,vnc)
+            stage='novnc'
             web=spawn(['websockify','--web=/usr/share/novnc','127.0.0.1:'+str(backend),'127.0.0.1:5905'])
             wait_port(backend,web)
             if public_host:
+                stage='https'
                 proxy=spawn(['/usr/sbin/nginx','-p',str(RUNTIME)+'/', '-c',str(RUNTIME/'nginx.conf'),'-g','daemon off;'])
                 wait_port(port,proxy)
             page=context.pages[0] if context.pages else context.new_page()
+            stage='jd_page'
             page.goto(BANKS['zheshang']['url'],wait_until='domcontentloaded',timeout=45000)
-            save('ready');last=0
+            stage='interactive';save('ready');last=0
             while not stopping and time.monotonic()-started<ttl:
                 if not browser.is_connected() or any(child.poll() is not None for child in children):raise RuntimeError('Browser session ended')
                 # Keep dispatching intercepted login/SMS requests while the user operates VNC.
