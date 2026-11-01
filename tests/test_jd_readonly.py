@@ -145,6 +145,7 @@ class JDGoldCallbackTests(unittest.TestCase):
 class JDPostLoginReadTests(unittest.TestCase):
     def test_readonly_details_available_but_mutations_and_unknown_gateways_stay_blocked(self):
         reads=('/gw2/generic/CfGoldWeb/h5/m/cfQueryGoldProductInfo',
+               '/gw2/generic/jrm/h5/m/queryProductInfo',
                '/gw2/generic/jrm/h5/m/getTradePeriodStd',
                '/gw2/generic/hj/h5/m/cfQueryConditionWaittingNum',
                '/gw2/generic/CfGoldWeb/newh5/m/cfQueryLastTrade',

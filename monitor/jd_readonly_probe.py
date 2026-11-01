@@ -31,6 +31,8 @@ READ_PATHS={
  '/gw2/generic/CreatorSer/newh5/m/queryGoldPageDetailComponent',
  '/gw2/generic/CfGoldWeb/newh5/m/cfQueryLastTrade',
  '/gw2/generic/jrm/h5/m/getTradePeriodStd',
+ # Product metadata requested by the authenticated bank selector.
+ '/gw2/generic/jrm/h5/m/queryProductInfo',
  '/gw2/generic/hj/h5/m/cfGetPriceTrendChart',
  '/gw2/generic/hj/h5/m/bankTagListSort',
  '/gw/generic/aladdin/h5/m/getPageMultiDataForH5',

@@ -135,6 +135,8 @@ def run(port=1455,ttl=3600,public_host=None):
         stage='chrome'
         chrome=spawn(['/usr/bin/google-chrome','--no-sandbox','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check',
              '--disable-sync','--disable-background-networking','--disable-component-update',
+             '--disable-gpu','--enable-low-end-device-mode','--renderer-process-limit=2',
+             '--disable-features=BackForwardCache,MediaRouter,OptimizationHints',
              '--remote-debugging-address=127.0.0.1','--remote-debugging-port=9225',
              '--user-data-dir='+str(profile),'--window-size=1200,850','about:blank'],env=env)
         wait_port(9225,chrome)
