@@ -150,6 +150,9 @@ def accounts(conn,now=None,include_advice=True):
             row['pending_orders']=pending
         from .jd_live_orders import history,progress
         row['order_history']=history(conn,bank) if 'jd_live_orders' in tables else []
+        combined={o['order_key']:o for o in (row.get('pending_orders') or {}).get('records',[])}
+        combined.update({o['order_key']:o for o in row['order_history']})
+        row['order_history']=list(combined.values())
         declaration=declarations.get(bank)
         row.update(cash_source=snap.get('cash_source','unknown'),cash_declared_at=None,position_pct=None)
         api_cash=row['cash_source']=='jd_electronic_account_api' and row.get('cash_cny') is not None
@@ -165,11 +168,14 @@ def accounts(conn,now=None,include_advice=True):
         if include_advice and 'jd_live_advice' in tables:
             from .controls import active,control
             seen={}
-            for r in conn.execute('SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? ORDER BY id DESC LIMIT 20',(bank,)):
+            pinned={i for o in row['order_history'] for i in o.get('advice_links',{}).values()}
+            placeholders=','.join('?' for _ in pinned) or 'NULL'
+            query=f'SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND (id IN (SELECT id FROM jd_live_advice WHERE bank=? ORDER BY id DESC LIMIT 20) OR id IN ({placeholders})) ORDER BY id DESC'
+            for r in conn.execute(query,(bank,bank,*pinned)):
                 if not active(conn,r[1]):continue
                 changed=control(conn,r[1]).get('changed_at')
                 if changed and r[2]<=changed:continue
-                if seen.get(r[1],0)>=3:continue
+                if seen.get(r[1],0)>=3 and r[0] not in pinned:continue
                 value=json.loads(r[5])
                 state='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'review_required' if value.get('checks') else 'current'
                 execution=progress(value,r[2],row['order_history'])
@@ -188,7 +194,13 @@ def model_input(conn,now=None):
             'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
     values={r['bank']:{k:r.get(k) for k in fields} for r in rows}
     for row in rows:
-        values[row['bank']]['previous_advice']=[{k:v.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')} for v in row['advice']+row['advice_history']]
+        active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
+        previous=[];counts={}
+        for value in row['advice']+row['advice_history']:
+            name=value['analyst'];counts[name]=counts.get(name,0)+1
+            if counts[name]<=3 or value['id'] in active_links:
+                previous.append({k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')})
+        values[row['bank']]['previous_advice']=previous
         orders=values[row['bank']].get('pending_orders')
         if orders and len(orders['records'])>5:
             values[row['bank']]['pending_orders']={**orders,'records':orders['records'][:5],'source_complete':orders['complete'],'complete':False,'omitted_count':len(orders['records'])-5}

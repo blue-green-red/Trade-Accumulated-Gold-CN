@@ -131,6 +131,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(account['previous_advice'][0]['action'],'hold')
         self.assertEqual(account['previous_advice'][1]['execution_progress']['status'],'pending')
 
+    def test_pending_order_keeps_its_original_advice_after_many_rounds(self):
+        self.snapshot();self.saved();record(self.s.conn,'zheshang',[parse_order(raw_order(),'zheshang')],NOW.isoformat())
+        for _ in range(25):self.saved(action='hold')
+        account=model_input(self.s.conn,NOW)['accounts']['zheshang']
+        original=next(v for v in account['previous_advice'] if v['id']==1)
+        self.assertEqual(original['execution_progress']['status'],'pending')
+        order=parse_order(raw_order(),'zheshang');order['status']='filled'
+        record(self.s.conn,'zheshang',[order],NOW.isoformat())
+        original=next(v for v in accounts(self.s.conn,NOW)[0]['advice_history'] if v['id']==1)
+        self.assertEqual(original['execution_progress']['status'],'filled')
+
 
 class RetryTests(unittest.TestCase):
     def setUp(self):

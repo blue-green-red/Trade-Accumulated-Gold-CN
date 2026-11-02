@@ -52,6 +52,13 @@ def parse_list(payload,bank):
 def record(conn,bank,orders,at):
     with conn:
         for order in orders:
+            previous=conn.execute('SELECT data_json FROM jd_live_orders WHERE bank=? AND order_key=?',(bank,order['order_key'])).fetchone()
+            links=dict((json.loads(previous[0]) if previous else {}).get('advice_links',{}))
+            if order.get('created_at'):
+                for row in conn.execute('SELECT id,analyst,created_at,advice_json FROM jd_live_advice WHERE bank=? AND julianday(created_at)<=julianday(?) AND julianday(expires_at)>=julianday(?) ORDER BY id DESC LIMIT 30',
+                                        (bank,order['created_at'],order['created_at'])):
+                    if row[1] not in links and progress(json.loads(row[3]),row[2],[order])['status']!='not_observed':links[row[1]]=row[0]
+            order['advice_links']=links
             conn.execute('INSERT INTO jd_live_orders VALUES(?,?,?,?,?) ON CONFLICT(bank,order_key) DO UPDATE SET data_json=excluded.data_json,seen_at=excluded.seen_at',
                          (bank,order['order_key'],json.dumps(order,ensure_ascii=False),at,at))
 
