@@ -66,6 +66,17 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(row['view']['summary'],'history')
         self.assertEqual(set(row['outcomes']),{'1d','3d','20d','60d'})
 
+    def test_compact_history_keeps_decisions_and_identity_without_duplicate_json(self):
+        stamp=self.now.isoformat()
+        self.c.execute("INSERT INTO ai_plans(account,view_id,generation,created_at,expires_at,decision_json,status,reason) VALUES('codex:short_empty',1,0,?,?,?,'pending','')",(stamp,stamp,json.dumps({'action':'wait','reason':'完整保留决策理由'})))
+        self.c.commit()
+        full=self.page(kind='plans')['items'][0]
+        compact=self.page(kind='plans',compact=1)['items'][0]
+        self.assertEqual(compact['decision'],full['decision'])
+        self.assertEqual(compact['account'],full['account'])
+        self.assertEqual(compact['id'],full['id'])
+        self.assertNotIn('decision_json',compact)
+
     def test_invalid_kind_rejected_and_size_bounded(self):
         with self.assertRaises(ValueError): self.page(kind='invalid')
         self.assertEqual(self.page(kind='plans',limit=9999)['limit'],100)

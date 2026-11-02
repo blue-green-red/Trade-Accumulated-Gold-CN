@@ -1,0 +1,278 @@
+<script setup>
+import { computed } from "vue";
+import {
+  actions,
+  modelNames,
+  quantity,
+  num,
+  fmtTs,
+  pastDeadline,
+} from "../format";
+const props = defineProps({
+  account: Object,
+  advice: Object,
+  quoteFresh: Boolean,
+});
+const states = {
+  current: "有效 · 人工参考",
+  review_required: "建议需核对",
+  expired: "建议已到期",
+  account_changed: "账户已变化 · 需重分析",
+  data_unavailable: "账户数据待更新",
+};
+const orderStates = {
+  pending: "已挂单 · 等待成交",
+  partially_filled: "部分成交",
+  filled: "已成交",
+  cancelled: "已撤单",
+  expired: "条件单已到期",
+  failed: "挂单失败",
+  unknown: "状态待核对",
+};
+const monitorStates = {
+  monitoring: "监控中",
+  queued: "已触发 · 待复评",
+  reviewed: "已触发 · 已纳入复评",
+  latched: "持续满足 · 不重复触发",
+  market_closed: "休市暂停",
+  expired: "已到期",
+  account_changed: "账户或委托变化 · 已失效",
+  data_unavailable: "等待新鲜报价或挂单明细",
+  order_inactive: "目标挂单已结束或待更新",
+  review_required: "需核对",
+};
+const state = computed(() =>
+  pastDeadline(props.advice)
+    ? "expired"
+    : props.advice.status === "current" && !props.account.connected
+      ? "data_unavailable"
+      : props.advice.status,
+);
+const symbol = {
+  at_or_above: "≥",
+  at_or_below: "≤",
+  reference: "参考价",
+  none: "未设价格条件",
+};
+const original = (item) =>
+  item.input_order ||
+  (props.account.pending_orders?.records || []).find(
+    (o) => o.order_key === item.order_key,
+  ) ||
+  {};
+const terms = (o) =>
+  `${actions[o.action] || ""}${quantity(o.grams)} · ${symbol[o.price_condition] || "参考"} ${o.price_cny == null ? "价格待确认" : num(o.price_cny) + " 元/克"}`;
+const itemState = (item) =>
+  state.value !== "current" ? state.value : item.state || "review_required";
+const conditionState = (c) =>
+  state.value !== "current"
+    ? state.value
+    : !props.quoteFresh
+      ? "data_unavailable"
+      : c.monitoring?.status;
+const associated = (c) =>
+  (props.account.pending_orders?.records || []).find(
+    (o) => o.order_key === c.order_key,
+  );
+</script>
+<template>
+  <article
+    class="live-advice"
+    :class="{
+      inactive: ['expired', 'account_changed', 'data_unavailable'].includes(
+        state,
+      ),
+      'needs-review': state === 'review_required',
+    }"
+  >
+    <div class="live-advice-heading">
+      <strong
+        >{{ modelNames[advice.analyst] || advice.analyst }} ·
+        {{ actions[advice.action] }}建议</strong
+      ><span class="live-advice-status">{{
+        states[state] || "状态待核对"
+      }}</span>
+    </div>
+    <div class="live-advice-values">
+      <div>
+        <div class="l">建议数量</div>
+        <div class="v">
+          {{
+            advice.grams == null
+              ? ["buy", "sell"].includes(advice.action)
+                ? "数量待确认"
+                : "不涉及买卖"
+              : quantity(advice.grams)
+          }}
+        </div>
+      </div>
+      <div>
+        <div class="l">建议价格条件</div>
+        <div class="v">
+          {{ symbol[advice.price_condition] || "价格条件待核对" }}
+          {{ advice.price_cny == null ? "" : num(advice.price_cny) + " 元/克" }}
+        </div>
+      </div>
+    </div>
+    <div class="live-advice-time">
+      分析 {{ fmtTs(advice.created_at) }} · 到期
+      {{ fmtTs(advice.expires_at) }} · 北京时间
+    </div>
+    <div
+      v-if="
+        advice.schema_version >= 2 || Array.isArray(advice.order_management)
+      "
+      class="live-structured"
+    >
+      <div class="live-section-heading" style="margin-top: 12px">
+        <strong>挂单处理建议</strong><span class="sub">撤改需你在京东操作</span>
+      </div>
+      <div v-if="!advice.order_management?.length" class="sub">
+        本轮没有挂单处理建议
+      </div>
+      <div
+        v-for="item in advice.order_management || []"
+        :key="item.order_key"
+        class="live-quote"
+      >
+        <div class="live-section-heading">
+          <strong>{{
+            { keep: "保留原单", cancel: "建议撤单", replace: "建议改单" }[
+              item.action
+            ] || "处理建议待核对"
+          }}</strong
+          ><span class="sub">{{
+            itemState(item) === "current"
+              ? item.action === "keep"
+                ? "建议保留，尚待成交"
+                : "等待你确认处理"
+              : states[itemState(item)] ||
+                monitorStates[itemState(item)] ||
+                "状态待更新"
+          }}</span>
+        </div>
+        <div class="sub">原单：{{ terms(original(item)) }}</div>
+        <div v-if="original(item).status === 'partially_filled'" class="sub">
+          原单已有部分成交 · 已成交
+          {{ quantity(original(item).filled_grams) }} · 未成交
+          {{
+            original(item).grams != null && original(item).filled_grams != null
+              ? quantity(
+                  Math.max(
+                    0,
+                    original(item).grams - original(item).filled_grams,
+                  ),
+                )
+              : "待核对"
+          }}
+        </div>
+        <div class="sub">
+          京东原单有效至 {{ fmtTs(original(item).expires_at) }}
+        </div>
+        <div v-if="item.action === 'replace'" class="live-advice-check">
+          修改后：{{
+            terms({
+              ...item.effective_replacement,
+              action: original(item).action,
+            })
+          }}
+          · 有效至 {{ fmtTs(item.effective_replacement?.expires_at) }}
+        </div>
+        <div class="live-advice-reason">{{ item.reason }}</div>
+        <div
+          v-for="check in item.checks || []"
+          :key="check"
+          class="live-advice-check"
+        >
+          需核对：{{ check }}
+        </div>
+      </div>
+      <div class="live-section-heading" style="margin-top: 14px">
+        <strong>价格触发复评</strong>
+      </div>
+      <div v-if="!advice.review_conditions?.length" class="sub">
+        本轮未设置价格复评条件，沿用其他事件和周期调度。
+      </div>
+      <div v-else class="sub">
+        达到条件仅排队重新分析，不自动撤改或下单。条件有效至
+        {{ fmtTs(advice.expires_at) }}。
+      </div>
+      <div
+        v-for="(c, i) in advice.review_conditions || []"
+        :key="i"
+        class="live-quote"
+      >
+        <div class="live-section-heading">
+          <strong
+            >{{ account.name }}{{ c.quote_side === "buy" ? "买入" : "卖出" }}价
+            {{ symbol[c.condition] }} {{ num(c.price_cny) }} 元/克</strong
+          ><span class="sub">{{
+            monitorStates[conditionState(c)] ||
+            states[conditionState(c)] ||
+            "等待监控同步"
+          }}</span>
+        </div>
+        <div v-if="c.order_key" class="sub">
+          {{
+            associated(c)
+              ? "关联原单：" + terms(associated(c))
+              : "关联挂单已不在当前待成交明细中"
+          }}
+        </div>
+        <div class="live-advice-reason">{{ c.reason }}</div>
+        <div v-if="c.monitoring?.last_quote_at" class="live-quote-time">
+          最近监测 {{ num(c.monitoring.last_price_cny) }} 元/克 ·
+          {{ fmtTs(c.monitoring.last_quote_at) }}
+        </div>
+        <div v-if="c.monitoring?.triggered_at" class="live-quote-time">
+          触发时间 {{ fmtTs(c.monitoring.triggered_at) }}
+        </div>
+      </div>
+    </div>
+    <div v-else class="live-advice-check">
+      本条旧分析未提供结构化挂单处理或价格复评条件，待下一轮更新。
+    </div>
+    <div
+      v-if="advice.execution_progress?.orders?.length"
+      class="live-advice-check"
+    >
+      {{ orderStates[advice.execution_progress.status] || "执行进度待核对" }} ·
+      {{
+        advice.execution_progress.match === "similar_parameters"
+          ? "发现相近挂单，参数有调整"
+          : "按参数与时间匹配，仅为关联推断"
+      }}
+      · {{ quantity(advice.execution_progress.orders[0].grams) }} ·
+      {{ num(advice.execution_progress.orders[0].price_cny) }} 元/克
+    </div>
+    <div v-if="state === 'expired'" class="live-advice-check">
+      {{
+        ["pending", "partially_filled"].includes(
+          advice.execution_progress?.status,
+        )
+          ? "原建议已到期；京东条件单仍待成交，以条件单自身有效期为准。"
+          : "建议有效期已结束；买卖建议会按数据与调度条件排队复评。"
+      }}
+    </div>
+    <div v-if="state === 'account_changed'" class="live-advice-check">
+      持仓、资金或条件单已变化，请结合执行进度等待重新评估。
+    </div>
+    <div v-if="state === 'data_unavailable'" class="live-advice-check">
+      账户数据待刷新，暂勿沿用此建议。
+    </div>
+    <div
+      v-for="check in advice.checks || []"
+      :key="check"
+      class="live-advice-check"
+    >
+      需核对：{{ check }}
+    </div>
+    <details class="more">
+      <summary>查看依据与风险</summary>
+      <p class="live-advice-reason">
+        {{ advice.reason || "本轮未提供判断依据" }}
+      </p>
+      <div class="sub">{{ advice.risk_note }}</div>
+    </details>
+  </article>
+</template>

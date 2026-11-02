@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -22,7 +23,7 @@ from contextlib import closing
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, unquote
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +53,8 @@ _dashboard_cache = {}
 def invalidate_dashboard(settings):
     with _dashboard_lock:
         _dashboard_cache.pop(str(settings.db_path.resolve()), None)
+    from .page_data import invalidate_pages
+    invalidate_pages(settings)
 
 
 def cached_dashboard(settings):
@@ -67,16 +70,9 @@ def cached_dashboard(settings):
         return body
 
 
-def dashboard_html(settings):
-    html=(STATIC / "index.html").read_bytes()
-    try:
-        # Escape HTML delimiters even inside JSON strings; all data is authenticated.
-        data=cached_dashboard(settings).replace(b"<",b"\\u003c").replace(b">",b"\\u003e").replace(b"&",b"\\u0026")
-        bootstrap=b'<script type="application/json" id="initial-dashboard">'+data+b'</script>\n'
-        return html.replace(b"<script>",bootstrap+b"<script>",1)
-    except Exception:
-        log.exception("initial dashboard unavailable; client will retry via API")
-        return html
+def dashboard_html(settings, static_root=None):
+    """The shell contains no account payloads and never waits for SQLite."""
+    return ((static_root or STATIC) / "index.html").read_bytes()
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -468,6 +464,10 @@ def history_page(settings, query):
             if kind=="analysis":
                 r["view"]=json.loads(r["view_json"]) if r.get("view_json") else {}
                 r["outcomes"]=outcomes.get((r["analyst"],r.get("completed_at") or r["ts"]))
+        if query.get('compact',['0'])[0]=='1':
+            for row in page:
+                for key in ('view_json','decision_json','quote_json','plan_json'):
+                    row.pop(key,None)
         return {"items":page,"offset":offset,"limit":limit,"has_more":len(rows)>offset+limit}
 
 
@@ -488,6 +488,7 @@ def _record_failure(ip: str) -> None:
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     password: str
+    static_root = None
     server_version = "gold-dashboard"
     sys_version = ""
 
@@ -526,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", headers.pop("Cache-Control", "no-store"))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             for k, v in headers.items():
@@ -627,7 +628,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
-            self._send(200, dashboard_html(self.settings), "text/html; charset=utf-8")
+            self._static_response(dashboard_html(self.settings,self.static_root), "text/html; charset=utf-8", immutable=False)
+        elif path.startswith('/assets/'):
+            root = (self.static_root or STATIC).resolve()
+            target = (root / unquote(path).lstrip('/')).resolve()
+            if not target.is_relative_to(root / 'assets') or not target.is_file() or target.suffix not in ('.js','.css','.svg','.woff2'):
+                self._send(404,b'not found','text/plain')
+                return
+            content_type = {'.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.woff2':'font/woff2'}[target.suffix]
+            self._static_response(target.read_bytes(),content_type,immutable=True)
+        elif path.startswith('/api/pages/'):
+            from .page_data import cached_page, PAGES
+            page = path[len('/api/pages/'):]
+            if page not in PAGES:
+                self._send(404,b'{"error":"unknown page"}','application/json')
+                return
+            try:
+                started = time.perf_counter()
+                view = parse_qs(urlsplit(self.path).query).get('view',['auto'])[0]
+                body, tag = cached_page(self.settings,page,view)
+                extra = {'ETag':tag,'Cache-Control':'private, no-store','Server-Timing':f'data;dur={(time.perf_counter()-started)*1000:.1f}'}
+                if tag in [value.strip() for value in self.headers.get('If-None-Match','').split(',')]:
+                    self._send(304,b'','application/json',extra)
+                else:
+                    self._send(200,body,'application/json; charset=utf-8',extra)
+            except ValueError:
+                self._send(400,b'{"error":"invalid account view"}','application/json')
+            except Exception:
+                log.exception('page data unavailable: %s',page)
+                self._send(503,b'{"error":"page data unavailable"}','application/json')
         elif path == "/downloads/jd-readonly-probe.py":
             self._send(200,Path(__file__).with_name("jd_readonly_probe.py").read_bytes(),"text/x-python; charset=utf-8",
                        {"Content-Disposition":'attachment; filename="jd_readonly_probe.py"'})
@@ -649,6 +678,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
+
+    def _static_response(self, body, content_type, immutable=False):
+        tag = 'W/"'+hashlib.sha256(body).hexdigest()[:24]+'"'
+        extra = {'ETag':tag,'Cache-Control':'private, max-age=31536000, immutable' if immutable else 'private, no-cache'}
+        if tag in [value.strip() for value in self.headers.get('If-None-Match','').split(',')]:
+            self._send(304,b'',content_type,extra)
+        else:
+            self._send(200,body,content_type,extra)
 
 
 def main() -> int:

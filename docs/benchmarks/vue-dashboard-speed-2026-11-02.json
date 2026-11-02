@@ -1,0 +1,344 @@
+{
+  "local": {
+    "before": {
+      "latency_ms": 0,
+      "kbps": 0,
+      "samples": [
+        {
+          "ready_ms": 1747,
+          "ttfb_ms": 1374,
+          "dom_ms": 1691,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "cold"
+        },
+        {
+          "ready_ms": 85,
+          "ttfb_ms": 12,
+          "dom_ms": 55,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 97,
+          "ttfb_ms": 11,
+          "dom_ms": 59,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 114,
+          "ttfb_ms": 17,
+          "dom_ms": 73,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 144,
+          "ttfb_ms": 43,
+          "dom_ms": 109,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        }
+      ],
+      "transitions": []
+    },
+    "after": {
+      "latency_ms": 0,
+      "kbps": 0,
+      "samples": [
+        {
+          "ready_ms": 299,
+          "ttfb_ms": 9,
+          "dom_ms": 142,
+          "wire_KiB": 54,
+          "requests": 8,
+          "network_requests": 8,
+          "assets_from_cache": 0,
+          "visit": "cold"
+        },
+        {
+          "ready_ms": 93,
+          "ttfb_ms": 5,
+          "dom_ms": 36,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 63,
+          "ttfb_ms": 3,
+          "dom_ms": 24,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 65,
+          "ttfb_ms": 2,
+          "dom_ms": 25,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 71,
+          "ttfb_ms": 2,
+          "dom_ms": 21,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        }
+      ],
+      "transitions": [
+        {
+          "page": "strategies",
+          "ready_ms": 208,
+          "requests": 3
+        },
+        {
+          "page": "compare",
+          "ready_ms": 340,
+          "requests": 3
+        },
+        {
+          "page": "ai",
+          "ready_ms": 120,
+          "requests": 2
+        },
+        {
+          "page": "market",
+          "ready_ms": 337,
+          "requests": 2
+        },
+        {
+          "page": "records",
+          "ready_ms": 187,
+          "requests": 3
+        },
+        {
+          "page": "notifications",
+          "ready_ms": 111,
+          "requests": 2
+        },
+        {
+          "page": "overview",
+          "ready_ms": 59,
+          "requests": 0
+        }
+      ]
+    }
+  },
+  "network": {
+    "before": {
+      "latency_ms": 150,
+      "kbps": 1000,
+      "samples": [
+        {
+          "ready_ms": 1417,
+          "ttfb_ms": 294,
+          "dom_ms": 1384,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "cold"
+        },
+        {
+          "ready_ms": 1228,
+          "ttfb_ms": 12,
+          "dom_ms": 1203,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 1363,
+          "ttfb_ms": 281,
+          "dom_ms": 1330,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 1229,
+          "ttfb_ms": 14,
+          "dom_ms": 1199,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 1379,
+          "ttfb_ms": 292,
+          "dom_ms": 1345,
+          "wire_KiB": 123.3,
+          "requests": 1,
+          "network_requests": 1,
+          "assets_from_cache": 0,
+          "visit": "warm"
+        }
+      ],
+      "transitions": []
+    },
+    "after": {
+      "latency_ms": 150,
+      "kbps": 1000,
+      "samples": [
+        {
+          "ready_ms": 1224,
+          "ttfb_ms": 4,
+          "dom_ms": 757,
+          "wire_KiB": 54,
+          "requests": 8,
+          "network_requests": 8,
+          "assets_from_cache": 0,
+          "visit": "cold"
+        },
+        {
+          "ready_ms": 403,
+          "ttfb_ms": 3,
+          "dom_ms": 187,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 397,
+          "ttfb_ms": 3,
+          "dom_ms": 187,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 399,
+          "ttfb_ms": 3,
+          "dom_ms": 182,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        },
+        {
+          "ready_ms": 395,
+          "ttfb_ms": 3,
+          "dom_ms": 194,
+          "wire_KiB": 5.7,
+          "requests": 8,
+          "network_requests": 2,
+          "assets_from_cache": 6,
+          "visit": "warm"
+        }
+      ],
+      "transitions": [
+        {
+          "page": "strategies",
+          "ready_ms": 920,
+          "requests": 3
+        },
+        {
+          "page": "compare",
+          "ready_ms": 821,
+          "requests": 3
+        },
+        {
+          "page": "ai",
+          "ready_ms": 830,
+          "requests": 2
+        },
+        {
+          "page": "market",
+          "ready_ms": 824,
+          "requests": 2
+        },
+        {
+          "page": "records",
+          "ready_ms": 839,
+          "requests": 3
+        },
+        {
+          "page": "notifications",
+          "ready_ms": 809,
+          "requests": 2
+        },
+        {
+          "page": "overview",
+          "ready_ms": 83,
+          "requests": 0
+        }
+      ]
+    }
+  },
+  "measured_at": "2026-11-02T18:30:42.830756+08:00",
+  "method": {
+    "before_commit": "9fe459a",
+    "browser": "Chromium via Playwright on the same ECS",
+    "viewport": [
+      390,
+      844
+    ],
+    "rounds_per_case": 5,
+    "cold": "first application visit in a fresh browser context after renderer initialization",
+    "warm": "median of subsequent 4 complete page reloads",
+    "authentication": "preemptive Authorization header; no request interception, because Playwright http_credentials disables cache",
+    "before_server": "read-only local server using the pre-migration backend and HTML against the same existing database",
+    "after_server": "deployed Vue dashboard",
+    "notes": "Local measurements include ECS CPU/memory effects; simulated network is not a measurement of the user-to-ECS path. No model, JD API, control or notification actions were invoked."
+  },
+  "summary": {
+    "local_before": {
+      "warm_median_ms": 105.5,
+      "warm_wire_KiB": 123.3,
+      "cold_ms": 1747
+    },
+    "local_after": {
+      "warm_median_ms": 68.0,
+      "warm_wire_KiB": 5.7,
+      "cold_ms": 299
+    },
+    "network_before": {
+      "warm_median_ms": 1296.0,
+      "warm_wire_KiB": 123.3,
+      "cold_ms": 1417
+    },
+    "network_after": {
+      "warm_median_ms": 398.0,
+      "warm_wire_KiB": 5.7,
+      "cold_ms": 1224
+    }
+  }
+}

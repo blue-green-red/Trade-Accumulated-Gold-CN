@@ -149,6 +149,7 @@ class LiveDashboardTests(unittest.TestCase):
         f=fixtures.RiskAccountTests();f.setUp()
         class Local(Handler):
             password=''
+            from test_dashboard_browser import STATIC as static_root
             def log_message(self,*args):pass
         Local.settings=f.settings
         server=ThreadingHTTPServer(('127.0.0.1',0),Local)
@@ -175,16 +176,21 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertEqual(page.get_by_role('link',name='下载电脑端只读助手',exact=True).count(),0)
                     self.assertNotIn('private-account',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-                    page.evaluate("""()=>{
-                      const a=DATA.live_readonly[0],o={order_key:'browser-unit',action:'sell',status:'pending',grams:4.98,price_cny:850.4,price_condition:'at_or_above',expires_at:new Date(Date.now()+86400000).toISOString()};
-                      a.pending_orders={complete:true,status:'fresh',records:[o]};a.pending_order_count=1;
-                      a.advice[0].execution_progress={status:'pending',match:'similar_parameters',orders:[o]};
-                      a.quote={buy_price_cny:836,sell_price_cny:836,quoted_at:new Date().toISOString(),status:'fresh'};
-                      a.advice[0].order_management=[{order_key:o.order_key,action:'replace',state:'current',input_order:o,effective_replacement:{grams:4.5,price_cny:848,price_condition:'at_or_above',expires_at:o.expires_at},reason:'按现有单调整参数',checks:[]}];
-                      a.advice[0].review_conditions=[{condition:'at_or_below',price_cny:830.59,quote_side:'sell',order_key:o.order_key,reason:'达到阈值重新评估现有单',monitoring:{status:'queued',last_quote_at:new Date().toISOString(),last_price_cny:830.5,triggered_at:new Date().toISOString()}}];
-                      a.review_status=[{analyst:'codex',status:'queued',reasons:['真实条件单数量变化']}];
-                      renderStrategies(DATA);
-                    }""")
+                    from monitor.page_data import page_data
+                    value=page_data(f.settings,'strategies','live')
+                    a=value['live_readonly'][0]
+                    order={'order_key':'c'*24,'action':'sell','status':'pending','grams':4.98,'price_cny':850.4,'price_condition':'at_or_above','expires_at':(NOW+timedelta(days=1)).isoformat()}
+                    a.update(pending_orders={'complete':True,'status':'fresh','records':[order]},pending_order_count=1,
+                             quote={'buy_price_cny':836,'sell_price_cny':836,'quoted_at':NOW.isoformat(),'status':'fresh'})
+                    a['advice'][0].update(execution_progress={'status':'pending','match':'similar_parameters','orders':[order]},
+                        order_management=[{'order_key':order['order_key'],'action':'replace','state':'current','input_order':order,
+                          'effective_replacement':{'grams':4.5,'price_cny':848,'price_condition':'at_or_above','expires_at':order['expires_at']},'reason':'按现有单调整参数','checks':[]}],
+                        review_conditions=[{'condition':'at_or_below','price_cny':830.59,'quote_side':'sell','order_key':order['order_key'],
+                          'reason':'达到阈值重新评估现有单','monitoring':{'status':'queued','last_quote_at':NOW.isoformat(),'last_price_cny':830.5,'triggered_at':NOW.isoformat()}}])
+                    a['review_status']=[{'analyst':'codex','status':'queued','reasons':['真实条件单数量变化']}]
+                    page.route('**/api/pages/strategies*',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(value)))
+                    page.get_by_role('button',name='刷新数据',exact=True).click()
+                    page.get_by_text('建议改单',exact=True).wait_for()
                     text=page.locator('#panel-strategies').inner_text()
                     self.assertIn('京东条件单明细 · 1 笔',text);self.assertIn('发现相近挂单，参数有调整',text)
                     self.assertIn('待重新评估',text);self.assertIn('条件单有效至',text)
@@ -197,13 +203,16 @@ class LiveDashboardTests(unittest.TestCase):
                     page.set_viewport_size({'width':390,'height':844})
                     status=page.evaluate("async()=> (await fetch('/api/live-readonly/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status")
                     self.assertEqual(status,403)
+                    page.unroute('**/api/pages/strategies*')
                     page.get_by_role('button',name='刷新真实账户',exact=True).click()
                     page.get_by_role('button',name='更新中…',exact=True).wait_for()
                     self.assertEqual(f.m.store.get_state('jd_live_refresh')['status'],'queued')
                     self.assertEqual(errors,[])
                     page.get_by_role('button',name='账户视图：模拟账户',exact=True).click()
+                    page.locator('#panel-strategies details.asset-account').first.wait_for()
                     self.assertEqual(page.locator('#panel-strategies details.asset-account').count(),6)
                     page.get_by_role('tab',name='通知',exact=True).click()
+                    page.get_by_role('heading',name='微信操作通知',exact=True).wait_for()
                     self.assertIn('真实账户建议 · 人工执行',page.locator('#panel-notifications').inner_text())
                     self.assertEqual(page.get_by_role('heading',name='最近通知记录',exact=True).count(),1)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))

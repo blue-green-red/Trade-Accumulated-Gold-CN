@@ -46,17 +46,10 @@ class CompressionTests(unittest.TestCase):
                 self.assertIn(b'new',cached_dashboard(s));build.assert_called_once()
             invalidate_dashboard(s)
 
-    def test_bootstrap_json_is_safe_and_keeps_fallback(self):
-        import json
+    def test_static_shell_does_not_wait_for_dashboard_or_embed_account_data(self):
         from unittest.mock import patch
         from monitor.config import Settings
         from monitor.web import dashboard_html
-        payload={'text':'</script><script>alert(1)</script>&'}
-        with patch('monitor.web.cached_dashboard',return_value=json.dumps(payload).encode()):
+        with patch('monitor.web.cached_dashboard',side_effect=AssertionError('no database work')):
             html=dashboard_html(Settings())
-        self.assertIn(b'id="initial-dashboard"',html)
-        data=html.split(b'id="initial-dashboard">',1)[1].split(b'</script>',1)[0]
-        self.assertNotIn(b'<script>',data)
-        self.assertEqual(json.loads(data),payload)
-        with patch('monitor.web.cached_dashboard',side_effect=ValueError('test')),patch('monitor.web.log.exception'):
-            self.assertNotIn(b'id="initial-dashboard"',dashboard_html(Settings()))
+        self.assertNotIn(b'id="initial-dashboard"',html)

@@ -16,3 +16,7 @@ monitor/data/
 
 # Local JD read-only field-structure reports
 jd-*-report.json
+
+# Frontend dependencies and staging output
+frontend/node_modules/
+frontend/dist/
