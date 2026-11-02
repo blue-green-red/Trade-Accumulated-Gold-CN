@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from monitor.jd_remote_browser import private_write,ensure_private,run,public_config
+from unittest.mock import patch
+from monitor.jd_remote_browser import private_write,ensure_private,run,public_config,access_credentials,child_environment
 from monitor.jd_readonly_probe import allowed
 
 
@@ -38,3 +39,20 @@ class JDRemoteBrowserTests(unittest.TestCase):
         self.assertIn('proxy_pass http://127.0.0.1:1456;',text)
         self.assertNotIn('9225',text);self.assertNotIn('5905',text)
         with self.assertRaises(ValueError):public_config(1455,1456,'8.218.117.20;bad')
+
+    def test_dashboard_auth_reuses_existing_password_and_never_disables_https_auth(self):
+        with patch.dict('os.environ',{'GOLD_WEB_PASSWORD':'unit-dashboard-password'}):
+            with patch('monitor.jd_remote_browser.secrets.token_urlsafe') as random:
+                self.assertEqual(access_credentials('8.218.117.20',True),('unit-dashboard-password','dashboard'))
+                random.assert_not_called()
+        text=public_config(1455,1456,'8.218.117.20',True)
+        self.assertIn('auth_basic "Gold dashboard login"',text);self.assertIn('auth_basic_user_file',text)
+        with self.assertRaises(ValueError):access_credentials(None,True)
+        with patch.dict('os.environ',{'GOLD_WEB_PASSWORD':''}):
+            with self.assertRaises(ValueError):access_credentials('8.218.117.20',True)
+
+    def test_browser_children_do_not_inherit_dashboard_or_api_credentials(self):
+        with patch.dict('os.environ',{'GOLD_WEB_PASSWORD':'unit-password','PUSHPLUS_TOKEN':'unit-token','CLAWX_JR_API_KEY':'unit-key','SERVERCHAN_SENDKEY':'unit-sendkey','HTTPS_PROXY':'http://127.0.0.1:1','TEST_KEEP':'ok'}):
+            env=child_environment(':105')
+        self.assertEqual(env['DISPLAY'],':105');self.assertEqual(env['TEST_KEEP'],'ok')
+        for key in ('GOLD_WEB_PASSWORD','PUSHPLUS_TOKEN','CLAWX_JR_API_KEY','SERVERCHAN_SENDKEY','HTTPS_PROXY'):self.assertNotIn(key,env)

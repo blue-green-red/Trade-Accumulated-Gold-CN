@@ -126,9 +126,11 @@ python3 -m monitor.jd_live_sync --once
 
 部署组件为Xvfb、Chrome、x11vnc、noVNC/websockify与nginx（Ubuntu可用 `apt-get install -y xvfb x11vnc novnc websockify nginx` 安装，另需Chrome和Python Playwright）；安装服务模板后手动 `systemctl start gold-jd-readonly`。不启用开机启动，最长60分钟自动退出，650MB内存和512MB交换空间上限；主监控与模型开关不变。仅启动一个浏览器/显示会话，现有会话未停止时不会抢占端口。
 
-默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS，并要求临时访问用户名与密码。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址；输入用户名 `jd` 及本次临时访问密码即可，不再要求第二次VNC密码；VNC只监听回环，由HTTPS入口统一认证。密码保存在权限600的 `/run/gold-jd-readonly/access.txt`，不提交代码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
+默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS。服务模板使用 `--dashboard-auth`：用户名 `jd`，密码沿用现有 `GOLD_WEB_PASSWORD`，不再生成单独的临时访问密码，也没有第二次VNC密码；HTTPS仍验证HTTP和WebSocket访问。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址。权限600的 `/run/gold-jd-readonly/access.txt` 只记录入口和认证方式，不重复保存看板明文密码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
 
-部署模板可复制到 `/etc/systemd/system/` 后执行 `systemctl daemon-reload`。若仅通过SSH访问，可移除模板中的 `--public-host` 参数，重载并重启后使用下列方式（此时1455也只监听回环，无需安全组放行）：
+浏览器及其子进程不继承看板密码、模型/API密钥、通知凭据或代理。页面加载超时保留远程通道，可在其中刷新；检测到本人登录成功后，向只读采集服务合并排队一次刷新，恢复两家账户同步。没有 `--dashboard-auth` 的独立HTTPS启动仍可使用原临时口令模式；SSH模式继续使用回环VNC临时口令。
+
+部署模板可复制到 `/etc/systemd/system/` 后执行 `systemctl daemon-reload`。若仅通过SSH访问，可移除模板中的 `--public-host` 及 `--dashboard-auth` 参数，重载并重启后使用下列方式（此时1455也只监听回环，无需安全组放行）：
 
 ```bash
 # 在自己的电脑终端运行，按实际SSH配置调整用户名/主机/SSH端口
