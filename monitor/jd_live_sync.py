@@ -23,6 +23,8 @@ QUERY_PATHS={
  'quote':'/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
  'recent_trade':'/gw2/generic/CfGoldWeb/newh5/m/cfQueryLastTrade',
  'pending_count':'/gw2/generic/hj/h5/m/cfQueryConditionWaittingNum',
+ 'pending_orders':'/gw2/generic/hj/h5/m/queryConditionalRuleList',
+ 'order_records':'/gw2/generic/jrm/h5/m/queryStdTradeListResourceNew',
 }
 CASH_PATHS={'zheshang':'/gw2/generic/jrm/h5/m/queryStdAssetsBalV2','minsheng':'/gw/generic/hj/h5/m/queryAccountAssetsV2'}
 HISTORY_PATHS={
@@ -96,6 +98,7 @@ class ReadonlyClient:
     def query(self,operation,bank):
         # Callers choose a fixed query operation, never a URL supplied by a user/model.
         sku=PRODUCTS[bank][0];params={'productSku':sku}
+        if operation=='order_records':params.update(pageIndex=1,pageSize=20,tradeType='0',notNeedSku=True,startTime=None,endTime=None,lastDataTime=None)
         if operation=='cash_balance':
             params['operationType']=0
         if operation in HISTORY_PATHS:
@@ -166,15 +169,48 @@ def parse_cash(payload,bank):
             'cash_source':'jd_electronic_account_api','cash_scope':'bank_gold_electronic_account_not_linked_bank_card'}
 
 
-def refresh(store,client):
+def refresh(store,client,groups=None,now=None):
+    groups=set(groups or ('core','quote','orders','history'))
+    now=now or datetime.now(timezone.utc);at=now.isoformat()
     for bank,(_,_,endpoint) in PRODUCTS.items():
         try:
-            before=store.conn.execute('SELECT data_json FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()
-            data=parse_account(bank,client.query(endpoint,bank));coverage={}
-            for operation in ('quote','recent_trade','pending_count','holding_details','closed_positions','cash_balance'):
+            before=store.conn.execute('SELECT data_json,fetched_at FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()
+            previous=json.loads(before[0]) if before else {}
+            data=dict(previous);coverage=dict(data.get('coverage',{}));times=dict(data.get('component_times',{}))
+            current=set(groups)
+            if not before:current.update(('core','quote','orders','history'))
+            if 'core' in current:
+                core=parse_account(bank,client.query(endpoint,bank))
+                data.update({k:v for k,v in core.items() if k not in ('quote','recent_trade','pending_order_count','orders')})
+                times['account']=at
+                if any(previous.get(k)!=data.get(k) for k in ('total_grams','sellable_grams','frozen_grams','average_cost_cny')):current.add('history')
+            operations=[]
+            if 'quote' in current:operations.append('quote')
+            if 'core' in current:operations.extend(('recent_trade','cash_balance'))
+            if 'orders' in current:operations.extend(('pending_orders','order_records'))
+            if 'history' in current:operations.extend(('holding_details','closed_positions'))
+            for operation in operations:
                 try:
                     raw=client.query(operation,bank)
                     if operation=='quote':data['quote']=parse_quote(raw,bank)
+                    elif operation=='pending_orders':
+                        from .jd_live_orders import parse_list,record,history
+                        data['pending_orders'],raw_orders=parse_list(raw,bank)
+                        seen={r['order_key'] for r in data['pending_orders']['records']}
+                        if data['pending_orders']['complete']:
+                            for old in history(store.conn,bank,100):
+                                if old['order_key'] not in seen and old['status'] in ('pending','partially_filled'):
+                                    record(store.conn,bank,[{**old,'status':'unknown'}],at)
+                        record(store.conn,bank,data['pending_orders']['records'],at)
+                    elif operation=='order_records':
+                        from .jd_live_orders import trade_history,record,history
+                        old={o['order_key']:o for o in history(store.conn,bank,100)}
+                        records=[{**old.get(o['order_key'],{}),**o} for o in trade_history(raw,bank)]
+                        partial={o['order_key']:o for o in records if o['status']=='partially_filled'}
+                        for order in (data.get('pending_orders') or {}).get('records',[]):
+                            if order['order_key'] in partial:order.update(status='partially_filled',filled_grams=partial[order['order_key']].get('filled_grams'))
+                        record(store.conn,bank,records,at)
+                        data['order_outcomes']=[{k:o.get(k) for k in ('order_key','status','filled_grams')} for o in records]
                     elif operation=='cash_balance':data.update(parse_cash(raw,bank))
                     elif operation in HISTORY_PATHS:data[operation]=parse_history(raw,operation)
                     elif operation=='pending_count':
@@ -191,22 +227,25 @@ def refresh(store,client):
                             data['recent_trade']['trade_label']=next((labels[value[k]] for k in ('transactionType','lastTradeType','buyTypeStr') if value.get(k) in labels),None)
                         else:raise ValueError('Invalid recent trade')
                     coverage[operation]='available'
-                except Exception as exc:coverage[operation]='unavailable:'+type(exc).__name__
-            data['coverage']=coverage;record_success(store.conn,bank,data)
-            previous=json.loads(before[0]) if before else {}
-            fields=('total_grams','sellable_grams','frozen_grams','average_cost_cny','cash_cny')
-            changed=any(previous.get(k)!=data.get(k) for k in fields)
-            from .controls import MODELS,active
-            from .ai_events import enqueue
-            revision=store.conn.execute('SELECT revision FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()[0]
-            for model in MODELS:
-                if not active(store.conn,model) or not store.get_state('ai_status:'+model,{}).get('available'):continue
-                has_advice=store.conn.execute('SELECT 1 FROM jd_live_advice WHERE bank=? AND analyst=? LIMIT 1',(bank,model)).fetchone()
-                if changed or not has_advice:
-                    enqueue(store.conn,model,('真实账户持仓变化：' if before and changed else '真实账户首次分析：')+PRODUCTS[bank][1],0,
-                        event_id='live-account:'+bank+':'+revision,payload={'bank':bank,'snapshot_revision':revision})
+                    times[operation]=at
+                except Exception as exc:
+                    coverage[operation]='unavailable:'+type(exc).__name__
+                    if operation=='pending_orders':
+                        try:
+                            value=component(client.query('pending_count',bank))['waittingConditionalNum'];n=number(value,True)
+                            if n!=int(n):raise ValueError('Invalid order count')
+                            data['pending_order_count']=int(n);coverage['pending_count']='available';times['pending_count']=at
+                        except Exception as fallback:coverage['pending_count']='unavailable:'+type(fallback).__name__
+            if coverage.get('pending_orders')=='available':
+                data['pending_order_count']=data['pending_orders']['total_count']
+            data.update(coverage=coverage,component_times=times)
+            meta=store.conn.execute('SELECT public_status,checked_at FROM jd_live_readonly WHERE bank=?',(bank,)).fetchone()
+            record_success(store.conn,bank,data,at if 'core' in current else before[1])
+            if 'core' not in current and meta and meta[0]!='fresh':record_failure(store.conn,bank,meta[0],meta[1])
         except PermissionError:record_failure(store.conn,bank,'login_required')
         except Exception:record_failure(store.conn,bank,'unavailable')
+    from .jd_live_review import request_reviews
+    request_reviews(store,now,after_sync=True)
 
 
 def request_refresh(conn):
@@ -221,11 +260,11 @@ def request_refresh(conn):
     return value
 
 
-def sync_once(store,client):
+def sync_once(store,client,groups=None):
     if client.session is None:
         if browser_busy(store.conn):raise BrowserBusy('Model is running')
         client.recover()
-    refresh(store,client)
+    refresh(store,client,groups)
     # An expired session is recovered at the next scheduled/manual refresh, never by sending SMS.
     if store.conn.execute("SELECT COUNT(*) FROM jd_live_readonly WHERE public_status='login_required'").fetchone()[0]:
         client.close();return 'login_required'
@@ -236,8 +275,10 @@ def sync_once(store,client):
 def run(once=False):
     from .config import Settings
     settings=Settings();store=Store(settings.db_path);ensure_schema(store.conn);client=ReadonlyClient()
-    interval=max(60,float(os.environ.get('GOLD_JD_LIVE_REFRESH_SECONDS','900')))
-    next_at=0;last_request=None;stopping=False
+    interval=max(60,float(os.environ.get('GOLD_JD_LIVE_REFRESH_SECONDS','300')))
+    intervals={'quote':max(60,float(os.environ.get('GOLD_JD_LIVE_QUOTE_SECONDS','60'))),
+               'core':interval,'orders':interval,'history':max(interval,float(os.environ.get('GOLD_JD_LIVE_HISTORY_SECONDS','1800')))}
+    due_at={k:0 for k in intervals};last_request=None;stopping=False;failures=0;was_open=None
     def stop(*_):
         nonlocal stopping
         stopping=True
@@ -246,10 +287,18 @@ def run(once=False):
         while not stopping:
             request=store.get_state('jd_live_refresh',{});wanted=request.get('requested_at')
             manual=wanted and wanted!=last_request
-            if time.monotonic()>=next_at or manual:
+            groups=set(intervals) if manual else {k for k in intervals if time.monotonic()>=due_at[k]}
+            from .trading_hours import trading_session
+            opened=trading_session()['is_open']
+            if opened and was_open is False:groups.update(('core','orders','quote'))
+            was_open=opened
+            if not opened and not manual:
+                groups.discard('quote')
+                if 'core' in groups:groups.update(('orders',))
+            if groups:
                 status='completed'
-                store.set_state('jd_live_sync_status',{'status':'running','at':datetime.now(timezone.utc).isoformat()})
-                try:status=sync_once(store,client)
+                store.set_state('jd_live_sync_status',{'status':'running','at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval,'intervals':intervals,'components':sorted(groups)})
+                try:status=sync_once(store,client,groups)
                 except BrowserBusy:status='waiting_for_resources'
                 except PermissionError:
                     status='login_required'
@@ -258,10 +307,14 @@ def run(once=False):
                     status='unavailable'
                     for bank in PRODUCTS:record_failure(store.conn,bank,'unavailable')
                 last_request=wanted
-                store.set_state('jd_live_sync_status',{'status':status,'at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval})
+                failures=failures+1 if status in ('login_required','unavailable') else 0
+                store.set_state('jd_live_sync_status',{'status':status,'at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval,'intervals':intervals,'components':sorted(groups)})
                 if manual and store.get_state('jd_live_refresh',{}).get('requested_at')==wanted:
                     store.set_state('jd_live_refresh',{**request,'status':status,'finished_at':datetime.now(timezone.utc).isoformat()})
-                next_at=time.monotonic()+(60 if status=='waiting_for_resources' else interval)
+                for kind in groups:due_at[kind]=time.monotonic()+(60 if status=='waiting_for_resources' else intervals[kind] if trading_session()['is_open'] or manual else max(1800,intervals[kind]))
+                if failures:
+                    retry_delay=min(1800,300*2**min(failures-1,3))
+                    due_at={k:max(t,time.monotonic()+retry_delay) for k,t in due_at.items()}
                 if once:break
             if once:break
             time.sleep(5)

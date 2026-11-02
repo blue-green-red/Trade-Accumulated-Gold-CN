@@ -141,4 +141,4 @@ class ProviderReceiptTests(unittest.TestCase):
         with patch('monitor.notify.requests.post',side_effect=requests.ConnectionError('https://sctapi.ftqq.com/unit-private-sendkey.send')):
             with self.assertLogs('monitor.notify',level='WARNING') as logs:self.assertFalse(notifier.send('test','test'))
         self.assertNotIn('unit-private-sendkey',''.join(logs.output))
-        self.assertEqual(notifier.last_receipt['status'],'failed')
+        self.assertEqual(notifier.last_receipt['status'],'uncertain')

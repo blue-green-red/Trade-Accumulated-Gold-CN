@@ -63,6 +63,7 @@ class Notifier:
                 log.warning("推送失败 [%s]: HTTP %s, provider code %s",channel,resp.status_code,self.last_receipt['provider_code'])
             return ok
         except Exception as exc:
-            self.last_receipt['status']='failed'
+            # Read timeouts / broken connections can happen after provider acceptance.
+            self.last_receipt['status']='failed' if isinstance(exc,requests.ConnectTimeout) else 'uncertain'
             log.warning("推送异常 [%s]: %s", channel, type(exc).__name__)
             return False

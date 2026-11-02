@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS jd_live_cash_declarations (
 
 
 def ensure_schema(conn):
+    from .jd_live_orders import SCHEMA as order_schema
     with conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA+order_schema)
         for bank in BANKS:conn.execute('INSERT OR IGNORE INTO jd_live_readonly(bank) VALUES(?)',(bank,))
 
 
@@ -83,7 +84,7 @@ def parse_account(bank,payload):
 def record_success(conn,bank,data,at=None):
     at=at or datetime.now(timezone.utc).isoformat()
     # Quotes and poll timestamps change without the account itself changing.
-    identity={k:data.get(k) for k in ('product_sku','total_grams','sellable_grams','frozen_grams','average_cost_cny','pending_order_count','recent_trade','cash_cny')}
+    identity=account_identity(data)
     revision=hashlib.sha256(json.dumps(identity,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
     with conn:
         conn.execute('INSERT INTO jd_live_snapshots VALUES(?,?,?,?) ON CONFLICT(bank) DO UPDATE SET fetched_at=excluded.fetched_at,revision=excluded.revision,data_json=excluded.data_json',
@@ -102,6 +103,15 @@ def record_failure(conn,bank,status,at=None):
 def age(stamp,now):
     try:return (now-datetime.fromisoformat(stamp)).total_seconds()
     except (TypeError,ValueError):return float('inf')
+
+
+def account_identity(data):
+    identity={k:data.get(k) for k in ('product_sku','total_grams','sellable_grams','frozen_grams','average_cost_cny','pending_order_count','recent_trade','cash_cny')}
+    part=data.get('pending_orders')
+    identity['orders']=[{k:r.get(k) for k in ('order_key','status','grams','filled_grams','price_cny','loss_price_cny','expires_at')} for r in sorted((part or {}).get('records',[]),key=lambda r:r['order_key'])] if part else None
+    outcomes=data.get('order_outcomes')
+    identity['order_outcomes']=sorted(outcomes,key=lambda r:r['order_key']) if outcomes else outcomes
+    return identity
 
 
 def accounts(conn,now=None,include_advice=True):
@@ -128,8 +138,18 @@ def accounts(conn,now=None,include_advice=True):
         if row.get('quote') and row.get('average_cost_cny') is not None and row.get('total_grams') is not None:
             row['holding_pnl_cny']=round((row['quote']['sell_price_cny']-row['average_cost_cny'])*row['total_grams'],2)
         row['holding_pnl_basis']='bank_sell_quote_minus_average_cost_before_sell_fee'
-        row['advice']=[]
+        row['advice']=[];row['advice_history']=[]
         row['risk_profile']=risk_profile()
+        pending=row.get('pending_orders')
+        if pending:
+            pending=dict(pending)
+            observed=(row.get('component_times') or {}).get('pending_orders')
+            available=(row.get('coverage') or {}).get('pending_orders')=='available' and 0<=age(observed,now)<=900
+            pending['status']='fresh' if fresh and available else 'stale'
+            if not available:pending['complete']=False
+            row['pending_orders']=pending
+        from .jd_live_orders import history,progress
+        row['order_history']=history(conn,bank) if 'jd_live_orders' in tables else []
         declaration=declarations.get(bank)
         row.update(cash_source=snap.get('cash_source','unknown'),cash_declared_at=None,position_pct=None)
         api_cash=row['cash_source']=='jd_electronic_account_api' and row.get('cash_cny') is not None
@@ -144,27 +164,50 @@ def accounts(conn,now=None,include_advice=True):
         if api_cash:row['message']='已读取该银行黄金电子账户余额；不含绑定银行卡余额。'
         if include_advice and 'jd_live_advice' in tables:
             from .controls import active,control
-            for r in conn.execute('SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND id IN (SELECT MAX(id) FROM jd_live_advice WHERE bank=? GROUP BY analyst) ORDER BY analyst',(bank,bank)):
+            seen={}
+            for r in conn.execute('SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? ORDER BY id DESC LIMIT 20',(bank,)):
                 if not active(conn,r[1]):continue
                 changed=control(conn,r[1]).get('changed_at')
                 if changed and r[2]<=changed:continue
+                if seen.get(r[1],0)>=3:continue
                 value=json.loads(r[5])
                 state='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'review_required' if value.get('checks') else 'current'
-                row['advice'].append({'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'status':state,**value})
+                execution=progress(value,r[2],row['order_history'])
+                target=row['advice'] if not seen.get(r[1]) else row['advice_history']
+                target.append({'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,'execution_progress':execution,**value})
+                seen[r[1]]=seen.get(r[1],0)+1
+        row['review_status']=_review_status(conn,bank)
         out.append(row)
     return out
 
 
 def model_input(conn,now=None):
-    rows=accounts(conn,now,include_advice=False)
+    rows=accounts(conn,now,include_advice=True)
     if not any(r.get('fetched_at') for r in rows):return None
     fields=('bank','name','product_sku','status','fetched_at','revision','total_grams','sellable_grams','frozen_grams',
-            'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','quote','pending_order_count','recent_trade','sell_fee_rate','coverage')
+            'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
     values={r['bank']:{k:r.get(k) for k in fields} for r in rows}
     for row in rows:
+        values[row['bank']]['previous_advice']=[{k:v.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')} for v in row['advice']+row['advice_history']]
+        orders=values[row['bank']].get('pending_orders')
+        if orders and len(orders['records'])>5:
+            values[row['bank']]['pending_orders']={**orders,'records':orders['records'][:5],'source_complete':orders['complete'],'complete':False,'omitted_count':len(orders['records'])-5}
         for kind,limit in (('holding_details',3),('closed_positions',5)):
             part=row.get(kind)
             if part:values[row['bank']][kind]={**part,'records':part['records'][:limit],'limit':limit}
     return {'execution':'advice_only_user_submits','risk_profile':risk_profile(),'accounts':values,
-            'unknown':(['可用资金'] if any(r['cash_cny'] is None for r in rows) else [])+['完整待成交委托列表','完整成交历史'],
+            'unknown':(['可用资金'] if any(r['cash_cny'] is None for r in rows) else [])+(['完整待成交委托列表'] if any(not (r.get('pending_orders') or {}).get('complete') for r in rows) else [])+['完整成交历史'],
             'note':'两家为同一用户的真实资产；现金来源为用户声明时不可冒充接口返回；不可借用模拟盘现金或执行任何真实交易。'}
+
+
+def _review_status(conn,bank):
+    result=[]
+    from .controls import MODELS,active
+    from .ai_events import read
+    for model in MODELS:
+        if not active(conn,model):continue
+        runtime=conn.execute('SELECT value FROM state WHERE key=?',('ai_runtime:'+model,)).fetchone()
+        runtime=json.loads(runtime[0]) if runtime else {}
+        pending=[e for e in read(conn,model)['pending'] if e.get('data',{}).get('bank')==bank]
+        if pending:result.append({'analyst':model,'status':'running' if runtime.get('running') else 'queued','reasons':[e['reason'] for e in pending]})
+    return result

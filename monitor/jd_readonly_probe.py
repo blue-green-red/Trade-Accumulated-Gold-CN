@@ -25,6 +25,8 @@ READ_PATHS={
  '/gw2/generic/hj/h5/m/cfGetLatestPriceInfo',
  # Read-only detail requests observed after authentication on the official bank page.
  '/gw2/generic/hj/h5/m/cfQueryConditionWaittingNum',
+ '/gw2/generic/hj/h5/m/queryConditionalRuleList',
+ '/gw2/generic/jrm/h5/m/queryStdTradeListResourceNew',
  '/gw2/generic/CfGoldWeb/h5/m/cfQueryGoldProductInfo',
  '/gw2/generic/hj/h5/m/getKlineConfig',
  '/gw2/generic/jrm/h5/m/queryTradeDescStd',

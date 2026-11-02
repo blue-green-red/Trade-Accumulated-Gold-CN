@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
     channel TEXT NOT NULL, status TEXT NOT NULL, provider_id TEXT, provider_code TEXT,
     event_keys_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS notification_outbox (
+    event_key TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+    event_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notification_outbox_due ON notification_outbox(status,next_attempt_at);
 CREATE TABLE IF NOT EXISTS paper_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bank TEXT NOT NULL, status TEXT NOT NULL,          -- open / closed

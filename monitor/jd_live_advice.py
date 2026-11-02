@@ -23,6 +23,7 @@ PROMPT="""
 - 依risk_profile的风险偏好积极评估持有、加减仓与分批试错，不强制交易；预算参考不代表保证收益。历史峰值未知时不判定回撤触线，成本浮亏不等于峰值回撤。
 - 各户仅用自己的cash_cny/cash_source：接口优先，用户满仓现金0仅为备用声明。不得借用别户或模拟资金；现金0不加仓，买入预算未知可将grams留空并说明；卖出不超过可卖克数。
 - 使用各户快照、成本、银行报价及来源时间；账户数据缺失或过期给wait和原因。历史报价、持仓/清仓首页样本不冒充实时价或完整历史，未知项不补造。
+- 结合previous_advice的执行进度与pending_orders：挂单不等于成交，相近参数匹配仅为推断；已有同向未完成委托先评估保留或调整，避免重复建议同一笔操作。
 - 价格单位元/克，价格条件不保证成交；每户给reason、risk_note及valid_for_minutes，无账户输入填null。"""
 
 
@@ -40,6 +41,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
         if invalidation_note:warnings.append(invalidation_note)
         value['risk_profile']=inputs.get('risk_profile')
+        value['input_quote_status']=(source.get('quote') or {}).get('status')
+        value['input_state']={k:source.get(k) for k in ('total_grams','cash_cny','pending_order_count','recent_trade')}
         if source.get('status')!='fresh':warnings.append('输入账户数据不可用或过期')
         if value['action']=='sell' and (value['grams'] is None or value['grams']<=0 or value['grams']>(source.get('sellable_grams') or 0)+1e-8):warnings.append('卖出数量未填写或超过可卖克数')
         if value['action']=='buy':
@@ -78,9 +81,13 @@ def notification_events(conn,analyst,view_id):
         quantity='数量待确认' if value['grams'] is None else f"{value['grams']:g}克"
         price='' if value['price_cny'] is None else f"{value['price_cny']:g}元/克"
         expiry=datetime.fromisoformat(row[3]).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')
-        body=(f"**真实账户建议，需本人手动确认，尚未下单。**\n\n{account['name']} · {action}\n\n"
+        orders=account.get('pending_orders') or {}
+        order_note=f"已读取{len(orders.get('records',[]))}笔待成交明细" if orders.get('status')=='fresh' else '条件单明细待更新'
+        tracking=(current.get('execution_progress') or {}).get('status')
+        progress_note={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
+        body=(f"**真实账户建议，需本人手动确认；程序未自动下单。**\n\n{account['name']} · {action}\n\n"
               f"{quantity} · {condition}{price}\n\n有效至北京时间{expiry} · 建议 #{row[0]}\n\n"
-              f"{value['reason']}\n\n风险：{value['risk_note']}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
+              f"{value['reason']}\n\n风险：{value['risk_note']}\n\n委托查询：{order_note}{'；'+progress_note if progress_note else ''}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
         events.append({'key':key,'live_advice_id':row[0],'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
     return events

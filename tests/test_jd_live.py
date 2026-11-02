@@ -84,7 +84,7 @@ class LiveAccountTests(unittest.TestCase):
         for row in accounts(self.c):
             self.assertTrue(row['connected']);self.assertIsNone(row['pending_order_count'])
         methods={c.args[0] for c in client.query.call_args_list}
-        self.assertEqual(methods,{'indexData','indexDataStd','quote','recent_trade','pending_count','holding_details','closed_positions','cash_balance'})
+        self.assertEqual(methods,{'indexData','indexDataStd','quote','recent_trade','pending_count','pending_orders','order_records','holding_details','closed_positions','cash_balance'})
         http=ReadonlyClient();http.session=Mock()
         http.session.post.return_value.status_code=200
         http.session.post.return_value.json.return_value=payload()
@@ -172,6 +172,17 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertIn('Codex · 卖出建议',text);self.assertNotIn('Claude · 卖出建议',text)
                     self.assertNotIn('private-account',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    page.evaluate("""()=>{
+                      const a=DATA.live_readonly[0],o={order_key:'browser-unit',action:'sell',status:'pending',grams:4.98,price_cny:850.4,price_condition:'at_or_above',expires_at:new Date(Date.now()+86400000).toISOString()};
+                      a.pending_orders={complete:true,status:'fresh',records:[o]};a.pending_order_count=1;
+                      a.advice[0].execution_progress={status:'pending',match:'similar_parameters',orders:[o]};
+                      a.review_status=[{analyst:'codex',status:'queued',reasons:['真实条件单数量变化']}];
+                      renderStrategies(DATA);
+                    }""")
+                    text=page.locator('#panel-strategies').inner_text()
+                    self.assertIn('京东条件单明细 · 1 笔',text);self.assertIn('发现相近挂单，参数有调整',text)
+                    self.assertIn('待重新评估',text);self.assertIn('条件单有效至',text)
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                     status=page.evaluate("async()=> (await fetch('/api/live-readonly/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status")
                     self.assertEqual(status,403)
                     page.get_by_role('button',name='刷新真实账户',exact=True).click()
@@ -225,7 +236,7 @@ class LiveCashAndNotificationTests(unittest.TestCase):
         self.assertEqual(len(topics),4);self.assertTrue(all(not r['enabled'] for r in topics))
         save(self.c,'codex',1,{'zheshang':advice(),'minsheng':advice()},model_input(self.c));self.c.commit()
         events=notification_events(self.c,'codex',1);self.assertEqual(len(events),2)
-        self.assertTrue(all('尚未下单' in e['body'] for e in events))
+        self.assertTrue(all('程序未自动下单' in e['body'] for e in events))
         self.assertEqual(selected_events(self.c,events),[])
         for bank in PRODUCTS:set_subscription(self.c,'codex:live_'+bank,True)
         m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
