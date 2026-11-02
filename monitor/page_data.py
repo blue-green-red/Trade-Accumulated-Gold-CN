@@ -82,8 +82,12 @@ def _wave(conn, snap):
     indicator = dict(snap.get('daily_indicators') or {'status':'unavailable'})
     if indicator.get('status') in ('fresh','partial') and not -30 <= age_seconds(indicator.get('fetched_at'),now) <= 180:
         indicator['status'] = 'stale'
+    sampled = jd_daily_samples(conn,now)
+    # Coverage diagnostics remain in AI inputs; the chart needs only dated prices.
+    jd_daily = {k:sampled.get(k) for k in ('status','source','timezone','as_of')}
+    jd_daily['days'] = [{k:row.get(k) for k in ('date_bj','last_price_cny')} for row in sampled.get('days',[])]
     return {'as_of':now.isoformat(),'daily_reference':daily_reference(conn,now),
-            'daily_indicators':indicator,'jd_daily':jd_daily_samples(conn,now)}
+            'daily_indicators':indicator,'jd_daily':jd_daily}
 
 
 def _active_keys(conn, settings):

@@ -150,6 +150,7 @@ function eventStatus(e) {
         </button>
       </div>
       <Chart
+        :unit="wave === 'proxy' ? '美元/盎司' : '元/克'"
         :series="[
           {
             key: wave,
@@ -170,7 +171,7 @@ function eventStatus(e) {
         {{
           wave === "proxy"
             ? `国际黄金期货历史参考 · Yahoo Finance GC=F · 美元/盎司 · 数据截至 ${reference.last_day || "—"} · ${(reference.recent_sessions || []).length} 个交易日，仅开收盘。用于观察趋势，京东成交以银行报价为准。`
-            : `京东报价本地采样 · 元/克 · 北京时间自然日 · ${(jdDaily.days || []).length} 天；首末笔不是官方开收盘，采样高低不代表逐笔极值。`
+            : `京东报价本地采样 · 元/克 · 最近 ${(jdDaily.days || []).length} 个有报价日期的末笔价格，非官方收盘价。`
         }}
       </p>
       <div v-if="wave === 'proxy'" class="chips">
@@ -180,41 +181,7 @@ function eventStatus(e) {
           class="chip"
           >{{ key.replace("d", "日") }} {{ signed(value) }}%</span
         >
-      </div>
-      <details v-else class="more">
-        <summary>逐日采样明细与缺口</summary>
-        <div v-if="jdDaily.missing_dates?.length" class="notice warn">
-          未采到报价的交易日期：{{ jdDaily.missing_dates.join("、") }}
-        </div>
-        <p class="sub">
-          缺口按每分钟一档估算，仅表示采样覆盖，不等于接口故障。
-        </p>
-        <ul class="list">
-          <li
-            v-for="r in (jdDaily.days || []).slice().reverse()"
-            :key="r.date_bj"
-          >
-            <strong
-              >{{ r.date_bj }} ·
-              {{ r.session_ended ? "日期已结束" : "当日未结束" }} ·
-              {{ r.partial ? "采样不完整" : "分钟档覆盖完整" }}</strong
-            >
-            <div class="sub">
-              首笔 {{ num(r.first_price_cny) }} · 末笔
-              {{ num(r.last_price_cny) }} · 采样低/高
-              {{ num(r.sampled_low_cny) }} / {{ num(r.sampled_high_cny) }} 元/克
-            </div>
-            <div class="sub">
-              {{ r.samples }} 次采样 · 缺
-              {{ r.missing_minute_samples }} 个分钟档 · 最大采样间隔
-              {{ num(r.max_gap_minutes, 1) }} 分钟
-            </div>
-            <div class="sub">
-              {{ fmtTs(r.first_sample_at) }} 至 {{ fmtTs(r.last_sample_at) }}
-            </div>
-          </li>
-        </ul>
-      </details></Card
+      </div> </Card
     ><Card title="未来七天经济日历"
       ><SourceMeta
         :stamp="macro.calendar_fetched_at || macro.fetched_at"
@@ -372,6 +339,7 @@ function eventStatus(e) {
       </div>
       <Chart
         v-if="showPrice"
+        unit="美元/盎司"
         :series="[
           {
             key: 'xau',

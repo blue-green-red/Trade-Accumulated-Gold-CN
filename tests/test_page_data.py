@@ -49,6 +49,16 @@ class PageDataTests(unittest.TestCase):
         full=dashboard(f.settings)
         self.assertEqual(simulation['comparison']['models'][0]['baseline_return'],full['comparison']['models'][0]['baseline_return'])
 
+    def test_market_sends_dated_prices_without_sampling_diagnostics(self):
+        sample={'status':'available','source':'local','timezone':'Asia/Shanghai','as_of':'now',
+                'missing_dates':['2026-10-29'],'days':[{'date_bj':'2026-10-30','last_price_cny':847.45,
+                'first_price_cny':830,'samples':12,'missing_minute_samples':100,'max_gap_minutes':15,'partial':True}]}
+        with patch('monitor.wave_evidence.jd_daily_samples',return_value=sample):
+            result=page_data(self.f.settings,'market')['wave_evidence']['jd_daily']
+        self.assertEqual(result['days'],[{'date_bj':'2026-10-30','last_price_cny':847.45}])
+        self.assertNotIn('missing_dates',result)
+        self.assertEqual(sample['days'][0]['missing_minute_samples'],100)
+
     def test_page_caches_are_independent_and_control_writes_invalidate_them(self):
         settings=self.f.settings
         invalidate_pages(settings)

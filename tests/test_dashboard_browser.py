@@ -177,10 +177,60 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertIn('重要黄金消息测试',text);self.assertNotIn('普通黄金消息测试',text)
                 page.get_by_role('button',name='已公布',exact=True).click();self.assertIn('零售销售月率',page.locator('#panel-market').inner_text())
                 page.get_by_role('button',name='全部快讯',exact=True).click();self.assertIn('普通黄金消息测试',page.locator('#panel-market').inner_text())
-                page.get_by_role('button',name='京东逐日采样',exact=True).click();page.get_by_text('逐日采样明细与缺口',exact=True).click()
-                self.assertIn('缺口按每分钟一档估算',page.locator('#panel-market').inner_text())
+                page.get_by_role('button',name='京东逐日采样',exact=True).click()
+                self.assertNotIn('逐日采样明细与缺口',page.locator('#panel-market').inner_text())
+                self.assertNotIn('缺口按每分钟一档估算',page.locator('#panel-market').inner_text())
                 page.get_by_role('tab',name='总览',exact=True).click();page.get_by_role('tab',name='行情',exact=True).click()
                 self.assertEqual(page.get_by_role('button',name='已公布',exact=True).get_attribute('aria-pressed'),'true')
                 self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                 page.screenshot(path='/tmp/gold-vue-market-mobile.png',full_page=True)
             finally:b.close()
+
+    def test_chart_decimal_prices_touch_selection_and_responsive_axes(self):
+        from playwright.sync_api import sync_playwright
+        with local_dashboard() as (f,url),sync_playwright() as p:
+            value=page_data(f.settings,'market')
+            value['wave_evidence']['jd_daily']={'status':'available','days':[
+                {'date_bj':'2026-10-30','last_price_cny':836.12},
+                {'date_bj':'2026-10-31','last_price_cny':None},
+                {'date_bj':'2026-11-02','last_price_cny':847.45}]}
+            value['wave_evidence']['daily_reference']={'status':'available','last_day':'2026-10-30',
+                'recent_sessions':[{'date':'2026-10-29','close_usd':3901.23},{'date':'2026-10-30','close_usd':3898.90}],
+                'changes_pct':{'5d':1.25,'20d':2.34,'60d':3.45}}
+            b=self.browser(p);context=b.new_context(viewport={'width':390,'height':844},has_touch=True)
+            page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
+            page.route('**/api/pages/market',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(value)))
+            try:
+                page.goto(url+'/#market');chart=page.locator('#panel-market .native-chart').first
+                chart.get_by_role('status').wait_for()
+                self.assertIn('847.45 元/克',chart.inner_text());self.assertNotIn('08:00',chart.inner_text())
+                self.assertEqual(chart.locator('.chart-values').count(),0)
+                self.assertGreater(chart.locator('.chart-point-value').count(),0)
+                self.assertTrue(chart.locator('.chart-inline-tooltip').evaluate("e=>{const a=e.getBoundingClientRect(),b=e.parentElement.getBoundingClientRect();return a.x>=b.x&&a.right<=b.right+1&&a.y>=b.y&&a.bottom<=b.bottom}"))
+                self.assertNotIn('逐日采样明细与缺口',page.locator('#panel-market').inner_text())
+                svg=chart.locator('svg');chart.evaluate("e=>e.scrollIntoView({block:'center'})")
+                page.wait_for_function("(()=>{const e=document.querySelector('#panel-market .native-chart svg');return Math.abs(e.viewBox.baseVal.width-e.getBoundingClientRect().width)<2})()")
+                self.assertTrue(svg.evaluate("e=>Array.from(e.querySelectorAll('.chart-y-tick')).every(t=>t.getBBox().x>=0&&t.getBoundingClientRect().height>=9)"))
+                self.assertTrue(all('.' in t for t in chart.locator('.chart-y-tick').all_text_contents()))
+                self.assertEqual(len(chart.locator('polyline').get_attribute('points').split()),2)
+                point=svg.evaluate("e=>{const r=e.getBoundingClientRect(),p=e.querySelector('polyline').points.getItem(0);return {x:r.x+p.x*r.width/e.viewBox.baseVal.width,y:r.y+p.y*r.height/e.viewBox.baseVal.height}}")
+                page.touchscreen.tap(point['x'],point['y'])
+                self.assertIn('836.12 元/克',chart.get_by_role('status').inner_text())
+                svg.dispatch_event('pointerleave',{'pointerType':'touch'})
+                self.assertIn('836.12 元/克',chart.get_by_role('status').inner_text())
+                chart.screenshot(path='/tmp/gold-chart-price-mobile.png')
+                page.get_by_role('button',name='国际黄金期货历史参考',exact=True).click()
+                self.assertIn('3,898.90 美元/盎司',chart.get_by_role('status').inner_text())
+                self.assertNotIn('836.12',chart.get_by_role('status').inner_text())
+                self.assertIn('5日 +1.25%',page.locator('#panel-market').inner_text())
+                page.set_viewport_size({'width':1280,'height':900})
+                page.wait_for_function("(()=>{const e=document.querySelector('#panel-market .native-chart svg');return e.viewBox.baseVal.width>700&&Math.abs(e.viewBox.baseVal.width-e.getBoundingClientRect().width)<2})()")
+                self.assertTrue(svg.evaluate("e=>Array.from(e.querySelectorAll('.chart-y-tick')).every(t=>t.getBBox().x>=0)"))
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                page.get_by_role('tab',name='操盘对比',exact=True).click()
+                compare=page.locator('#panel-compare .native-chart');compare.locator('svg').wait_for()
+                compare.locator('svg').scroll_into_view_if_needed()
+                box=compare.locator('svg').bounding_box();page.mouse.move(box['x']+box['width']/2,box['y']+box['height']/2)
+                self.assertRegex(compare.get_by_role('status').inner_text(),r'\d+\.\d{2}%')
+                self.assertEqual(errors,[])
+            finally:context.close();b.close()

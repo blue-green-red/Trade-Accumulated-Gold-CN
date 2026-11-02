@@ -1570,14 +1570,71 @@ button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
+.native-chart {
+  display: flex;
+  flex-direction: column;
+}
 .native-chart svg {
   display: block;
   width: 100%;
   height: auto;
+  touch-action: pan-y;
+}
+.chart-plot {
+  position: relative;
+  order: 1;
+}
+.chart-inline-tooltip {
+  position: absolute;
+  box-sizing: border-box;
+  height: 42px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3px 7px;
+  border: 1px solid;
+  border-radius: 5px;
+  background: var(--surface);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.chart-inline-tooltip > span {
+  font-size: 10px;
+  color: var(--text-3);
+}
+.chart-inline-tooltip strong {
+  font-size: 12px;
+  white-space: nowrap;
 }
 .native-chart text {
-  font-size: 10px;
+  font-size: 11px;
   fill: var(--text-3);
+}
+.chart-values {
+  order: 2;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2, var(--grid));
+  font-size: 12px;
+}
+.chart-value-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.chart-value-row > span {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.chart-values strong {
+  font-variant-numeric: tabular-nums;
+}
+.chart-hint {
+  order: 2;
+  padding-top: 6px;
 }
 .chart-legend {
   display: flex;
