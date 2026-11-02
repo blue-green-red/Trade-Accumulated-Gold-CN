@@ -12,6 +12,7 @@ import base64
 import gzip
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -495,6 +496,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
 
+    def _auth_client_ip(self) -> str:
+        peer = self.client_address[0]
+        # The local Nginx instance overwrites X-Real-IP. Public requests to
+        # 18080 must never be able to spoof their authentication limit bucket.
+        if peer in ("127.0.0.1", "::1"):
+            try:
+                return str(ipaddress.ip_address(self.headers.get("X-Real-IP", "")))
+            except ValueError:
+                pass
+        return peer
+
     def _authorized(self) -> bool:
         if not self.password:
             return True
@@ -539,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
-        ip = self.client_address[0]
+        ip = self._auth_client_ip()
         if _locked_out(ip):
             self._send(429, b"too many attempts", "text/plain")
             return
@@ -615,7 +627,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, b'{"error":"model control unavailable"}', "application/json")
 
     def do_GET(self):
-        ip = self.client_address[0]
+        ip = self._auth_client_ip()
         if _locked_out(ip):
             self._send(429, "尝试次数过多，请 10 分钟后再试".encode(), "text/plain; charset=utf-8")
             return

@@ -435,6 +435,41 @@ sudo systemctl enable --now gold-web
 
 模板提供重启策略和内存限制：监控900MB、网页150MB。内存限制并不保证任何配置下都不会耗尽内存，应结合模型进程和服务日志观察。
 
+### HTTPS 域名入口与自动续期
+
+当前看板入口：**https://gold.goalgoal.fun/#overview**。登录沿用现有看板密码，用户名可填 `gold`。域名的 HTTP 请求自动跳转 HTTPS；原 IP 的18080入口保留。域名入口与IP入口属于不同站点，首次访问域名需要重新登录，界面偏好与浏览器缓存也分别保存。
+
+域名 `gold.goalgoal.fun` 的 A 记录指向 `8.218.117.20`，安全组需要放行 TCP 80、443。Nginx 转发至本机 `127.0.0.1:18080`，保留认证、同源控制校验、ETag及前端静态资源缓存，不缓存账户接口。证书使用免费的 Let's Encrypt，2026-11-02首次签发，当前证书有效期至2027-01-31；实际有效期以服务器证书为准。
+
+密码错误限流仅信任本机回环代理覆盖的 `X-Real-IP`，按实际访问者分别计数，避免所有域名访问者共享回环IP的锁定；公网直接访问18080时忽略该请求头。
+
+HTTPS 使用独立的 `gold-https.service` 和 `/etc/nginx/gold.conf`，仅一个worker，内存上限64MB；不会加载其他 `sites-enabled` 站点，也不需要启动系统原有的 `nginx.service`。修改仓库里的部署模板后需重新复制、测试并reload，服务不会自动读取仓库修改。
+
+首次部署（Ubuntu/Debian，模板已填写当前域名和后端端口；部署其他域名时先修改模板中的域名与证书路径）：
+
+```bash
+sudo apt-get install --no-install-recommends certbot
+sudo install -d -m 755 /var/lib/gold-acme/.well-known/acme-challenge
+sudo install -m 644 deploy/gold-https-http.conf /etc/nginx/gold.conf
+sudo install -m 644 deploy/gold-https.service /etc/systemd/system/gold-https.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now gold-https.service
+sudo certbot certonly --webroot -w /var/lib/gold-acme \
+  -d gold.goalgoal.fun --cert-name gold.goalgoal.fun \
+  --key-type ecdsa --non-interactive --agree-tos \
+  --register-unsafely-without-email --no-eff-email
+sudo install -m 644 deploy/gold-https.conf /etc/nginx/gold.conf
+sudo nginx -t -c /etc/nginx/gold.conf
+sudo systemctl reload gold-https.service
+sudo install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+sudo install -m 755 deploy/gold-https-renew-hook.sh \
+  /etc/letsencrypt/renewal-hooks/deploy/gold-https-reload
+sudo systemctl enable --now certbot.timer
+sudo certbot renew --cert-name gold.goalgoal.fun --dry-run --no-random-sleep-on-renew
+```
+
+`certbot.timer` 每天定时检查续期条件，到期前自动续期；部署钩子在本域名续期成功后先验证Nginx配置，再reload加载新证书。HTTP-01验证路径独立于看板密码，不代理至后端；**80端口和该验证路径需长期保留**。证书及私钥只保存在 `/etc/letsencrypt/`，不得复制到代码库、前端或模型输入。当前ACME账户未填写邮箱，续期失败排查使用 `systemctl status certbot.service` 和 `journalctl -u certbot.service`，HTTPS服务状态使用 `systemctl status gold-https.service`。
+
 ## Vue 前端与构建
 
 前端源码位于 `frontend/src/`，使用 Vue 3 单文件组件与 Vite。七个页面分别构建为按需加载的代码块，真实账户详情、图表和预测成绩单继续按需加载。沿用 `#overview`、`#strategies` 等地址；界面偏好保存在本地，账户数据只在当前标签页内存中短时复用。
