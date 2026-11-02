@@ -658,6 +658,7 @@ function liveReadonlyPanel(d) {
   const actions={buy:"买入建议",sell:"卖出建议",hold:"持有建议",wait:"观望建议"};
   const states={current:"有效 · 人工参考",review_required:"建议需核对",expired:"建议已到期",account_changed:"账户已变化 · 需重分析",data_unavailable:"账户数据待更新"};
   const pending=d.live_readonly_refresh || {}, syncing=d.live_readonly_sync || {};
+  const needsLogin=rows.some(a=>a.status==="login_required") || (!fresh && syncing.status==="login_required");
   const recently=stamp=>stamp && Date.now()-new Date(stamp).getTime()>=0 && Date.now()-new Date(stamp).getTime()<180000;
   const busy=(["queued","running"].includes(pending.status) && recently(pending.requested_at)) || (syncing.status==="running" && recently(syncing.at));
   const interval=Number(syncing.interval_seconds), cadence=syncing.intervals?`报价约${num(syncing.intervals.quote/60,0)}分钟 · 账户/委托约${num(syncing.intervals.core/60,0)}分钟 · 历史约${num(syncing.intervals.history/60,0)}分钟`:Number.isFinite(interval) && interval>0?`约每${num(interval/60,0)}分钟采集` : "等待采集服务";
@@ -765,9 +766,8 @@ function liveReadonlyPanel(d) {
       el("span",{class:"live-policy-item"},"回撤参考线",el("strong",{},`${num(profile?.drawdown_limit_pct ?? 20,0)}%`)),
       el("span",{class:"live-policy-note"},"用于建议风格，不自动交易；历史净值不完整，不能据此判断是否触线。")),
     panels.length?el("div",{class:"live-bank-grid"},panels):el("div",{class:"empty"},"真实账户数据待接入"),
-    el("details",{class:"more live-setup","data-detail-key":"jd-readonly-setup"},el("summary",{},"在自己电脑登录并检查只读查询"),
-      el("div",{class:"sub"},"服务器专用会话失效时，需要本人重新登录京东；此看板不接收京东密码或验证码。电脑助手仅供备用诊断。"),
-      el("a",{href:"/downloads/jd-readonly-probe.py",download:"jd_readonly_probe.py",class:"link-btn"},"下载电脑端只读助手")));
+    needsLogin?el("div",{class:"notice warn",role:"status"},el("strong",{},"需要重新登录京东"),
+      el("div",{class:"sub"},"京东会话已失效或尚未建立。需要登录时再开启ECS临时远程浏览器，由你完成登录；两家银行共用会话，登录后自动恢复采集。本看板不接收京东密码或验证码。")):null);
   panel.classList.add("live-panel");return panel;
 }
 function renderStrategies(d) {

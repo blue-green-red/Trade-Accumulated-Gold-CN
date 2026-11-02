@@ -139,13 +139,15 @@ cat /run/gold-jd-readonly/access.txt
 
 SSH模式需保持终端连接，用本机浏览器访问 `http://127.0.0.1:1455/vnc.html?autoconnect=1&resize=scale`，输入上一步的VNC临时密码，在远程京东页面由本人完成扫码/验证码/身份验证。**不要点击买卖、开户或签约**。登录完成后在页面切换两家银行，由服务器继续检查查询，无需导出本地报告。
 
-执行 `systemctl stop gold-jd-readonly` 或关闭Chrome会结束会话。退出清除临时VNC密码文件；京东浏览器会话只保存在被Git忽略的 `monitor/data/jd-remote-browser/chrome-profile`（目录700），不导出Cookie、不进入模型输入或网页接口，不启用浏览器密码保存。诊断状态仅记录脱敏字段结构，不包含持仓金额。后续是否复用此会话及能保持多久，仍需实际验证。当前 `connected=false` 表示尚未接通后台账户同步，并非假定登录成功。
+执行 `systemctl stop gold-jd-readonly` 或关闭Chrome会结束临时远程访问，已保存的京东登录配置仍可供 `gold-jd-sync` 按需恢复；会话是否有效由京东服务端决定，失效后需要本人重新登录。浏览器配置保存在被Git忽略的 `monitor/data/jd-remote-browser/chrome-profile`（目录700），不导出Cookie、不进入模型输入或网页接口，不启用浏览器密码保存。远程诊断只记录脱敏字段结构，不包含持仓金额；实际同步状态以账户页和采集服务为准。正常同步时账户页不展示电脑助手或重新登录引导，只在会话失效/尚未建立时提示开启临时远程浏览器登录。
 
 浏览器导航前先安装与本地助手相同的只读查询白名单，并绕过已保存的Service Worker缓存代理，再开放远程入口；拦截器进程、Chrome或任一组件退出时整个会话停止。没有真实下单能力。需要更新白名单时先停止会话，修改并重新测试后再启动。
 
 ### 本地助手备用方式
 
-需要本人在**自己的电脑**完成登录。账户页可下载独立脚本 `jd_readonly_probe.py`，只需Python和Playwright，不加载本项目配置：
+仅供开发诊断或字段结构采样，正常后台同步不需要在个人电脑安装或运行，前端账户页不再提供该下载引导。服务器会话需要更新时，优先通过上面的ECS临时远程浏览器重新登录。
+
+确需本地诊断时，将仓库中的 `monitor/jd_readonly_probe.py` 复制到个人电脑，使用独立脚本 `jd_readonly_probe.py` 并由本人完成登录。只需Python和Playwright，不加载本项目配置：
 
 ```bash
 python -m pip install playwright

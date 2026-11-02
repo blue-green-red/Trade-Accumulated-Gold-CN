@@ -170,6 +170,8 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertIn('12.5000 克',text);self.assertIn('成本均价',text)
                     self.assertIn('待处理条件单 0 笔',text);self.assertIn('待处理条件单 未知',text)
                     self.assertIn('Codex · 卖出建议',text);self.assertNotIn('Claude · 卖出建议',text)
+                    self.assertNotIn('需要重新登录京东',text)
+                    self.assertEqual(page.get_by_role('link',name='下载电脑端只读助手',exact=True).count(),0)
                     self.assertNotIn('private-account',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                     page.evaluate("""()=>{
