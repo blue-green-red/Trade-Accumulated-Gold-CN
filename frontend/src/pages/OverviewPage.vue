@@ -56,6 +56,9 @@ const activeAdvice = (a) =>
           <div v-for="v in activeAdvice(a)" :key="v.analyst" class="sub">
             {{ modelNames[v.analyst] }}：{{ actions[v.action] }}建议 · 有效至
             {{ fmtTs(v.expires_at) }}
+            <span v-if="v.suggested_order_count">
+              · 附 {{ v.suggested_order_count }} 笔待确认条件单方案</span
+            >
           </div>
           <div v-if="!activeAdvice(a).length" class="sub">
             暂无当前有效建议，请查看账户状态及最新分析。

@@ -183,6 +183,10 @@ class LiveDashboardTests(unittest.TestCase):
                     a.update(pending_orders={'complete':True,'status':'fresh','records':[order]},pending_order_count=1,
                              quote={'buy_price_cny':836,'sell_price_cny':836,'quoted_at':NOW.isoformat(),'status':'fresh'})
                     a['advice'][0].update(execution_progress={'status':'pending','match':'similar_parameters','orders':[order]},
+                        schema_version=3,reassessment={'change_summary':'新增事件支持反弹，复核原判断。','thesis_status':'weakened',
+                          'thesis':'原反弹假设削弱，跌破观察区重新评估。','price_basis':'保留假设目标并重算扣费空间，非固定上涨上限。'},
+                        suggested_orders=[{'kind':'take_profit_stop_loss','grams':2,'price_cny':860,'loss_price_cny':820,
+                          'expires_at':(NOW+timedelta(days=1)).isoformat(),'reason':'为无人盯盘预留一笔组合条件单。','checks':[]}],
                         order_management=[{'order_key':order['order_key'],'action':'replace','state':'current','input_order':order,
                           'effective_replacement':{'grams':4.5,'price_cny':848,'price_condition':'at_or_above','expires_at':order['expires_at']},'reason':'按现有单调整参数','checks':[]}],
                         review_conditions=[{'condition':'at_or_below','price_cny':830.59,'quote_side':'sell','order_key':order['order_key'],
@@ -197,7 +201,17 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertIn('建议改单',text);self.assertIn('修改后：卖出4.5000 克',text)
                     self.assertIn('价格触发复评',text);self.assertIn('已触发 · 待复评',text)
                     self.assertIn('不自动撤改或下单',text)
+                    self.assertIn('本轮变化',text);self.assertIn('原假设已削弱',text)
+                    self.assertIn('价位依据',text);self.assertIn('建议预挂条件单',text)
+                    self.assertIn('止盈止损卖出 · 2.0000 克',text);self.assertIn('尚未提交京东',text)
+                    self.assertIn('止损 ≤ 820.00 元/克',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    page.screenshot(path='/tmp/gold-live-proposals-mobile.png',full_page=True)
+                    page.evaluate('window.originalDateNow=Date.now;Date.now=()=>window.originalDateNow()+2*86400000')
+                    page.wait_for_timeout(1200)
+                    self.assertIn('条件单方案已到期',page.locator('#panel-strategies').inner_text())
+                    self.assertIn('建议已到期',page.locator('#panel-strategies').inner_text())
+                    page.evaluate('Date.now=window.originalDateNow')
                     page.set_viewport_size({'width':1280,'height':900})
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                     page.set_viewport_size({'width':390,'height':844})

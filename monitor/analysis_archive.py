@@ -53,7 +53,7 @@ class AnalysisArchive:
         settings=analyst.settings
         root=Path(__file__).parent
         hashes={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in
-                ('ai.py','autonomous.py','ai_inputs.py','codex_runtime.py','history_tool.py','risk_profiles.py','jd_live_readonly.py','jd_live_advice.py','jd_live_orders.py','jd_live_review.py','jd_live_conditions.py')}
+                ('ai.py','autonomous.py','ai_inputs.py','codex_runtime.py','history_tool.py','risk_profiles.py','jd_live_readonly.py','jd_live_advice.py','jd_live_proposals.py','jd_live_orders.py','jd_live_review.py','jd_live_conditions.py')}
         meta={'format_version':1,'attempt_id':attempt,'trigger':trigger,'snapshot_at':context.get('snapshot_at'),
               'trading_mode':settings.ai_trading_mode,'ai_optimize':settings.ai_optimize,
               'search_budget':settings.ai_max_searches,'history_budget':settings.ai_history_max_queries,

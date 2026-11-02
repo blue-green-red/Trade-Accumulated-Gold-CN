@@ -330,7 +330,7 @@ const cashSource = (a) =>
                         : num(v.price_cny) + " 元/克"
                     }}
                   </div>
-                  <div class="sub">
+                  <div v-if="!v.suggested_orders?.length" class="sub">
                     {{
                       orderStates[v.execution_progress?.status] ||
                       (v.execution_progress?.status === "ambiguous"
@@ -340,6 +340,23 @@ const cashSource = (a) =>
                       v.execution_progress?.match === "similar_parameters"
                         ? " · 参数有调整"
                         : ""
+                    }}
+                  </div>
+                  <div
+                    v-for="(order, i) in v.suggested_orders || []"
+                    :key="i"
+                    class="sub"
+                  >
+                    条件单方案：{{
+                      order.kind === "limit_buy" ? "买入" : "卖出"
+                    }}
+                    {{ quantity(order.grams) }} ·
+                    {{ num(order.price_cny) }} 元/克 ·
+                    {{
+                      orderStates[order.execution_progress?.status]
+                        ? orderStates[order.execution_progress.status] +
+                          "（关联推断）"
+                        : "未关联到已挂单"
                     }}
                   </div>
                 </li>

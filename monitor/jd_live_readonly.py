@@ -181,6 +181,9 @@ def accounts(conn,now=None,include_advice=True):
                 execution=progress(value,r[2],row['order_history'])
                 target=row['advice'] if not seen.get(r[1]) else row['advice_history']
                 entry={'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,'execution_progress':execution,**value}
+                from .jd_live_orders import proposal_progress
+                for proposal in entry.get('suggested_orders',[]):
+                    proposal['execution_progress']=proposal_progress(proposal,r[2],row['order_history'],value.get('valid_for_minutes',240))
                 from .jd_live_conditions import condition_state,management_state
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
                 for condition in entry.get('review_conditions',[]):condition['monitoring']=condition_state(conn,row,entry,condition,now)
@@ -202,10 +205,16 @@ def model_input(conn,now=None):
         previous=[];counts={}
         for value in row['advice']+row['advice_history']:
             name=value['analyst'];counts[name]=counts.get(name,0)+1
-            if counts[name]<=3 or value['id'] in active_links:
+            if counts[name]==1 or value['id'] in active_links:
                 brief={k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')}
+                if counts[name]==1:
+                    reason=value.get('reason') or ''
+                    brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
+                    if value.get('reassessment'):brief['reassessment']=value['reassessment']
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
-                brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key')} for o in value.get('review_conditions',[])]
+                brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key','reason')} for o in value.get('review_conditions',[])] if counts[name]==1 else []
+                if value.get('suggested_orders'):
+                    brief['suggested_orders']=[{k:o.get(k) for k in ('kind','grams','price_cny','loss_price_cny','expires_at','reason','execution_progress')} for o in value['suggested_orders']]
                 previous.append(brief)
         values[row['bank']]['previous_advice']=previous
         orders=values[row['bank']].get('pending_orders')

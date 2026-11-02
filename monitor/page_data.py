@@ -182,7 +182,8 @@ def page_data(settings: Settings, page, view='auto'):
             live = live_accounts(conn)
             if page == 'overview':
                 result['live_readonly'] = [{**{k:a.get(k) for k in ('bank','name','connected','status','fetched_at','pending_order_count')},
-                    'advice':[{k:v.get(k) for k in ('analyst','action','status','expires_at')} for v in a.get('advice',[])]} for a in live]
+                    'advice':[{**{k:v.get(k) for k in ('analyst','action','status','expires_at')},
+                               'suggested_order_count':len(v.get('suggested_orders',[]))} for v in a.get('advice',[])]} for a in live]
             else:
                 result['account_view'] = ('live' if any(a.get('fetched_at') for a in live) else 'simulation') if view == 'auto' else view
                 if result['account_view'] == 'live':

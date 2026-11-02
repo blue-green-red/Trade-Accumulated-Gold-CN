@@ -74,6 +74,26 @@ const associated = (c) =>
   (props.account.pending_orders?.records || []).find(
     (o) => o.order_key === c.order_key,
   );
+const thesisStates = {
+  new: "首次判断",
+  valid: "原假设仍成立",
+  weakened: "原假设已削弱",
+  invalidated: "原假设已失效",
+};
+const proposalNames = {
+  limit_buy: "限价买入",
+  limit_sell: "限价卖出",
+  take_profit_stop_loss: "止盈止损卖出",
+};
+const proposalState = (order) => {
+  const progress = order.execution_progress;
+  if (progress?.orders?.length)
+    return `${orderStates[progress.status] || "存在相近挂单"} · 关联推断`;
+  if (pastDeadline(order)) return "条件单方案已到期";
+  if (state.value !== "current") return states[state.value] || "待更新";
+  if (order.checks?.length) return "参数需核对";
+  return "待你确认挂单";
+};
 </script>
 <template>
   <article
@@ -95,13 +115,13 @@ const associated = (c) =>
     </div>
     <div class="live-advice-values">
       <div>
-        <div class="l">建议数量</div>
+        <div class="l">即时买卖数量</div>
         <div class="v">
           {{
             advice.grams == null
               ? ["buy", "sell"].includes(advice.action)
                 ? "数量待确认"
-                : "不涉及买卖"
+                : "本轮不立即买卖"
               : quantity(advice.grams)
           }}
         </div>
@@ -118,6 +138,78 @@ const associated = (c) =>
       分析 {{ fmtTs(advice.created_at) }} · 到期
       {{ fmtTs(advice.expires_at) }} · 北京时间
     </div>
+    <section v-if="advice.reassessment" class="live-quote live-reassessment">
+      <div class="live-section-heading">
+        <strong>本轮变化</strong>
+        <span class="sub">{{
+          thesisStates[advice.reassessment.thesis_status] || "待复核"
+        }}</span>
+      </div>
+      <p class="live-advice-reason">{{ advice.reassessment.change_summary }}</p>
+      <div class="sub">
+        <strong>当前假设：</strong>{{ advice.reassessment.thesis }}
+      </div>
+      <div class="sub">
+        <strong>价位依据：</strong>{{ advice.reassessment.price_basis }}
+      </div>
+    </section>
+    <section class="live-proposals">
+      <div class="live-section-heading" style="margin-top: 14px">
+        <strong>建议预挂条件单</strong><span class="sub">需你在京东确认</span>
+      </div>
+      <div v-if="!advice.suggested_orders?.length" class="sub">
+        {{
+          advice.schema_version >= 3
+            ? "本轮不建议新增条件单，原因见方案比较。"
+            : "本条历史分析未提供条件单方案。"
+        }}
+      </div>
+      <template v-else>
+        <div class="sub">
+          以下是挂单方案，尚未提交京东。休市不保证触发或成交。
+        </div>
+        <div
+          v-for="(order, i) in advice.suggested_orders"
+          :key="i"
+          class="live-quote"
+        >
+          <div class="live-section-heading">
+            <strong
+              >{{ proposalNames[order.kind] || "条件单" }} ·
+              {{ quantity(order.grams) }}</strong
+            >
+            <span class="sub">{{ proposalState(order) }}</span>
+          </div>
+          <div class="live-advice-reason">
+            {{
+              order.kind === "take_profit_stop_loss"
+                ? "止盈 ≥"
+                : order.kind === "limit_buy"
+                  ? "买入价 ≤"
+                  : "卖出价 ≥"
+            }}
+            {{ num(order.price_cny) }} 元/克
+            <template v-if="order.kind === 'take_profit_stop_loss'">
+              · 止损 ≤ {{ num(order.loss_price_cny) }} 元/克</template
+            >
+          </div>
+          <div class="sub">
+            条件单截止 {{ fmtTs(order.expires_at) }} · 北京时间
+          </div>
+          <div class="live-advice-reason">{{ order.reason }}</div>
+          <div
+            v-for="check in order.checks || []"
+            :key="check"
+            class="live-advice-check"
+          >
+            需核对：{{ check }}
+          </div>
+        </div>
+        <div class="sub">
+          请在建议有效期内确认是否挂单；挂出后按京东条件单自身期限生效。
+        </div>
+      </template>
+    </section>
     <div
       v-if="
         advice.schema_version >= 2 || Array.isArray(advice.order_management)
@@ -268,7 +360,9 @@ const associated = (c) =>
       需核对：{{ check }}
     </div>
     <details class="more">
-      <summary>查看依据与风险</summary>
+      <summary>
+        {{ advice.reassessment ? "查看方案比较与风险" : "查看依据与风险" }}
+      </summary>
       <p class="live-advice-reason">
         {{ advice.reason || "本轮未提供判断依据" }}
       </p>

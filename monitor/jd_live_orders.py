@@ -57,7 +57,11 @@ def record(conn,bank,orders,at):
             if order.get('created_at'):
                 for row in conn.execute('SELECT id,analyst,created_at,advice_json FROM jd_live_advice WHERE bank=? AND julianday(created_at)<=julianday(?) AND julianday(expires_at)>=julianday(?) ORDER BY id DESC LIMIT 30',
                                         (bank,order['created_at'],order['created_at'])):
-                    if row[1] not in links and progress(json.loads(row[3]),row[2],[order])['status']!='not_observed':links[row[1]]=row[0]
+                    value=json.loads(row[3])
+                    matched=progress(value,row[2],[order])['status']!='not_observed' or any(
+                        proposal_progress(p,row[2],[order],value.get('valid_for_minutes',240))['status']!='not_observed'
+                        for p in value.get('suggested_orders',[]))
+                    if row[1] not in links and matched:links[row[1]]=row[0]
             order['advice_links']=links
             conn.execute('INSERT INTO jd_live_orders VALUES(?,?,?,?,?) ON CONFLICT(bank,order_key) DO UPDATE SET data_json=excluded.data_json,seen_at=excluded.seen_at',
                          (bank,order['order_key'],json.dumps(order,ensure_ascii=False),at,at))
@@ -102,11 +106,25 @@ def progress(advice,created_at,orders):
             if not grams or not price or order.get('grams') is None or order.get('price_cny') is None:continue
             if abs(order['grams']-grams)>max(.05,grams*.001) or abs(order['price_cny']-price)>price*.001:continue
             if order.get('price_condition')!=advice.get('price_condition'):continue
+            if advice.get('kind') and order.get('kind')!=advice['kind']:continue
+            loss=advice.get('loss_price_cny')
+            if advice.get('kind')=='take_profit_stop_loss' and (loss is None or order.get('loss_price_cny') is None or abs(order['loss_price_cny']-loss)>loss*.001):continue
         except (ValueError,TypeError,KeyError):continue
         exact=abs(order['grams']-grams)<.0001 and abs(order['price_cny']-price)<.005
+        if advice.get('kind')=='take_profit_stop_loss':exact=exact and abs(order['loss_price_cny']-advice['loss_price_cny'])<.005
         matches.append({**order,'match':'exact_parameters' if exact else 'similar_parameters',
                         'association':'inferred_from_parameters_and_time_not_submission_proof'})
     active=[o for o in matches if o['status'] in ('pending','partially_filled')]
     if len(active)==1:matches=active
     return {'status':matches[0]['status'] if len(matches)==1 else 'ambiguous' if matches else 'not_observed',
             'match':matches[0]['match'] if len(matches)==1 else None,'orders':matches[:3]}
+
+
+def proposal_progress(proposal,created_at,orders,valid_for_minutes=240):
+    from .jd_live_conditions import stamp
+    start,end=stamp(created_at),stamp(proposal.get('expires_at'))
+    if start and end:valid_for_minutes=min(valid_for_minutes,max(0,(end-start).total_seconds()/60))
+    kind=proposal['kind']
+    return progress({**proposal,'action':'buy' if kind=='limit_buy' else 'sell',
+                     'price_condition':'at_or_below' if kind=='limit_buy' else 'at_or_above' if kind=='limit_sell' else 'none',
+                     'valid_for_minutes':valid_for_minutes},created_at,orders)
