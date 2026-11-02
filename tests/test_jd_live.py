@@ -176,13 +176,22 @@ class LiveDashboardTests(unittest.TestCase):
                       const a=DATA.live_readonly[0],o={order_key:'browser-unit',action:'sell',status:'pending',grams:4.98,price_cny:850.4,price_condition:'at_or_above',expires_at:new Date(Date.now()+86400000).toISOString()};
                       a.pending_orders={complete:true,status:'fresh',records:[o]};a.pending_order_count=1;
                       a.advice[0].execution_progress={status:'pending',match:'similar_parameters',orders:[o]};
+                      a.quote={buy_price_cny:836,sell_price_cny:836,quoted_at:new Date().toISOString(),status:'fresh'};
+                      a.advice[0].order_management=[{order_key:o.order_key,action:'replace',state:'current',input_order:o,effective_replacement:{grams:4.5,price_cny:848,price_condition:'at_or_above',expires_at:o.expires_at},reason:'按现有单调整参数',checks:[]}];
+                      a.advice[0].review_conditions=[{condition:'at_or_below',price_cny:830.59,quote_side:'sell',order_key:o.order_key,reason:'达到阈值重新评估现有单',monitoring:{status:'queued',last_quote_at:new Date().toISOString(),last_price_cny:830.5,triggered_at:new Date().toISOString()}}];
                       a.review_status=[{analyst:'codex',status:'queued',reasons:['真实条件单数量变化']}];
                       renderStrategies(DATA);
                     }""")
                     text=page.locator('#panel-strategies').inner_text()
                     self.assertIn('京东条件单明细 · 1 笔',text);self.assertIn('发现相近挂单，参数有调整',text)
                     self.assertIn('待重新评估',text);self.assertIn('条件单有效至',text)
+                    self.assertIn('建议改单',text);self.assertIn('修改后：卖出4.5000 克',text)
+                    self.assertIn('价格触发复评',text);self.assertIn('已触发 · 待复评',text)
+                    self.assertIn('不自动撤改或下单',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    page.set_viewport_size({'width':1280,'height':900})
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    page.set_viewport_size({'width':390,'height':844})
                     status=page.evaluate("async()=> (await fetch('/api/live-readonly/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status")
                     self.assertEqual(status,403)
                     page.get_by_role('button',name='刷新真实账户',exact=True).click()

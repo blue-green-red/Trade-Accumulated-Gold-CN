@@ -108,7 +108,7 @@ def age(stamp,now):
 def account_identity(data):
     identity={k:data.get(k) for k in ('product_sku','total_grams','sellable_grams','frozen_grams','average_cost_cny','pending_order_count','recent_trade','cash_cny')}
     part=data.get('pending_orders')
-    identity['orders']=[{k:r.get(k) for k in ('order_key','status','grams','filled_grams','price_cny','loss_price_cny','expires_at')} for r in sorted((part or {}).get('records',[]),key=lambda r:r['order_key'])] if part else None
+    identity['orders']=[{k:r.get(k) for k in ('order_key','action','kind','status','grams','filled_grams','price_condition','price_cny','loss_price_cny','expires_at')} for r in sorted((part or {}).get('records',[]),key=lambda r:r['order_key'])] if part else None
     outcomes=data.get('order_outcomes')
     identity['order_outcomes']=sorted(outcomes,key=lambda r:r['order_key']) if outcomes else outcomes
     return identity
@@ -180,7 +180,11 @@ def accounts(conn,now=None,include_advice=True):
                 state='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'review_required' if value.get('checks') else 'current'
                 execution=progress(value,r[2],row['order_history'])
                 target=row['advice'] if not seen.get(r[1]) else row['advice_history']
-                target.append({'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,'execution_progress':execution,**value})
+                entry={'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,'execution_progress':execution,**value}
+                from .jd_live_conditions import condition_state,management_state
+                for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
+                for condition in entry.get('review_conditions',[]):condition['monitoring']=condition_state(conn,row,entry,condition,now)
+                target.append(entry)
                 seen[r[1]]=seen.get(r[1],0)+1
         row['review_status']=_review_status(conn,bank)
         out.append(row)
@@ -199,7 +203,10 @@ def model_input(conn,now=None):
         for value in row['advice']+row['advice_history']:
             name=value['analyst'];counts[name]=counts.get(name,0)+1
             if counts[name]<=3 or value['id'] in active_links:
-                previous.append({k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')})
+                brief={k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')}
+                brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
+                brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key')} for o in value.get('review_conditions',[])]
+                previous.append(brief)
         values[row['bank']]['previous_advice']=previous
         orders=values[row['bank']].get('pending_orders')
         if orders and len(orders['records'])>5:

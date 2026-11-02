@@ -612,6 +612,46 @@ function assetLegendLabel(series) {
   if(!match)return series.name;
   return assetModel==="all" ? `${ANALYST[model]} · ${{short:"短",medium:"中",long:"长",low:"低风险",standard:"标准",high:"高风险"}[match[1]]}/${match[2]==="full"?"满":"空"}` : ACCOUNT_LABELS[mode];
 }
+function renderLiveStructure(a,v,parentState,quoteFresh) {
+  const structured=v.schema_version>=2 || Array.isArray(v.order_management);
+  if(!structured)return el("div",{class:"live-advice-check"},"本条旧分析未提供结构化挂单处理或价格复评条件，待下一轮更新。");
+  const symbol={at_or_above:"≥",at_or_below:"≤"};
+  const terms=o=>`${o.action==="sell"?"卖出":o.action==="buy"?"买入":""}${o.grams==null?"数量待确认":num(o.grams,4)+" 克"} · ${symbol[o.price_condition] || "参考"} ${o.price_cny==null?"价格待确认":num(o.price_cny,2)+" 元/克"}`;
+  const labels={current:"有效 · 人工参考",monitoring:"监控中",queued:"已触发 · 待复评",reviewed:"已触发 · 已纳入复评",latched:"持续满足 · 不重复触发",market_closed:"休市暂停",expired:"已到期",account_changed:"账户或委托变化 · 已失效",data_unavailable:"等待新鲜报价或挂单明细",order_inactive:"目标挂单已结束或待更新",review_required:"需核对"};
+  const actions={keep:"保留原单",cancel:"建议撤单",replace:"建议改单"};
+  const children=[el("div",{class:"live-section-heading",style:"margin-top:12px"},el("strong",{},"挂单处理建议"),el("span",{class:"sub"},"撤改需你在京东操作"))];
+  const management=v.order_management || [];
+  if(!management.length)children.push(el("div",{class:"sub"},"本轮没有挂单处理建议"));
+  for(const item of management){
+    const original=item.input_order || (a.pending_orders?.records || []).find(o=>o.order_key===item.order_key) || {};
+    const state=parentState!=="current"?parentState:item.state || "review_required";
+    const newOrder=item.effective_replacement || {};
+    children.push(el("div",{class:"live-quote",style:"margin-top:8px"},
+      el("div",{class:"live-section-heading"},el("strong",{},actions[item.action] || "处理建议待核对"),el("span",{class:"sub"},state==="current"?(item.action==="keep"?(original.status==="partially_filled"?"建议保留未成交部分":"建议保留，尚待成交"):"等待你确认处理"):labels[state] || "状态待更新")),
+      el("div",{class:"sub"},`原单：${terms(original)}`),
+      original.status==="partially_filled"?el("div",{class:"sub"},original.filled_grams==null?"原单已有部分成交，剩余数量待核对。":`已成交 ${num(original.filled_grams,4)} 克 · 未成交 ${original.grams==null?"待核对":num(Math.max(0,original.grams-original.filled_grams),4)+" 克"}`):null,
+      el("div",{class:"sub"},`京东原单有效至 ${fmtTs(original.expires_at)}`),
+      item.action==="replace"?el("div",{class:"live-advice-check"},`修改后：${terms({...newOrder,action:original.action})} · 有效至 ${fmtTs(newOrder.expires_at)}`):null,
+      el("div",{class:"live-advice-reason"},item.reason || ""),
+      ...(item.checks || []).map(c=>el("div",{class:"live-advice-check"},"需核对："+c))));
+  }
+  children.push(el("div",{class:"live-section-heading",style:"margin-top:14px"},el("strong",{},"价格触发复评")));
+  const conditions=v.review_conditions || [];
+  if(!conditions.length)children.push(el("div",{class:"sub"},"本轮未设置价格复评条件，沿用其他事件和周期调度。"));
+  if(conditions.length)children.push(el("div",{class:"sub"},`达到条件仅排队重新分析，不自动撤改或下单。条件有效至 ${fmtTs(v.expires_at)}。`));
+  for(const c of conditions){
+    const monitor=c.monitoring || {};
+    const state=parentState!=="current"?parentState:!quoteFresh?"data_unavailable":monitor.status;
+    const order=c.order_key?(a.pending_orders?.records || []).find(o=>o.order_key===c.order_key):null;
+    children.push(el("div",{class:"live-quote",style:"margin-top:8px"},
+      el("div",{class:"live-section-heading"},el("strong",{},`${a.name}${c.quote_side==="buy"?"买入":"卖出"}价 ${symbol[c.condition]} ${num(c.price_cny,2)} 元/克`),el("span",{class:"sub"},labels[state] || "等待监控同步")),
+      c.order_key?el("div",{class:"sub"},order?`关联原单：${terms(order)}`:"关联挂单已不在当前待成交明细中"):null,
+      el("div",{class:"live-advice-reason"},c.reason || ""),
+      monitor.last_quote_at?el("div",{class:"live-quote-time"},`最近监测 ${num(monitor.last_price_cny,2)} 元/克 · ${fmtTs(monitor.last_quote_at)}`):null,
+      monitor.triggered_at?el("div",{class:"live-quote-time"},`触发时间 ${fmtTs(monitor.triggered_at)}`):null));
+  }
+  return el("div",{class:"live-structured"},children);
+}
 function liveReadonlyPanel(d) {
   const rows=d.live_readonly || [], fresh=rows.filter(a=>a.connected).length;
   const labels={fresh:"已同步",stale:"快照已过期",login_required:"需要京东登录",unavailable:"查询失败",not_checked:"待首次同步"};
@@ -682,6 +722,7 @@ function liveReadonlyPanel(d) {
           el("div",{},el("div",{class:"l"},"建议数量"),el("div",{class:"v"},v.grams==null?(["buy","sell"].includes(v.action)?"数量待确认":"不涉及买卖"):quantity(v.grams))),
           el("div",{},el("div",{class:"l"},"建议价格条件"),el("div",{class:"v"},`${condition}${v.price_cny==null?"":" "+num(v.price_cny,2)+" 元/克"}`))),
         el("div",{class:"live-advice-time"},`分析 ${fmtTs(v.created_at)} · 到期 ${fmtTs(v.expires_at)} · 北京时间`),
+        renderLiveStructure(a,v,state,current),
         matched?el("div",{class:"live-advice-check"},`${orderStates[execution.status] || "执行进度待核对"} · ${execution.match==="similar_parameters"?"发现相近挂单，参数有调整":"按参数与时间匹配，仅为关联推断"} · ${quantity(matched.grams)} · ${num(matched.price_cny,2)} 元/克`):null,
         inactive?el("div",{class:"live-advice-check"},state==="expired"?matched&&["pending","partially_filled"].includes(execution.status)?"原建议已到期；京东条件单仍待成交，以条件单自身有效期为准。":"建议有效期已结束；买卖建议会按数据与调度条件排队复评。":state==="account_changed"?"持仓、资金或条件单已变化，请结合执行进度等待重新评估。":"账户数据待刷新，暂勿沿用此建议。"):null,
         ...(v.checks || []).map(x=>el("div",{class:"live-advice-check"},"需核对："+x)),
