@@ -1030,16 +1030,13 @@ th.wrap {
   font-weight: 600;
   margin-bottom: 8px;
 }
-.live-quote-prices {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  font-size: 12px;
-  color: var(--text-3);
+.live-quote-price {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
 }
-.live-quote-prices strong {
-  display: block;
-  font-size: 17px;
+.live-quote-price strong {
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.7;
   color: var(--text);

@@ -296,8 +296,8 @@ const proposalState = (order) => {
       >
         <div class="live-section-heading">
           <strong
-            >{{ account.name }}{{ c.quote_side === "buy" ? "买入" : "卖出" }}价
-            {{ symbol[c.condition] }} {{ num(c.price_cny) }} 元/克</strong
+            >{{ account.name }}金价 {{ symbol[c.condition] }}
+            {{ num(c.price_cny) }} 元/克</strong
           ><span class="sub">{{
             monitorStates[conditionState(c)] ||
             states[conditionState(c)] ||

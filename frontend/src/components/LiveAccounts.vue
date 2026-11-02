@@ -197,13 +197,13 @@ const cashSource = (a) =>
               </div>
               <div class="live-metric-note">
                 未扣卖费 ·
-                {{ quoteCurrent(a) ? "按银行卖价" : "按历史卖价估算或缺报价" }}
+                {{ quoteCurrent(a) ? "按银行金价" : "按历史金价估算或缺报价" }}
               </div>
             </div>
           </div>
           <div class="live-quote">
             <div class="live-section-heading">
-              <span>银行报价 · 元/克</span
+              <span>银行金价 · 元/克</span
               ><span
                 class="live-state"
                 :class="quoteCurrent(a) ? 'fresh' : 'warn'"
@@ -216,13 +216,11 @@ const cashSource = (a) =>
                 }}</span
               >
             </div>
-            <div class="live-quote-prices">
-              <div>
-                买入价<strong>{{ num(a.quote?.buy_price_cny) }}</strong>
-              </div>
-              <div>
-                卖出价<strong>{{ num(a.quote?.sell_price_cny) }}</strong>
-              </div>
+            <div class="live-quote-price">
+              <strong>{{
+                num(a.quote?.sell_price_cny ?? a.quote?.buy_price_cny)
+              }}</strong>
+              <span class="sub">买卖同价</span>
             </div>
             <div class="live-quote-time">
               {{
