@@ -52,20 +52,20 @@ class Monitor:
         if settings.ai_trading_mode=="risk_six_account":
             from .risk_profiles import reset_experiment
             reset_experiment(self.store.conn)
+        from .rule_accounts import remove_rule_accounts
+        remove_rule_accounts(self.store.conn)
         from .jd_live_readonly import ensure_schema as ensure_live_readonly
         ensure_live_readonly(self.store.conn)
         self.market = Market(settings, self.store)
         self.alerts = AlertEngine(settings, self.store)
-        # 短线基准与每个模型的独立账户；关闭模型只停新开仓，持仓继续风控。
+        # 兼容旧版模型账户；独立规则参考账户不再运行。
         self.short_books = {key: PaperBook(settings, self.store, key, label)
                             for key, label in short_labels(settings).items()}
-        self.short_enabled = bool(self.short_books)
         # Retire the previous shared AI book without abandoning its open position.
         self.legacy_short = (PaperBook(settings, self.store, "short_ai", "旧实验 · 短线 AI")
                              if self.store.open_trade(settings.paper_bank, "short_ai") else None)
-        daily = [k for k in settings.strategies if k not in ("short", "short_ai")]
-        if autonomous_enabled(settings):
-            daily = [k for k in daily if k in ("hold", "position")]
+        from .controls import daily_keys
+        daily = list(daily_keys(settings))
         self.accounts = Accounts(settings, self.store, daily)
         self.portfolios = AutonomousPortfolio(settings,self.store) if autonomous_enabled(settings) else None
         self.retired_short_books = {f"{m}:short_ai": PaperBook(settings,self.store,f"{m}:short_ai",f"旧实验 · {m.title()}")
@@ -327,7 +327,7 @@ class Monitor:
         # Keep summaries model-scoped so one subscription cannot leak another model's result.
         for name,view in done.items():
             self._ai_results.put({"key":f"ai:{name}:{run_id}","notification_topic":name+":analysis",
-                "title":f"🧠{ANALYST_NAMES.get(name,name)}短期{axis_m_from_view(view)['axis']}",
+                "title":f"📊{ANALYST_NAMES.get(name,name)}短期{axis_m_from_view(view)['axis']}",
                 "body":f"## {ANALYST_NAMES.get(name,name)}\n\n{format_view(view)}"})
             from .jd_live_advice import notification_events as live_advice_events
             with closing(Store(self.settings.db_path).conn) as live_conn:
@@ -488,19 +488,16 @@ class Monitor:
         base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, **cost)
         views = {name: a.latest(self.settings.ai_view_max_age_hours) for name, a in self.analysts.items()} if not self.portfolios else {}
         ai_plans = {name: self.build_ai_led_plan(snap, view, cost) for name, view in views.items() if view}
-        plan = base_plan  # Shared alerts show the rule baseline; model plans are displayed separately.
-        if self.short_enabled:
-            alert_events = self.alerts.check(snap, plan)
-            if self.ai and any(e["key"].startswith("move:") for e in alert_events):
-                for analyst in self.enabled_analysts().values():
-                    analyst.request_refresh(f"{int(self.settings.move_window_minutes)}分钟异动", min_gap_minutes=30)
-            events += alert_events
-            if "short" in self.short_books:
-                events += self.short_books["short"].on_tick(snap, base_plan)
-            for key, book in self.short_books.items():
-                model, _ = identity(key)
-                if model:
-                    events += book.on_tick(snap, ai_plans.get(model) or {"ok": False})
+        plan = base_plan  # Technical levels remain available without rule trading accounts.
+        alert_events = self.alerts.check(snap, plan)
+        if self.ai and any(e["key"].startswith("move:") for e in alert_events):
+            for analyst in self.enabled_analysts().values():
+                analyst.request_refresh(f"{int(self.settings.move_window_minutes)}分钟异动", min_gap_minutes=30)
+        events += alert_events
+        for key, book in self.short_books.items():
+            model, _ = identity(key)
+            if model:
+                events += book.on_tick(snap, ai_plans.get(model) or {"ok": False})
         daily_views = {name: a.latest(DAILY_VIEW_MAX_AGE_HOURS) for name, a in self.analysts.items()} if not self.portfolios else {}
         for book in self.retired_short_books.values():
             events += book.on_tick(snap, {"ok": False})

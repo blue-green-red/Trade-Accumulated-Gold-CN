@@ -64,8 +64,8 @@ class Settings:
     paper_grams: float = _env_float("GOLD_MONITOR_PAPER_GRAMS", 10)
     spread_cny: float = _env_float("GOLD_MONITOR_SPREAD_CNY", 0.0)          # 买卖价差，两家均为单一报价
     sell_fee_rate: float = _env_float("GOLD_MONITOR_SELL_FEE_RATE", 0.004)  # 卖出手续费 0.4%
-    # 同时运行的模拟盘：hold/position 为规则日线，position_ai 按模型拆分；short 为短线基准
-    strategies: tuple = tuple(s.strip() for s in os.environ.get("GOLD_MONITOR_STRATEGIES", "hold,position,position_ai,short,short_ai").split(",") if s.strip())
+    # 仅供旧版 AI 概率账户使用；独立规则账户已移除，旧环境配置也不能恢复。
+    strategies: tuple = tuple(s.strip() for s in os.environ.get("GOLD_MONITOR_STRATEGIES", "position_ai,short_ai").split(",") if s.strip() and s.strip() not in ("hold", "position", "short"))
     ai_trading_mode: str = os.environ.get("GOLD_AI_TRADING_MODE", "risk_six_account")
     ai_short_review_minutes: float = _env_float("GOLD_AI_SHORT_REVIEW_MINUTES", 0)
     ai_periodic_min_move_pct: float = _env_float("GOLD_AI_PERIODIC_MIN_MOVE_PCT", 0.4)

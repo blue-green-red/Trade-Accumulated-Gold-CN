@@ -61,7 +61,7 @@ class RiskAccountTests(unittest.TestCase):
         self.assertEqual(c.execute("select count(*) from ai_plans where account like 'codex:%'").fetchone()[0],6)
         web=dashboard(self.settings)
         self.assertEqual(len(web['autonomous']['accounts']),12)
-        self.assertEqual(set(web['strategy_names']),{'hold','position','short',*(m+':'+k for m in ('claude','codex') for k in MODES)})
+        self.assertEqual(set(web['strategy_names']),{m+':'+k for m in ('claude','codex') for k in MODES})
         for m in web['comparison']['models']:self.assertEqual(m['budget'],600000)
         topics=[r['key'] for r in web['notifications']['subscriptions'] if r['key'].startswith('codex:')]
         self.assertEqual(topics,['codex:low','codex:standard','codex:high','codex:analysis','codex:live_zheshang','codex:live_minsheng'])

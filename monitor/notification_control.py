@@ -8,8 +8,7 @@ TOPICS = {f'{model}:{period}': f'{model.title()} · {label}'
 TOPICS.update({f'{model}:analysis':f'{model.title()} · 分析摘要' for model in ('claude','codex')})
 TOPICS.update({f'{model}:live_{bank}':f'{model.title()} · {label}真实账户建议'
                for model in ('claude','codex') for bank,label in (('zheshang','浙商'),('minsheng','民生'))})
-TOPICS.update({'rules:hold': '对照 · 买入持有', 'rules:position': '对照 · 趋势策略',
-               'rules:short': '对照 · 短线', 'system': '行情提醒与定时报告'})
+TOPICS['system'] = '行情提醒与定时报告'
 
 
 def subscriptions(conn):
@@ -40,6 +39,8 @@ def set_subscription(conn, topic, enabled):
 
 
 def event_topic(event):
+    if event.get('notification_topic') in ('rules:hold','rules:position','rules:short'):
+        return event['notification_topic']
     if event.get('notification_topic') in TOPICS:
         return event['notification_topic']
     key = event.get('key', '')
@@ -50,7 +51,7 @@ def event_topic(event):
                 if strategy.startswith(model+':'):
                     return model+(':'+('short' if strategy.split(':')[1].startswith('short') else 'long'))
             strategy=strategy.split(':')[0]
-            return 'rules:'+strategy if 'rules:'+strategy in TOPICS else 'system'
+            return 'rules:'+strategy if strategy in ('hold','position','short') else 'system'
     return 'system'
 
 

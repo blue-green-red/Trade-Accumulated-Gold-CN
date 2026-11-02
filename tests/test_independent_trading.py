@@ -72,8 +72,8 @@ class TradingTests(unittest.TestCase):
         monitor = Monitor(self.settings, True)
         try:
             d = dashboard(self.settings)
-            self.assertEqual(len(d["leaderboard"]), 4)
-            self.assertEqual(len(d["short"]), 3)
+            self.assertEqual(len(d["leaderboard"]), 2)
+            self.assertEqual(len(d["short"]), 2)
             self.assertEqual([m["budget"] for m in d["comparison"]["models"]], [200000, 200000])
             self.assertEqual([m["return"] for m in d["comparison"]["models"]], [0, 0])
             set_enabled(self.store.conn, "claude", False)
@@ -230,7 +230,7 @@ class TradingTests(unittest.TestCase):
         self.assertEqual(bad["jd_last_quote"]["price"], 901)
 
     def test_daily_fills_use_jd_price(self):
-        accounts = Accounts(self.settings, self.store, ["hold"])
+        accounts = Accounts(self.settings, self.store, ["claude:position_ai"])
         now = datetime(2026, 10, 16, 10, tzinfo=BJ)
         bars = [Bar(date(2026, 10, 15) - timedelta(days=209-i), 4000, 4000, 7, 900, 900) for i in range(210)]
         class Clock(datetime):
@@ -239,14 +239,15 @@ class TradingTests(unittest.TestCase):
         s = snap(900)
         s["bank_est"]["zheshang"] = 1100
         with patch("monitor.accounts.datetime", Clock), patch.object(accounts.history, "refresh_if_stale"), patch.object(accounts.history, "bars", return_value=bars):
-            accounts.run_daily(s)
+            with patch.object(accounts.strategies[0], "decide", return_value=[Order("buy", 100000, "测试报价")]):
+                accounts.run_daily(s, {"claude": view()})
         row = self.store.conn.execute("SELECT * FROM account_fills").fetchone()
         self.assertEqual(row["price"], 900)
         self.assertAlmostEqual(row["grams"], 100000 / 900)
         self.assertEqual(json.loads(row["decision_json"])["execution_quote"]["price"], 900)
 
     def test_daily_quote_expiring_during_history_fetch_does_not_fill(self):
-        accounts = Accounts(self.settings, self.store, ["hold"])
+        accounts = Accounts(self.settings, self.store, ["claude:position_ai"])
         now = datetime(2026, 10, 16, 10, tzinfo=BJ)
         bars = [Bar(date(2026, 10, 15) - timedelta(days=209-i), 4000, 4000, 7, 900, 900) for i in range(210)]
         class Clock(datetime):
@@ -255,7 +256,8 @@ class TradingTests(unittest.TestCase):
         s = snap(900)
         def expire(): s["execution_quote"]["quote_at"] = (utc_now() - timedelta(seconds=121)).isoformat()
         with patch("monitor.accounts.datetime", Clock), patch.object(accounts.history, "refresh_if_stale", side_effect=expire), patch.object(accounts.history, "bars", return_value=bars):
-            accounts.run_daily(s)
+            with patch.object(accounts.strategies[0], "decide", return_value=[Order("buy", 100000, "测试报价")]):
+                accounts.run_daily(s, {"claude": view()})
         self.assertEqual(self.store.conn.execute("SELECT COUNT(*) FROM account_fills").fetchone()[0], 0)
 
     def test_curve_preserves_old_marks_and_uses_jd_after_cutover(self):
@@ -296,9 +298,9 @@ class TradingTests(unittest.TestCase):
         monitor = Monitor(settings, True)
         try:
             self.assertEqual({r[0] for r in self.store.conn.execute("SELECT strategy FROM accounts")},
-                             {"hold", "position", "claude:position_ai", "codex:position_ai"})
+                             {"claude:position_ai", "codex:position_ai"})
             d = dashboard(settings)
-            self.assertEqual(len(d["leaderboard"]) + len(d["short"]), 7)
+            self.assertEqual(len(d["leaderboard"]) + len(d["short"]), 4)
             self.assertEqual([len(m["accounts"]) for m in d["comparison"]["models"]], [2, 2])
         finally:
             monitor.store.conn.close()

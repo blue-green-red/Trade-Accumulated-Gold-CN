@@ -28,12 +28,13 @@ class ModelVisibilityTests(unittest.TestCase):
         self.assertEqual(len(restored['autonomous']['accounts']),12)
         self.assertTrue(any(x['key']=='claude:low_full' for x in restored['autonomous']['accounts']))
 
-    def test_both_disabled_empty_ai_surfaces_keep_rules_and_switches(self):
+    def test_both_disabled_empty_ai_surfaces_keep_switches(self):
         f=self.f;c=f.m.store.conn
         for m in ('claude','codex'):set_enabled(c,m,False)
         d=dashboard(f.settings)
         self.assertEqual(d['autonomous']['accounts'],[])
         self.assertEqual(d['comparison']['models'],[])
         self.assertEqual(len(d['model_controls']),2)
-        self.assertTrue(all(':' not in a['key'] for a in d['leaderboard']))
+        self.assertEqual(d['leaderboard'],[])
+        self.assertEqual(d['short'],[])
         self.assertEqual(d['scorecard']['views'],0)

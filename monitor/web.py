@@ -40,7 +40,7 @@ from .cadence import usage as ai_run_usage
 log = logging.getLogger("monitor.web")
 
 STATIC = Path(__file__).resolve().parent / "static"
-SERIES_ORDER = ["hold", "position", "short", "claude:position_ai", "codex:position_ai", "claude:short_ai", "codex:short_ai"] + [f"{m}:{p}_{s}" for m in ("claude","codex") for p in ("short","medium","long") for s in ("full","empty")]
+SERIES_ORDER = ["claude:position_ai", "codex:position_ai", "claude:short_ai", "codex:short_ai"] + [f"{m}:{p}_{s}" for m in ("claude","codex") for p in ("short","medium","long") for s in ("full","empty")]
 
 
 # Short shared cache avoids repeating hundreds of SQLite reads during concurrent refreshes.
@@ -193,7 +193,7 @@ def leaderboard(conn: sqlite3.Connection, settings: Settings, price: Optional[fl
     return board
 
 
-SHORT_LABELS = {"short": "短线日内", "short_ai": "短线日内+AI"}
+SHORT_LABELS = {"short_ai": "短线日内+AI"}
 
 
 def short_paper(conn: sqlite3.Connection, bank: str, strategy: str, price: Optional[float], fee_rate: float, spread: float = 0, label: str = "") -> Dict[str, Any]:
@@ -389,7 +389,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "jin10_triage": get_state(conn, "jin10_triage") or {},
             "fills": [{k: r[k] for k in ("strategy", "ts", "side", "grams", "price", "fee", "reason")} | {"decision": json.loads(r["decision_json"]) if "decision_json" in r.keys() and r["decision_json"] else None} for r in fills],
             "alerts": [{"ts": r["ts"], "title": r["title"], "delivered": bool(r["delivered"])} for r in alerts],
-            "strategy_names": {**{k: cls.name for k, cls in REGISTRY.items() if settings.ai_trading_mode!="risk_six_account" or k in (*daily_keys(settings),*short_labels(settings))},**(short_labels(settings) if settings.ai_trading_mode=="risk_six_account" else {}),**portfolio_keys(settings)},
+            "strategy_names": {**{k: cls.name for k, cls in REGISTRY.items() if k in (*daily_keys(settings),*short_labels(settings))},**(short_labels(settings) if settings.ai_trading_mode=="risk_six_account" else {}),**portfolio_keys(settings)},
             "series_order": SERIES_ORDER,
         }
         return dashboard_visible(conn,result)

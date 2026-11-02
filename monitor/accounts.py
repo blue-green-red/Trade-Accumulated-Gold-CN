@@ -60,7 +60,7 @@ class Accounts:
         for key in strategy_keys:
             if key == "position_ai":
                 expanded.extend(f"{m}:{key}" for m in settings.ai_analysts if m in ("claude", "codex"))
-            elif key in ("hold", "position", "claude:position_ai", "codex:position_ai"):
+            elif key in ("claude:position_ai", "codex:position_ai"):
                 expanded.append(key)
         self.strategies: List[DailyStrategy] = build(expanded, self.params, ai_cfg)
         self.bank = settings.paper_bank

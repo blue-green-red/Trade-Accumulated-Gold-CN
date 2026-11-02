@@ -19,8 +19,6 @@ def pnl_stats(pnls):
 def comparison(conn, board, short, curves):
     exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='trade_cycles'").fetchone()
     models = []
-    baselines = {r["key"]: r for r in board if r["key"] in ("hold", "position")}
-    baselines.update({r["key"]: dict(r, name=r["label"]) for r in short if r["key"] == "short"})
     for model in MODELS:
         rows = []
         all_pnl = []
@@ -46,8 +44,7 @@ def comparison(conn, board, short, curves):
         complete = bool(rows) and all(r.get("value") is not None for r in rows)
         value = sum(r["value"] for r in rows) if complete else None
         for row in rows:
-            base = baselines.get("position" if row["strategy"] == "position_ai" else "short")
-            row["baseline_return"] = base.get("return") if base else None
+            row["baseline_return"] = None  # Retired probability accounts have no active rule reference.
             row["excess_return"] = (row["return"] - row["baseline_return"]
                                     if row.get("return") is not None and row["baseline_return"] is not None else None)
         baseline_return = (sum(r["budget"] * r["baseline_return"] for r in rows) / budget
@@ -75,7 +72,7 @@ def comparison(conn, board, short, curves):
                        "excess_return": value / budget - 1 - baseline_return if value is not None and budget and baseline_return is not None else None,
                        "max_drawdown": mdd, "started_at": min(starts) if starts else None,
                        "accounts": rows, "points": points, **pnl_stats(all_pnl)})
-    return {"models": models, "baselines": list(baselines.values()), "version": "independent-v1",
+    return {"models": models, "baselines": [], "version": "independent-v1",
             "rules": "仅比较中长线与短线，胜率按扣费后完整平仓周期计，分批卖出合并。旧账户不参与。"}
 
 
@@ -87,10 +84,12 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
     for model in MODELS:
         rows = [{k:v for k,v in a.items() if k!="plan"} for a in accounts if a["model"] == model]
         for row in rows:
+            row["baseline_name"] = "满仓持有不动" if row["start_mode"].endswith("_full") else "空仓持币不动"
             row["baseline_return"] = (net_price(settings,price) / row["initial_price"]-1
                 if row["start_mode"].endswith("_full") and row["initial_price"] and price else
                 0 if row["start_mode"].endswith("_empty") and row["started"] else None)
             row["excess_return"] = row["return"]-row["baseline_return"] if row["return"] is not None and row["baseline_return"] is not None else None
+            row["baseline_value"] = row["budget"] * (1 + row["baseline_return"]) if row["baseline_return"] is not None else None
         budget = sum(a["budget"] for a in rows)
         value = sum(a["value"] for a in rows) if rows and all(a["value"] is not None for a in rows) else None
         pnls = [r[0] for r in conn.execute("SELECT pnl FROM ai_portfolio_cycles WHERE account IN ("+",".join("?" for _ in rows)+") AND closed_at IS NOT NULL",tuple(a["key"] for a in rows))] if rows else []
@@ -113,7 +112,5 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
             "return":value/budget-1 if value is not None and budget and starts else None,"max_drawdown":mdd,
             "baseline_return":baseline,"excess_return":value/budget-1-baseline if value is not None and budget and baseline is not None else None,
             "started_at":min(starts) if starts else None,"accounts":rows,"points":points,**pnl_stats(pnls)})
-    baselines = [r for r in board if not r.get("analyst")]
-    baselines += [dict(r,name=r["label"]) for r in short if not r.get("analyst")]
-    return {"models":models,"baselines":baselines,"version":policy_version(settings),
+    return {"models":models,"baselines":[],"version":policy_version(settings),
         "rules":("每模型六个短线波段账户：低/标准/高风险各初始满仓和空仓，各10万元；仅风险预算不同，中长线已删除。" if settings.ai_trading_mode=="risk_six_account" else "每模型四个独立账户：短中各满仓/空仓，各10万元；长线已移除，不计入当前对比。" if settings.ai_trading_mode=="four_account" else "每模型六个独立账户：短中长各满仓/空仓，各10万元；同轮统一返回六份决策。")+"胜率按完整平仓周期扣费统计。"}

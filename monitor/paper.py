@@ -19,7 +19,9 @@ from .execution import execution_quote, EXECUTION_NAME
 
 
 class PaperBook:
-    def __init__(self, settings: Settings, store: Store, strategy: str = "short", label: str = "短线日内"):
+    def __init__(self, settings: Settings, store: Store, strategy: str, label: str):
+        if strategy == "short":
+            raise ValueError("独立规则短线账户已移除")
         self.settings = settings
         self.store = store
         self.bank = settings.paper_bank

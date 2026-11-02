@@ -45,7 +45,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(len(self.page(kind='plans',account='codex:short_empty',limit=100)['items']),61)
         self.assertEqual(self.page(kind='plans',account="x' OR 1=1 --")['items'],[])
 
-    def test_fills_merge_ai_daily_rules_and_short_rules(self):
+    def test_fills_exclude_removed_rule_accounts(self):
         stamp=self.now.isoformat()
         self.c.execute("INSERT INTO account_fills(strategy,ts,side,grams,price,fee,reason) VALUES('hold',?,'buy',1,1000,0,'rule')",(stamp,))
         self.c.execute("INSERT INTO ai_portfolio_fills(account,ts,side,grams,price,fee,pnl,reason,quote_json) VALUES('codex:short_empty',?,'sell',1,1000,4,20,'AI','{}')",(stamp,))
@@ -53,8 +53,8 @@ class HistoryTests(unittest.TestCase):
         self.c.execute("INSERT INTO paper_fills(trade_id,ts,side,grams,price,fee,reason) VALUES(?,?,'buy',1,1000,0,'short rule')",(t.lastrowid,stamp))
         self.c.commit()
         rows=self.page(kind='fills')['items']
-        self.assertEqual({r['account'] for r in rows},{'hold','short','codex:short_empty'})
-        self.assertEqual(len(self.page(kind='fills',model='rules')['items']),2)
+        self.assertEqual({r['account'] for r in rows},{'codex:short_empty'})
+        self.assertEqual(self.page(kind='fills',model='rules')['items'],[])
         self.assertEqual(self.page(kind='fills',model='codex')['items'][0]['pnl'],20)
 
     def test_analysis_history_contains_forecast_outcomes_without_duplicate_history(self):

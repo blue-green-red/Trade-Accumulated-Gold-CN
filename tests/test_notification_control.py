@@ -41,12 +41,14 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual({r['title'] for r in rows if r['delivered']},{'codex:short'})
         m.notifier.reset_mock();m.dispatch(events[1:]);m.notifier.send.assert_not_called()
 
-    def test_model_periods_and_rule_routing(self):
-        set_subscription(self.store.conn,'rules:short',True)
+    def test_model_periods_and_removed_rule_routing(self):
+        with self.assertRaises(ValueError):set_subscription(self.store.conn,'rules:short',True)
         set_subscription(self.store.conn,'codex:short',True)
         events=[{'key':'paper:short:open:1'},{'key':'paper:codex:short_ai:open:1'},
                 {'key':'acct:codex:position_ai:2026-10-22:buy'},{'key':'move:up'}]
-        self.assertEqual(selected_events(self.store.conn,events),events[:2])
+        self.assertEqual(selected_events(self.store.conn,events),events[1:2])
+        set_subscription(self.store.conn,'system',True)
+        self.assertEqual(selected_events(self.store.conn,events),[events[1],events[3]])
 
     def test_analysis_summary_independent_of_system_alerts_and_model_trade_topics(self):
         set_subscription(self.store.conn,'codex:analysis',True)
