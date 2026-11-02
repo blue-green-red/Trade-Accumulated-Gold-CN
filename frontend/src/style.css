@@ -1363,6 +1363,65 @@ th.wrap {
 }
 
 /* 行情数据：先看现价，再看驱动与事件 */
+.market-subnav {
+  position: sticky;
+  top: 64px;
+  z-index: 15;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.market-subnav button {
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 2px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.market-subnav button[aria-selected="true"] {
+  color: var(--on-brand);
+  background: var(--brand);
+}
+.market-subnav button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.market-main-price {
+  font-size: 32px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.price-aux {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.market-range,
+.market-calendar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.market-range button {
+  flex: 1;
+}
+.market-next-event {
+  margin-top: 12px;
+}
+#system-diagnostics {
+  scroll-margin-top: 80px;
+}
 .market-quotes,
 .macro-quotes {
   display: grid;

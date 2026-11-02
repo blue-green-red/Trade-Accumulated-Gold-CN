@@ -10,6 +10,7 @@ import {
   tabs,
   currentPage,
   accountView,
+  marketView,
   header,
   activeEntry,
   loadPage,
@@ -49,7 +50,9 @@ function applyTheme() {
     document.documentElement.dataset.theme === "dark" ? "#101010" : "#f6f5f2";
 }
 watch(theme, applyTheme, { immediate: true });
-watch([currentPage, accountView], () => loadPage(), { immediate: true });
+watch([currentPage, accountView, marketView], () => loadPage(), {
+  immediate: true,
+});
 const updated = computed(() =>
   entry.value.error
     ? entry.value.error
@@ -142,12 +145,16 @@ onUnmounted(() => {
     </div>
     <KeepAlive
       ><component
-        v-if="entry.data"
+        v-if="entry.data || currentPage === 'market'"
         :is="pages[currentPage]"
         :key="currentPage"
-        :data="entry.data"
+        :data="entry.data || {}"
     /></KeepAlive>
-    <div v-if="!entry.data" class="card page-loading" aria-busy="true">
+    <div
+      v-if="!entry.data && currentPage !== 'market'"
+      class="card page-loading"
+      aria-busy="true"
+    >
       {{
         entry.error
           ? "暂未取得数据，请重试"

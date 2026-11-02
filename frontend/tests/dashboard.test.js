@@ -4,8 +4,18 @@ globalThis.location = { hash: "#overview" };
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 globalThis.history = { replaceState: () => {} };
 globalThis.window = { addEventListener: () => {}, scrollTo: () => {} };
-const { entryFor, loadPage, toggleNotification, toggleModel, currentPage } =
-  await import("../src/composables/dashboard.js");
+const {
+  entryFor,
+  loadPage,
+  toggleNotification,
+  toggleModel,
+  currentPage,
+  marketView,
+  header,
+  selectMarketView,
+  marketScroll,
+  navigate,
+} = await import("../src/composables/dashboard.js");
 const response = (value) =>
   new Response(JSON.stringify(value), {
     status: 200,
@@ -118,4 +128,51 @@ test("revisiting a page waits for an invalidated read and fetches the new model 
     entryFor("strategies").data.leaderboard[0].key,
     "codex:low_full",
   );
+});
+
+test("market subpages cache independently and a late news response cannot replace the active price header", async () => {
+  currentPage.value = "market";
+  marketView.value = "news";
+  let finish;
+  const urls = [];
+  globalThis.fetch = (url) => {
+    urls.push(url);
+    return url.endsWith("view=news")
+      ? new Promise((resolve) => (finish = resolve))
+      : Promise.resolve(
+          response({ market_view: "prices", snapshot: { ts: "price-time" } }),
+        );
+  };
+  const news = loadPage("market", { force: true });
+  marketView.value = "prices";
+  await loadPage("market", { force: true });
+  finish(response({ market_view: "news", snapshot: { ts: "news-time" } }));
+  await news;
+  assert.equal(header.value.market_view, "prices");
+  assert.equal(entryFor("market", "news").data.market_view, "news");
+  marketView.value = "news";
+  await loadPage("market");
+  assert.equal(urls.length, 2);
+  assert.deepEqual(urls, [
+    "/api/pages/market?view=news",
+    "/api/pages/market?view=prices",
+  ]);
+});
+
+test("market navigation retains a separate scroll position for each view", () => {
+  currentPage.value = "market";
+  marketView.value = "news";
+  globalThis.window.scrollY = 420;
+  const hashes = [];
+  globalThis.history.replaceState = (_s, _t, h) => hashes.push(h);
+  selectMarketView("calendar");
+  assert.equal(marketScroll.get("news"), 420);
+  globalThis.window.scrollY = 260;
+  navigate("ai");
+  assert.equal(marketScroll.get("calendar"), 260);
+  navigate("market");
+  assert.equal(hashes.at(-1), "#market/calendar");
+  selectMarketView("invalid");
+  assert.equal(marketView.value, "prices");
+  globalThis.window.scrollY = 0;
 });

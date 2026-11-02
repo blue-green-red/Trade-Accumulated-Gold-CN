@@ -59,6 +59,38 @@ class PageDataTests(unittest.TestCase):
         self.assertNotIn('missing_dates',result)
         self.assertEqual(sample['days'][0]['missing_minute_samples'],100)
 
+    def test_market_subpages_query_only_their_data_and_diagnostics_are_separate(self):
+        with patch('monitor.page_data._wave',side_effect=AssertionError('no chart')),patch('monitor.page_data.price_history',side_effect=AssertionError('no prices')),patch('monitor.page_data.jd_reference',side_effect=AssertionError('no JD research')):
+            news=page_data(self.f.settings,'market','news')
+            calendar=page_data(self.f.settings,'market','calendar')
+        self.assertIn('jin10',news);self.assertNotIn('macro',news);self.assertNotIn('prices',news)
+        self.assertNotIn('jd_research',calendar);self.assertNotIn('jin10',calendar);self.assertNotIn('quotes',calendar['macro'])
+        with patch('monitor.wave_evidence.daily_reference',side_effect=AssertionError('no futures history')),patch('monitor.page_data.jd_reference',side_effect=AssertionError('no research')):
+            prices=page_data(self.f.settings,'market','prices')
+        self.assertIn('jd_daily',prices['wave_evidence']);self.assertNotIn('daily_reference',prices['wave_evidence'])
+        self.assertNotIn('macro',prices)
+        research={'quota':{'used_today':3,'recent_requests':[{'error_type':'TimeoutError'}]},
+                  'funds':{'status':'fresh','long_pct':60,'error_type':'TimeoutError'},'orders':{'status':'stale'}}
+        with patch('monitor.wave_evidence.jd_daily_samples',side_effect=AssertionError('no JD daily scan')),patch('monitor.page_data.price_history',side_effect=AssertionError('no intraday history')),patch('monitor.page_data.jd_reference',return_value=research):
+            reference=page_data(self.f.settings,'market','reference')
+            diagnostics=page_data(self.f.settings,'diagnostics')
+        self.assertIn('daily_reference',reference['wave_evidence']);self.assertNotIn('jd_daily',reference['wave_evidence'])
+        self.assertNotIn('calendar',reference['macro']);self.assertNotIn('quota',reference['jd_research'])
+        self.assertNotIn('error_type',reference['jd_research']['funds'])
+        self.assertEqual(diagnostics['jd_research'],research)
+        for page,view in [('market','live'),('market','bad'),('records','news'),('diagnostics','prices')]:
+            with self.assertRaises(ValueError):cached_page(self.f.settings,page,view)
+
+    def test_market_view_caches_do_not_share_payloads_or_etags(self):
+        invalidate_pages(self.f.settings)
+        with patch('monitor.page_data.page_data',side_effect=lambda s,p,v:{'page':p,'market_view':v}) as query:
+            news=cached_page(self.f.settings,'market','news')
+            prices=cached_page(self.f.settings,'market','prices')
+            self.assertNotEqual(news,prices)
+            self.assertEqual(cached_page(self.f.settings,'market','news'),news)
+            self.assertEqual(query.call_count,2)
+        invalidate_pages(self.f.settings)
+
     def test_page_caches_are_independent_and_control_writes_invalidate_them(self):
         settings=self.f.settings
         invalidate_pages(settings)

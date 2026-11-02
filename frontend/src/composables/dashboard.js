@@ -30,10 +30,46 @@ const preference = {
   },
 };
 const validPage = (v) => (tabs.some(([k]) => k === v) ? v : "overview");
+export const marketViews = [
+  ["prices", "金价走势"],
+  ["news", "黄金快讯"],
+  ["calendar", "经济日历"],
+  ["reference", "市场参考"],
+];
+const validMarketView = (v) =>
+  marketViews.some(([key]) => key === v) ? v : "prices";
+const route = location.hash.replace(/^#\/?/, "").split("/");
 export const currentPage = ref(
-  validPage(location.hash.replace(/^#\/?/, "") || preference.get("gold-tab")),
+  validPage(route[0] || preference.get("gold-tab")),
 );
 export const accountView = ref("auto");
+export const marketView = ref(
+  validMarketView(route[0] === "market" ? route[1] : null),
+);
+export const marketScroll = new Map();
+export const diagnosticsOpen = ref(false);
+const pageView = (page) =>
+  page === "strategies"
+    ? accountView.value
+    : page === "market"
+      ? marketView.value
+      : "auto";
+function saveMarketScroll() {
+  if (currentPage.value === "market")
+    marketScroll.set(marketView.value, window.scrollY || 0);
+}
+function routeHash() {
+  return (
+    "#" +
+    currentPage.value +
+    (currentPage.value === "market" ? "/" + marketView.value : "")
+  );
+}
+export function selectMarketView(view) {
+  saveMarketScroll();
+  marketView.value = validMarketView(view);
+  history.replaceState(null, "", routeHash());
+}
 export const header = shallowRef(null);
 export const historyFilters = reactive({
   kind: "fills",
@@ -50,10 +86,7 @@ export const theme = ref(
 );
 const entries = new Map();
 let epoch = 0;
-export function entryFor(
-  page = currentPage.value,
-  view = page === "strategies" ? accountView.value : "auto",
-) {
+export function entryFor(page = currentPage.value, view = pageView(page)) {
   const key = page + ":" + view;
   if (!entries.has(key))
     entries.set(
@@ -74,14 +107,18 @@ export function entryFor(
 }
 export const activeEntry = computed(() => entryFor());
 export function navigate(page, filters) {
+  saveMarketScroll();
   if (filters) Object.assign(historyFilters, filters);
   currentPage.value = validPage(page);
   preference.set("gold-tab", currentPage.value);
-  history.replaceState(null, "", "#" + currentPage.value);
+  history.replaceState(null, "", routeHash());
   window.scrollTo({ top: 0 });
 }
 window.addEventListener("hashchange", () => {
-  currentPage.value = validPage(location.hash.replace(/^#\/?/, ""));
+  saveMarketScroll();
+  const route = location.hash.replace(/^#\/?/, "").split("/");
+  currentPage.value = validPage(route[0]);
+  if (route[0] === "market") marketView.value = validMarketView(route[1]);
   window.scrollTo({ top: 0 });
 });
 export function setTheme(value) {
@@ -118,10 +155,7 @@ export async function requestJSON(
 }
 export async function loadPage(
   page = currentPage.value,
-  {
-    view = page === "strategies" ? accountView.value : "auto",
-    force = false,
-  } = {},
+  { view = pageView(page), force = false } = {},
 ) {
   const entry = entryFor(page, view);
   if (entry.request) {
@@ -143,7 +177,9 @@ export async function loadPage(
     try {
       const result = await requestJSON(
         `/api/pages/${page}` +
-          (page === "strategies" ? "?view=" + encodeURIComponent(view) : ""),
+          (["strategies", "market"].includes(page)
+            ? "?view=" + encodeURIComponent(view)
+            : ""),
         {
           signal: controller.signal,
           headers:
@@ -157,7 +193,7 @@ export async function loadPage(
         entry.etag = result.etag;
       }
       entry.at = Date.now();
-      if (entry.data && page === currentPage.value) header.value = entry.data;
+      if (entry.data && entry === entryFor()) header.value = entry.data;
       return entry.data;
     } catch (error) {
       if (version === entry.version && requestEpoch === epoch)

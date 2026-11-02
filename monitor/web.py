@@ -665,7 +665,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(200,body,'application/json; charset=utf-8',extra)
             except ValueError:
-                self._send(400,b'{"error":"invalid account view"}','application/json')
+                self._send(400,b'{"error":"invalid page view"}','application/json')
             except Exception:
                 log.exception('page data unavailable: %s',page)
                 self._send(503,b'{"error":"page data unavailable"}','application/json')

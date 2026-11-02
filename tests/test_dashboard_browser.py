@@ -168,22 +168,22 @@ class DashboardBrowserTests(unittest.TestCase):
             f.m.store.set_state('jin10_flash',[{'id':'one','important':True,'time_bj':'测试时刻','text':'重要黄金消息测试'},{'id':'two','important':False,'time_bj':'测试时刻','text':'普通黄金消息测试'}])
             b=self.browser(p);page=b.new_page(viewport={'width':390,'height':844})
             try:
-                page.goto(url+'/#market');page.get_by_role('heading',name='未来七天经济日历',exact=True).wait_for()
-                self.assertEqual(page.get_by_role('button',name='京东逐日采样',exact=True).get_attribute('aria-pressed'),'true')
-                page.get_by_role('button',name='国际黄金期货历史参考',exact=True).click()
-                self.assertIn('Yahoo Finance GC=F',page.locator('#panel-market').inner_text())
-                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                page.goto(url+'/#market/calendar');page.get_by_role('heading',name='未来七天经济日历',exact=True).wait_for()
+                page.get_by_role('button',name='近24小时及未来7天',exact=True).click()
                 text=page.locator('#panel-market').inner_text();self.assertNotIn('9876',text);self.assertIn('CPI 年率',text)
-                self.assertIn('重要黄金消息测试',text);self.assertNotIn('普通黄金消息测试',text)
+                self.assertIn('下一项重要事件',text);self.assertNotIn('重要黄金消息测试',text)
                 page.get_by_role('button',name='已公布',exact=True).click();self.assertIn('零售销售月率',page.locator('#panel-market').inner_text())
+                page.get_by_role('tab',name='黄金快讯',exact=True).click();page.get_by_role('heading',name='黄金相关快讯').wait_for()
+                self.assertIn('重要黄金消息测试',page.locator('#panel-market').inner_text());self.assertNotIn('普通黄金消息测试',page.locator('#panel-market').inner_text())
                 page.get_by_role('button',name='全部快讯',exact=True).click();self.assertIn('普通黄金消息测试',page.locator('#panel-market').inner_text())
-                page.get_by_role('button',name='京东逐日采样',exact=True).click()
+                page.get_by_role('tab',name='金价走势',exact=True).click();page.get_by_role('heading',name='价格走势').wait_for()
                 self.assertNotIn('逐日采样明细与缺口',page.locator('#panel-market').inner_text())
-                self.assertNotIn('缺口按每分钟一档估算',page.locator('#panel-market').inner_text())
                 page.get_by_role('tab',name='总览',exact=True).click();page.get_by_role('tab',name='行情',exact=True).click()
+                page.get_by_role('tab',name='经济日历',exact=True).click()
                 self.assertEqual(page.get_by_role('button',name='已公布',exact=True).get_attribute('aria-pressed'),'true')
+                page.get_by_role('tab',name='黄金快讯',exact=True).click()
+                self.assertEqual(page.get_by_role('button',name='全部快讯',exact=True).get_attribute('aria-pressed'),'true')
                 self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-                page.screenshot(path='/tmp/gold-vue-market-mobile.png',full_page=True)
             finally:b.close()
 
     def test_chart_decimal_prices_touch_selection_and_responsive_axes(self):
@@ -199,7 +199,7 @@ class DashboardBrowserTests(unittest.TestCase):
                 'changes_pct':{'5d':1.25,'20d':2.34,'60d':3.45}}
             b=self.browser(p);context=b.new_context(viewport={'width':390,'height':844},has_touch=True)
             page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
-            page.route('**/api/pages/market',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(value)))
+            page.route('**/api/pages/market?*',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(value)))
             try:
                 page.goto(url+'/#market');chart=page.locator('#panel-market .native-chart').first
                 chart.get_by_role('status').wait_for()
@@ -219,7 +219,7 @@ class DashboardBrowserTests(unittest.TestCase):
                 svg.dispatch_event('pointerleave',{'pointerType':'touch'})
                 self.assertIn('836.12 元/克',chart.get_by_role('status').inner_text())
                 chart.screenshot(path='/tmp/gold-chart-price-mobile.png')
-                page.get_by_role('button',name='国际黄金期货历史参考',exact=True).click()
+                page.get_by_role('tab',name='市场参考',exact=True).click();page.get_by_text('国际黄金期货历史参考',exact=True).click()
                 self.assertIn('3,898.90 美元/盎司',chart.get_by_role('status').inner_text())
                 self.assertNotIn('836.12',chart.get_by_role('status').inner_text())
                 self.assertIn('5日 +1.25%',page.locator('#panel-market').inner_text())
@@ -234,3 +234,42 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertRegex(compare.get_by_role('status').inner_text(),r'\d+\.\d{2}%')
                 self.assertEqual(errors,[])
             finally:context.close();b.close()
+
+
+    def test_market_subpages_load_independently_restore_scroll_and_move_diagnostics(self):
+        from playwright.sync_api import sync_playwright
+        with local_dashboard() as (f,url),sync_playwright() as p:
+            f.m.store.set_state('jin10_flash',[{'id':str(i),'important':i%2==0,'time_bj':'测试时刻','text':'黄金快讯测试 '+str(i)} for i in range(30)])
+            b=self.browser(p);page=b.new_page(viewport={'width':390,'height':650});requests=[];errors=[]
+            page.on('request',lambda r:requests.append(r.url));page.on('pageerror',lambda e:errors.append(str(e)))
+            try:
+                page.goto(url+'/#market/news');page.locator('[data-market-view="news"]').wait_for()
+                self.assertEqual([r.split('/api/')[1] for r in requests if '/api/' in r],['pages/market?view=news'])
+                self.assertFalse(any('PricePage-' in r or 'CalendarPage-' in r or 'ReferencePage-' in r or '/Chart-' in r for r in requests))
+                page.get_by_role('button',name='全部快讯',exact=True).click()
+                page.get_by_role('button',name='显示更多快讯 →',exact=True).click()
+                self.assertEqual(page.locator('[data-market-view="news"] .list li').count(),16)
+                page.evaluate('window.scrollTo(0,450)');page.wait_for_timeout(80);offset=page.evaluate('scrollY')
+                page.get_by_role('tab',name='金价走势',exact=True).click();page.locator('[data-market-view="prices"]').wait_for()
+                page.get_by_role('tab',name='黄金快讯',exact=True).click();page.locator('[data-market-view="news"]').wait_for()
+                page.wait_for_function('y=>Math.abs(scrollY-y)<3',arg=offset)
+                self.assertEqual(page.locator('[data-market-view="news"] .list li').count(),16)
+                self.assertEqual(sum('/api/pages/market?view=news' in r for r in requests),1)
+                page.get_by_role('tab',name='通知',exact=True).click();page.get_by_role('heading',name='微信操作通知').wait_for()
+                page.get_by_role('tab',name='行情',exact=True).click();page.locator('[data-market-view="news"]').wait_for()
+                page.wait_for_function('y=>Math.abs(scrollY-y)<3',arg=offset)
+                page.get_by_role('tab',name='市场参考',exact=True).click();page.get_by_role('heading',name='宏观指标').wait_for()
+                self.assertEqual(page.get_by_role('heading',name='京东参考接口状态').count(),0)
+                self.assertFalse(any('/api/pages/diagnostics' in r for r in requests))
+                page.get_by_role('button',name='接口状态与额度 →',exact=True).click()
+                page.get_by_role('heading',name='京东参考接口状态').wait_for()
+                self.assertTrue(page.locator('#system-diagnostics').evaluate('e=>e.open'))
+                self.assertEqual(sum('/api/pages/diagnostics' in r for r in requests),1)
+                self.assertEqual(errors,[])
+                page.get_by_role('tab',name='行情',exact=True).click();page.locator('[data-market-view="reference"]').wait_for()
+                for label,key in [('金价走势','prices'),('黄金快讯','news'),('经济日历','calendar'),('市场参考','reference')]:
+                    page.get_by_role('tab',name=label,exact=True).click();page.locator('[data-market-view="'+key+'"]').wait_for()
+                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                page.get_by_role('tab',name='金价走势',exact=True).click();page.locator('[data-market-view="prices"]').wait_for()
+                page.screenshot(path='/tmp/gold-market-subpages-mobile.png',full_page=True)
+            finally:b.close()

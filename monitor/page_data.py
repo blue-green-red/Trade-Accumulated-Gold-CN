@@ -14,7 +14,14 @@ from .performance import autonomous_comparison, comparison, pnl_stats
 from .execution import EXECUTION_NAME, execution_quote
 from .web import connect, get_state, table_exists, equity_curves, leaderboard, short_paper, ai_section, jd_reference, price_history, history_page
 
-PAGES = frozenset(('overview','strategies','compare','ai','market','records','notifications','scorecard'))
+PAGES = frozenset(('overview','strategies','compare','ai','market','records','notifications','scorecard','diagnostics'))
+MARKET_VIEWS = ('auto','prices','news','calendar','reference')
+
+
+def validate_page(page,view):
+    allowed = MARKET_VIEWS if page == 'market' else ('auto','live','simulation') if page == 'strategies' else ('auto',)
+    if page not in PAGES or view not in allowed:
+        raise ValueError('invalid page or view')
 _cache = {}
 _locks = {}
 _guard = threading.Lock()
@@ -35,8 +42,7 @@ _epochs = {}
 
 
 def cached_page(settings, page, view='auto'):
-    if page not in PAGES or view not in ('auto','live','simulation'):
-        raise ValueError('invalid page or account view')
+    validate_page(page,view)
     prefix = str(settings.db_path.resolve())
     key = (prefix, page, view)
     with _guard:
@@ -75,19 +81,23 @@ def _controls(conn, settings):
             for m in settings.ai_analysts if m in ('claude','codex')]
 
 
-def _wave(conn, snap):
+def _wave(conn, snap, view='auto'):
     from .wave_evidence import daily_reference, jd_daily_samples
     from .macro_cache import age_seconds
     now = datetime.now(timezone.utc)
     indicator = dict(snap.get('daily_indicators') or {'status':'unavailable'})
     if indicator.get('status') in ('fresh','partial') and not -30 <= age_seconds(indicator.get('fetched_at'),now) <= 180:
         indicator['status'] = 'stale'
-    sampled = jd_daily_samples(conn,now)
-    # Coverage diagnostics remain in AI inputs; the chart needs only dated prices.
-    jd_daily = {k:sampled.get(k) for k in ('status','source','timezone','as_of')}
-    jd_daily['days'] = [{k:row.get(k) for k in ('date_bj','last_price_cny')} for row in sampled.get('days',[])]
-    return {'as_of':now.isoformat(),'daily_reference':daily_reference(conn,now),
-            'daily_indicators':indicator,'jd_daily':jd_daily}
+    result = {'as_of':now.isoformat()}
+    if view in ('auto','prices'):
+        sampled = jd_daily_samples(conn,now)
+        # Coverage diagnostics remain in AI inputs; the chart needs only dated prices.
+        jd_daily = {k:sampled.get(k) for k in ('status','source','timezone','as_of')}
+        jd_daily['days'] = [{k:row.get(k) for k in ('date_bj','last_price_cny')} for row in sampled.get('days',[])]
+        result['jd_daily'] = jd_daily
+    if view in ('auto','reference'):
+        result.update(daily_reference=daily_reference(conn,now),daily_indicators=indicator)
+    return result
 
 
 def _active_keys(conn, settings):
@@ -161,8 +171,7 @@ def _notifications(conn, settings):
 
 
 def page_data(settings: Settings, page, view='auto'):
-    if page not in PAGES or view not in ('auto','live','simulation'):
-        raise ValueError('invalid page or account view')
+    validate_page(page,view)
     with closing(connect(settings.db_path)) as conn:
         snap = get_state(conn,'web_snapshot') or {}
         quote = execution_quote(snap)
@@ -172,11 +181,9 @@ def page_data(settings: Settings, page, view='auto'):
             'trading_mode':settings.ai_trading_mode,'model_controls':_controls(conn,settings),
             'snapshot':{k:snap.get(k) for k in ('ts','market_open','jd_session')},
             'bank':settings.paper_bank,'bank_name':EXECUTION_NAME,'sell_fee_rate':settings.sell_fee_rate}
-        if page in ('overview','market'):
+        if page == 'overview' or (page == 'market' and view in ('auto','prices')):
             result['snapshot'] = {k:snap.get(k) for k in ('ts','market_open','jd_session','xauusd','change_pct','day_high','day_low','fx')}
             result['execution'] = {'quote':quote,'valuation_quote':valuation,'ready':quote is not None}
-            if page == 'market':
-                result['wave_evidence'] = _wave(conn,snap)
         if page in ('overview','strategies'):
             from .jd_live_readonly import accounts as live_accounts
             live = live_accounts(conn)
@@ -197,7 +204,6 @@ def page_data(settings: Settings, page, view='auto'):
                 result['autonomous'] = _plans(conn,settings)
                 result['fills'] = _fills(conn,settings)
                 result['hard_events_24h'] = (get_state(conn,'web_macro') or {}).get('hard_events_24h') or []
-                # Overview needs only the latest daily change, not the full curve and sampling tables.
 
             elif page == 'ai':
                 result['autonomous'] = {'accounts':accounts}
@@ -217,10 +223,35 @@ def page_data(settings: Settings, page, view='auto'):
             from .strategies import REGISTRY
             result['strategy_names'] = {**{k:c.name for k,c in REGISTRY.items() if k in daily_keys(settings)},**short_labels(settings),**portfolio_keys(settings)}
         if page == 'market':
-            result.update(macro=get_state(conn,'web_macro') or {},jd_research=jd_reference(conn,settings),prices=price_history(conn),
-                jin10=(get_state(conn,'jin10_flash') or [])[:30])
-            ids = {x.get('id') for x in result['jin10']}
-            result['jin10_triage'] = {k:v for k,v in (get_state(conn,'jin10_triage') or {}).items() if k in ids}
+            result['market_view'] = view
+            if view in ('auto','prices','reference'):
+                result['wave_evidence'] = _wave(conn,snap,view)
+            if view in ('auto','prices'):
+                result['prices'] = price_history(conn)
+            if view in ('auto','calendar','reference'):
+                macro = get_state(conn,'web_macro') or {}
+                fields = (('calendar','calendar_fetched_at','calendar_refresh_seconds','fetched_at') if view == 'calendar'
+                          else ('quotes','quotes_fetched_at','fetched_at') if view == 'reference' else tuple(macro))
+                result['macro'] = {k:macro[k] for k in fields if k in macro}
+                if view == 'calendar' and 'calendar' in result['macro']:
+                    from .wave_evidence import calendar_window
+                    result['macro']['calendar'] = calendar_window(result['macro']['calendar'],datetime.now(timezone.utc))['events']
+                if view in ('calendar','reference'):
+                    kind = 'calendar' if view == 'calendar' else 'quotes'
+                    result['macro']['refresh_errors'] = {kind:(macro.get('refresh_errors') or {}).get(kind)}
+            if view in ('auto','reference'):
+                research = jd_reference(conn,settings)
+                if view == 'reference':
+                    allowed = ('status','long_pct','short_pct','volume_usd','long_clusters','short_clusters','published_at','fetched_at')
+                    research = {kind:{k:part[k] for k in allowed if k in part} for kind in ('funds','orders') for part in [research.get(kind) or {}]}
+                result['jd_research'] = research
+            if view in ('auto','news'):
+                result['jin10'] = (get_state(conn,'jin10_flash') or [])[:30]
+                if view == 'auto':
+                    ids = {x.get('id') for x in result['jin10']}
+                    result['jin10_triage'] = {k:v for k,v in (get_state(conn,'jin10_triage') or {}).items() if k in ids}
+        if page == 'diagnostics':
+            result['jd_research'] = jd_reference(conn,settings)
         if page == 'notifications':
             result['notifications'] = _notifications(conn,settings)
         if page == 'scorecard':

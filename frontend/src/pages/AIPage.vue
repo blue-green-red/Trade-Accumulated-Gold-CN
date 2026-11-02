@@ -8,6 +8,7 @@ import {
   manualAnalysis,
   navigate,
   accountView,
+  diagnosticsOpen,
 } from "../composables/dashboard";
 import {
   num,
@@ -35,6 +36,9 @@ const model = ref(
   showScore = ref(false);
 const ForecastCard = defineAsyncComponent(
   () => import("../components/ForecastCard.vue"),
+);
+const SystemDiagnostics = defineAsyncComponent(
+  () => import("../components/SystemDiagnostics.vue"),
 );
 watch(
   () => props.data.model_controls,
@@ -511,6 +515,15 @@ function live() {
     <details class="more card" @toggle="showScore = $event.target.open">
       <summary>预测准确度（区别于交易胜率）</summary>
       <ForecastCard v-if="showScore" :controls="data.model_controls" />
+    </details>
+    <details
+      id="system-diagnostics"
+      class="more card"
+      :open="diagnosticsOpen"
+      @toggle="diagnosticsOpen = $event.target.open"
+    >
+      <summary>系统状态与接口诊断</summary>
+      <SystemDiagnostics v-if="diagnosticsOpen" />
     </details>
     <Card title="分析历史"
       ><template #action
