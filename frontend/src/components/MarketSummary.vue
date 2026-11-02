@@ -6,10 +6,6 @@ const q = computed(
   () =>
     props.data.execution?.quote || props.data.execution?.valuation_quote || {},
 );
-const daily = computed(
-  () =>
-    props.data.daily_change || props.data.wave_evidence?.daily_reference || {},
-);
 </script>
 <template>
   <div class="market-quotes" aria-label="实时行情摘要">
@@ -59,13 +55,6 @@ const daily = computed(
       <div class="data-meta">
         {{ sourceState(data.snapshot?.fx?.fetched_at, 1200) }} · 每15分钟
       </div>
-    </div>
-    <div class="quote-tile">
-      <div class="sub">期货近5日涨跌</div>
-      <div class="quote-value">
-        {{ signed(daily.changes_pct?.["5d"]) }}<span class="quote-unit">%</span>
-      </div>
-      <div class="sub">GC=F代理 · 截止 {{ daily.last_day || "—" }}</div>
     </div>
   </div>
 </template>

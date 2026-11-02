@@ -358,9 +358,7 @@ function live() {
           :subtitle="a.started ? '已开始' : '等待开账'"
           ><div class="sub">
             当前保护：止损
-            {{
-              a.stop_price == null ? "未设置" : num(a.stop_price) + " 元/克"
-            }}
+            {{ a.stop_price == null ? "未设置" : num(a.stop_price) + " 元/克" }}
             · 止盈
             {{
               a.target_price == null ? "未设置" : num(a.target_price) + " 元/克"
@@ -483,7 +481,7 @@ function live() {
         >
           <strong>{{ v.name }} · 快照 {{ fmtTs(v.wave_input?.as_of) }}</strong>
           <div class="sub">
-            期货代理开收盘
+            国际黄金期货历史（开/收盘）
             {{ v.wave_input?.daily_reference?.sessions || 0 }} 个交易日 ·
             最新结束日期 {{ v.wave_input?.daily_reference?.last_day || "—" }}
           </div>

@@ -23,11 +23,12 @@ class PageDataTests(unittest.TestCase):
 
     def test_overview_and_notifications_skip_unrelated_queries(self):
         f=self.f
-        with patch('monitor.page_data.equity_curves',side_effect=AssertionError('no curves')),patch('monitor.page_data.ai_section',side_effect=AssertionError('no research')),patch('monitor.page_data._wave',side_effect=AssertionError('no daily aggregation')):
+        with patch('monitor.page_data.equity_curves',side_effect=AssertionError('no curves')),patch('monitor.page_data.ai_section',side_effect=AssertionError('no research')),patch('monitor.page_data._wave',side_effect=AssertionError('no daily aggregation')),patch('monitor.wave_evidence.daily_reference',side_effect=AssertionError('overview does not query futures history')):
             overview=page_data(f.settings,'overview')
             notification=page_data(f.settings,'notifications')
             records=page_data(f.settings,'records')
         self.assertNotIn('equity',overview);self.assertNotIn('ai',overview);self.assertNotIn('prices',overview)
+        self.assertNotIn('daily_change',overview)
         self.assertNotIn('live_readonly',notification);self.assertNotIn('comparison',notification)
         self.assertNotIn('fills',records);self.assertNotIn('comparison',records)
         self.assertLess(len(json.dumps(overview)),len(json.dumps(dashboard(f.settings)))/2)

@@ -53,6 +53,8 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertTrue(page.evaluate('!!document.getElementById("app").__vue_app__'))
                 api=[x.split('/api/')[1] for x in requests if '/api/' in x]
                 self.assertEqual(api,['pages/overview']);self.assertFalse(any('/api/dashboard' in x for x in requests))
+                self.assertEqual(page.locator('#panel-overview .market-quotes .quote-tile').count(),3)
+                self.assertNotIn('期货',page.locator('#panel-overview .market-quotes').inner_text())
                 self.assertFalse(any('MarketPage-' in x or 'Chart-' in x for x in requests))
                 page.get_by_role('tab',name='行情',exact=True).click();page.locator('#panel-market[data-page-ready="true"]').wait_for()
                 self.assertTrue(any('MarketPage-' in x for x in requests))
@@ -167,6 +169,10 @@ class DashboardBrowserTests(unittest.TestCase):
             b=self.browser(p);page=b.new_page(viewport={'width':390,'height':844})
             try:
                 page.goto(url+'/#market');page.get_by_role('heading',name='未来七天经济日历',exact=True).wait_for()
+                self.assertEqual(page.get_by_role('button',name='京东逐日采样',exact=True).get_attribute('aria-pressed'),'true')
+                page.get_by_role('button',name='国际黄金期货历史参考',exact=True).click()
+                self.assertIn('Yahoo Finance GC=F',page.locator('#panel-market').inner_text())
+                self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                 text=page.locator('#panel-market').inner_text();self.assertNotIn('9876',text);self.assertIn('CPI 年率',text)
                 self.assertIn('重要黄金消息测试',text);self.assertNotIn('普通黄金消息测试',text)
                 page.get_by_role('button',name='已公布',exact=True).click();self.assertIn('零售销售月率',page.locator('#panel-market').inner_text())

@@ -173,10 +173,6 @@ def page_data(settings: Settings, page, view='auto'):
             result['execution'] = {'quote':quote,'valuation_quote':valuation,'ready':quote is not None}
             if page == 'market':
                 result['wave_evidence'] = _wave(conn,snap)
-            else:
-                from .wave_evidence import daily_reference
-                daily = daily_reference(conn,datetime.now(timezone.utc))
-                result['daily_change'] = {'last_day':daily.get('last_day'),'changes_pct':daily.get('changes_pct') or {}}
         if page in ('overview','strategies'):
             from .jd_live_readonly import accounts as live_accounts
             live = live_accounts(conn)

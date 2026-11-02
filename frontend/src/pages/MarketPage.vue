@@ -7,7 +7,7 @@ import Chart from "../components/Chart.vue";
 import { num, signed, fmtTs } from "../format";
 import { eventName } from "../events";
 const props = defineProps({ data: Object });
-const wave = ref("proxy"),
+const wave = ref("jd"),
   calendar = ref("upcoming"),
   flash = ref("important"),
   limit = ref(8),
@@ -138,8 +138,8 @@ function eventStatus(e) {
       <div class="seg" role="group" aria-label="波段数据源">
         <button
           v-for="[key, label] in [
-            ['proxy', '国际日线参考'],
             ['jd', '京东逐日采样'],
+            ['proxy', '国际黄金期货历史参考'],
           ]"
           :key="key"
           type="button"
@@ -155,7 +155,7 @@ function eventStatus(e) {
             key: wave,
             name:
               wave === 'proxy'
-                ? '期货代理收盘（美元/盎司）'
+                ? '黄金期货历史收盘（美元/盎司）'
                 : '京东末笔采样（元/克）',
             points: wavePoints,
           },
@@ -169,15 +169,13 @@ function eventStatus(e) {
       <p class="sub">
         {{
           wave === "proxy"
-            ? `GC=F期货代理 · 美元/盎司 · 已结束日期 ${reference.last_day || "—"} · ${(reference.recent_sessions || []).length} 个交易日，仅开收盘，非完整K线、非京东成交价。`
+            ? `国际黄金期货历史参考 · Yahoo Finance GC=F · 美元/盎司 · 数据截至 ${reference.last_day || "—"} · ${(reference.recent_sessions || []).length} 个交易日，仅开收盘。用于观察趋势，京东成交以银行报价为准。`
             : `京东报价本地采样 · 元/克 · 北京时间自然日 · ${(jdDaily.days || []).length} 天；首末笔不是官方开收盘，采样高低不代表逐笔极值。`
         }}
       </p>
       <div v-if="wave === 'proxy'" class="chips">
         <span
-          v-for="[key, value] in Object.entries(
-            reference.changes_pct || {},
-          ).filter(([k]) => k !== '5d')"
+          v-for="[key, value] in Object.entries(reference.changes_pct || {})"
           :key="key"
           class="chip"
           >{{ key.replace("d", "日") }} {{ signed(value) }}%</span
