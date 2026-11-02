@@ -1,9 +1,14 @@
+import json
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock
-from monitor.store import Store
-from monitor.notification_control import subscriptions, set_subscription, selected_events
+from monitor.config import Settings
+from monitor.store import Store, utc_now
+from monitor.notification_control import subscriptions, set_subscription, selected_events, retire_subscriptions
+from monitor.notification_outbox import dispatch, visible_tasks
+from monitor.alerts import AlertEngine
 from monitor.__main__ import Monitor
 
 
@@ -19,36 +24,82 @@ class NotificationTests(unittest.TestCase):
     def test_default_off_persistence_validation_and_independence(self):
         c=self.store.conn
         self.assertTrue(all(not s['enabled'] for s in subscriptions(c)))
-        set_subscription(c,'codex:short',True)
-        self.assertEqual([s['key'] for s in subscriptions(c) if s['enabled']],['codex:short'])
-        with self.assertRaises(ValueError):set_subscription(c,'codex:short','true')
+        set_subscription(c,'codex:low',True)
+        self.assertEqual([s['key'] for s in subscriptions(c) if s['enabled']],['codex:low'])
+        with self.assertRaises(ValueError):set_subscription(c,'codex:low','true')
         with self.assertRaises(ValueError):set_subscription(c,'unknown',True)
         self.assertIsNone(c.execute("SELECT value FROM state WHERE key='model_control:codex'").fetchone())
-        set_subscription(c,'codex:medium',True)
-        set_subscription(c,'codex:short',False)
-        self.assertEqual([s['key'] for s in subscriptions(c) if s['enabled']],['codex:medium'])
+        set_subscription(c,'codex:standard',True)
+        set_subscription(c,'codex:low',False)
+        self.assertEqual([s['key'] for s in subscriptions(c) if s['enabled']],['codex:standard'])
 
     def test_dispatch_only_selected_but_archives_all_without_leaking_other_events(self):
-        set_subscription(self.store.conn,'codex:short',True)
+        set_subscription(self.store.conn,'codex:low',True)
         events=[{'key':str(i),'notification_topic':topic,'title':topic,'body':topic}
-                for i,topic in enumerate(('codex:short','codex:long','claude:short','system'))]
-        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+                for i,topic in enumerate(('codex:low','codex:high','claude:low','system'))]
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         m.notifier.send.assert_called_once()
-        self.assertNotIn('codex:long',m.notifier.send.call_args.args[1])
+        self.assertNotIn('codex:high',m.notifier.send.call_args.args[1])
         rows=self.store.conn.execute('SELECT title,delivered FROM alerts').fetchall()
         self.assertEqual(len(rows),4)
-        self.assertEqual({r['title'] for r in rows if r['delivered']},{'codex:short'})
+        self.assertEqual({r['title'] for r in rows if r['delivered']},{'codex:low'})
         m.notifier.reset_mock();m.dispatch(events[1:]);m.notifier.send.assert_not_called()
 
-    def test_model_periods_and_removed_rule_routing(self):
-        with self.assertRaises(ValueError):set_subscription(self.store.conn,'rules:short',True)
-        set_subscription(self.store.conn,'codex:short',True)
+    def test_legacy_events_cannot_fall_back_to_an_enabled_current_topic(self):
+        set_subscription(self.store.conn,'codex:low',True)
+        for topic in ('rules:short','system','codex:short','codex:medium','codex:long'):
+            with self.assertRaises(ValueError):set_subscription(self.store.conn,topic,True)
         events=[{'key':'paper:short:open:1'},{'key':'paper:codex:short_ai:open:1'},
-                {'key':'acct:codex:position_ai:2026-10-22:buy'},{'key':'move:up'}]
-        self.assertEqual(selected_events(self.store.conn,events),events[1:2])
-        set_subscription(self.store.conn,'system',True)
-        self.assertEqual(selected_events(self.store.conn,events),[events[1],events[3]])
+                {'key':'acct:codex:position_ai:2026-10-22:buy'},{'key':'move:up'},
+                {'key':'old','notification_topic':'system'},
+                {'key':'fill','notification_topic':'codex:low'}]
+        self.assertEqual(selected_events(self.store.conn,events),events[-1:])
+
+    def test_retirement_cancels_old_tasks_and_preserves_current_switches_and_receipts(self):
+        c=self.store.conn
+        stamp=utc_now().isoformat()
+        set_subscription(c,'codex:analysis',True)
+        self.store.set_state('model_control:codex',{'enabled':True,'generation':7})
+        self.store.set_state('last_gate','block')
+        with c:
+            for topic in ('system','rules:hold','rules:position','rules:short','codex:short','codex:medium','codex:long'):
+                c.execute('INSERT INTO state VALUES(?,?,?)',('notify:'+topic,'{"enabled":true}',stamp))
+            for i,topic in enumerate(('system','codex:short','rules:hold','codex:analysis')):
+                event={'key':str(i),'title':topic,'body':topic,'notification_topic':topic}
+                c.execute('INSERT INTO notification_outbox(event_key,created_at,expires_at,event_json,status,next_attempt_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                          (str(i),stamp,(utc_now()+timedelta(minutes=10)).isoformat(),json.dumps(event),'retry',stamp,stamp))
+            c.execute('INSERT INTO notification_deliveries(ts,category,title,channel,status,event_keys_json) VALUES(?,?,?,?,?,?)',
+                      (stamp,'other','历史已发消息','pushplus','accepted','["historic"]'))
+        retire_subscriptions(c,'risk_six_account')
+        retire_subscriptions(c,'risk_six_account')
+        self.assertEqual([r[0] for r in c.execute("SELECT key FROM state WHERE key LIKE 'notify:%'")],['notify:codex:analysis'])
+        self.assertEqual([tuple(r) for r in c.execute('SELECT event_key,status FROM notification_outbox ORDER BY event_key')],
+                         [('0','cancelled'),('1','cancelled'),('2','cancelled'),('3','retry')])
+        self.assertEqual([r['key'] for r in visible_tasks(c,'risk_six_account')],['3'])
+        self.assertEqual(c.execute('SELECT title FROM notification_deliveries').fetchone()[0],'历史已发消息')
+        self.assertEqual(self.store.get_state('model_control:codex')['generation'],7)
+        self.assertIsNone(self.store.get_state('last_gate'))
+
+    def test_legacy_period_notifications_require_an_explicit_legacy_mode(self):
+        c=self.store.conn
+        set_subscription(c,'codex:short',True,mode='six_account')
+        event={'key':'paper:codex:short_ai:open:1'}
+        self.assertEqual(selected_events(c,[event]),[])
+        self.assertEqual(selected_events(c,[event],mode='six_account'),[event])
+        with self.assertRaises(ValueError):set_subscription(c,'codex:long',True,mode='four_account')
+
+    def test_sharp_moves_still_queue_internal_events_without_wechat(self):
+        now=utc_now()
+        self.store.add_tick({'ts':now-timedelta(minutes=30),'xauusd':100,'market_open':True})
+        engine=AlertEngine(Settings(),self.store)
+        events=engine.check({'xauusd':102,'market_open':True})
+        self.assertEqual([e['key'] for e in events],['move:up'])
+        notifier=Mock()
+        dispatch(self.store,notifier,events)
+        notifier.send.assert_not_called()
+        self.assertEqual(engine.check({'xauusd':102,'market_open':True}),[])
+        self.assertEqual(self.store.conn.execute('SELECT delivered FROM alerts').fetchone()[0],0)
 
     def test_analysis_summary_independent_of_system_alerts_and_model_trade_topics(self):
         set_subscription(self.store.conn,'codex:analysis',True)
@@ -57,7 +108,7 @@ class NotificationTests(unittest.TestCase):
                 {'key':'touch:R1','title':'点位','body':'level'},{'key':'gate:allow','title':'门控','body':'gate'},
                 {'key':'autonomous:1','notification_topic':'codex:high','title':'买入','body':'fill'}]
         self.assertEqual(selected_events(self.store.conn,events),events[:1])
-        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         self.assertEqual(m.notifier.send.call_args.args,('Codex摘要','### Codex摘要\n\ncodex'))
         self.assertEqual(self.store.conn.execute('select count(*) from alerts').fetchone()[0],5)
@@ -76,7 +127,7 @@ class NotificationTests(unittest.TestCase):
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         good={'Authorization':'Basic '+base64.b64encode(b'user:test-notify').decode(),
               'Content-Type':'application/json','X-Gold-Control':'1'}
-        def post(body='{"topic":"codex:short","enabled":true}',headers=None):
+        def post(body='{"topic":"codex:low","enabled":true}',headers=None):
             c=http.client.HTTPConnection('127.0.0.1',server.server_port)
             c.request('POST','/api/notifications',body,headers or {})
             r=c.getresponse();r.read();status=r.status;c.close();return status
@@ -85,9 +136,11 @@ class NotificationTests(unittest.TestCase):
             self.assertEqual(post(headers={'Authorization':good['Authorization']}),403)
             self.assertEqual(post(headers={**good,'Origin':'https://evil.example'}),403)
             self.assertEqual(post('{"topic":"bad","enabled":true}',good),400)
-            self.assertEqual(post('{"topic":"codex:short","enabled":"true"}',good),400)
+            for topic in ('system','rules:hold','rules:position','rules:short','codex:short','codex:medium','codex:long'):
+                self.assertEqual(post(json.dumps({'topic':topic,'enabled':True}),good),400)
+            self.assertEqual(post('{"topic":"codex:low","enabled":"true"}',good),400)
             self.assertEqual(post(headers=good),200)
-            self.assertEqual([r['key'] for r in subscriptions(self.store.conn) if r['enabled']],['codex:short'])
+            self.assertEqual([r['key'] for r in subscriptions(self.store.conn) if r['enabled']],['codex:low'])
         finally:server.shutdown();server.server_close();thread.join()
 
     def test_real_advice_is_a_separate_prioritized_message(self):
@@ -95,7 +148,7 @@ class NotificationTests(unittest.TestCase):
         events=[{'key':'autonomous:fake','notification_topic':'codex:high','title':'模拟买入','body':'simulation'},
                 {'key':'ai:fake','notification_topic':'codex:analysis','title':'Codex摘要','body':'research'},
                 {'key':'live-advice:fake','notification_topic':'codex:live_zheshang','title':'真实账户·浙商卖出建议','body':'需手动确认'}]
-        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock()
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock()
         m.notifier.send.side_effect=[False,True]
         m.dispatch(events)
         self.assertEqual(m.notifier.send.call_count,2)
@@ -112,7 +165,7 @@ class NotificationTests(unittest.TestCase):
         events=[{'key':f'live-advice:{bank}','notification_topic':f'codex:live_{bank}','title':bank,'body':bank}
                 for bank in ('zheshang','minsheng')]
         events.append({'key':'sim:disabled','notification_topic':'codex:high','title':'模拟买入','body':'disabled'})
-        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         m.notifier.send.assert_called_once()
         title,body=m.notifier.send.call_args.args

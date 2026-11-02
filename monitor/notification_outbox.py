@@ -2,13 +2,28 @@
 import json
 from datetime import datetime,timedelta
 from .store import utc_now
-from .notification_control import selected_events, event_topic
+from .notification_control import selected_events, event_topic, topics_for_mode
 
 
-def dispatch(store, notifier, events, now=None):
+def visible_tasks(conn, mode, limit=10):
+    allowed = topics_for_mode(mode)
+    result = []
+    for row in conn.execute("SELECT event_key,event_json,status,attempts,next_attempt_at FROM notification_outbox "
+                            "WHERE status!='accepted' ORDER BY updated_at DESC"):
+        event = json.loads(row[1])
+        if event_topic(event) not in allowed:
+            continue
+        result.append({'key': row[0], 'title': event['title'], 'status': row[2],
+                       'attempts': row[3], 'next_attempt_at': row[4]})
+        if len(result) >= limit:
+            break
+    return result
+
+
+def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
     now = now or utc_now()
     stamp = now.isoformat()
-    selected = selected_events(store.conn, events)
+    selected = selected_events(store.conn, events, mode)
     with store.conn:
         # A process that died during HTTP may already have delivered the message.
         store.conn.execute("UPDATE notification_outbox SET status='uncertain',updated_at=? WHERE status='sending'", (stamp,))
@@ -28,7 +43,7 @@ def dispatch(store, notifier, events, now=None):
         event=json.loads(row[1])
         from .controls import active
         model=event_topic(event).split(':')[0]
-        valid=bool(selected_events(store.conn,[event])) and (model not in ('codex','claude') or active(store.conn,model))
+        valid=bool(selected_events(store.conn,[event], mode)) and (model not in ('codex','claude') or active(store.conn,model))
         if row[2]>=3 or datetime.fromisoformat(row[3])<=now or not valid:
             with store.conn:store.conn.execute("UPDATE notification_outbox SET status='cancelled',updated_at=? WHERE event_key=?",(stamp,row[0]))
         else:due.append((event,row[2]))

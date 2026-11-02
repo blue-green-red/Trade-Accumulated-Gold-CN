@@ -29,7 +29,8 @@ from typing import Any, Dict, List, Optional
 from .config import BANK_NAMES, Settings
 from .scorecard import evaluate as evaluate_scorecard
 from .strategies import REGISTRY
-from .notification_control import subscriptions, visible_subscriptions
+from .notification_control import visible_subscriptions
+from .notification_outbox import visible_tasks
 from .controls import control, set_enabled, identity, short_labels, daily_keys
 from .performance import comparison, autonomous_comparison
 from .autonomous import summaries as portfolio_summaries, enabled as autonomous_enabled, keys as portfolio_keys, exists as portfolios_exist
@@ -360,7 +361,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
                 "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode),
                 "deliveries": [dict(r) for r in conn.execute("SELECT id,ts,category,title,channel,status,provider_id,provider_code,event_keys_json FROM notification_deliveries ORDER BY id DESC LIMIT 10")] if table_exists(conn,"notification_deliveries") else [],
-                "outbox": [{"key":r[0],"title":json.loads(r[1])['title'],"status":r[2],"attempts":r[3],"next_attempt_at":r[4]} for r in conn.execute("SELECT event_key,event_json,status,attempts,next_attempt_at FROM notification_outbox WHERE status!='accepted' ORDER BY updated_at DESC LIMIT 10")] if table_exists(conn,"notification_outbox") else [],
+                "outbox": visible_tasks(conn,settings.ai_trading_mode) if table_exists(conn,"notification_outbox") else [],
                 "recent": [dict(r) for r in conn.execute("SELECT ts,key,title,delivered FROM alerts WHERE delivered=1 OR key LIKE 'live-advice:%' ORDER BY rowid DESC LIMIT 20")]},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,
@@ -561,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(data,dict) or set(data)!={"topic","enabled"}: raise ValueError("invalid notification settings")
                 from .notification_control import set_subscription
                 with closing(sqlite3.connect(str(self.settings.db_path),timeout=10)) as conn:
-                    result=set_subscription(conn,data["topic"],data["enabled"])
+                    result=set_subscription(conn,data["topic"],data["enabled"],self.settings.ai_trading_mode)
                 invalidate_dashboard(self.settings)
                 self._send(200,json.dumps(result).encode(),"application/json")
             except (ValueError,TypeError):

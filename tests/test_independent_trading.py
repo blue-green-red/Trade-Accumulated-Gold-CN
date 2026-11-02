@@ -367,12 +367,12 @@ class TradingTests(unittest.TestCase):
         with patch("monitor.market.fetch_tv_snapshot", return_value={"status": "error", "error": "offline"}), patch("monitor.market.fetch_spot_gold", return_value={"status": "ok", "price": 4000}), patch("monitor.market.fetch_jd_latest_price", return_value={}):
             self.assertEqual(market.snapshot()["bank_est"], {})
 
-    def test_weekly_report_runs_when_market_closed(self):
+    def test_closed_market_no_longer_generates_weekly_notifications(self):
         monitor = Monitor(self.settings, True)
         try:
-            with patch("monitor.__main__.trading_session", return_value={"is_open":False}), patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=dict(snap(), market_open=False)), patch.object(monitor, "poll_jin10_if_due"), patch.object(monitor, "weekly_report_if_due", return_value=[{"key": "weekly"}]):
+            with patch("monitor.__main__.trading_session", return_value={"is_open":False}), patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=dict(snap(), market_open=False)), patch.object(monitor, "poll_jin10_if_due"):
                 _, _, events = monitor.tick()
-            self.assertEqual(events, [{"key": "weekly"}])
+            self.assertEqual(events, [])
         finally:
             monitor.store.conn.close()
 
@@ -438,7 +438,7 @@ class TradingTests(unittest.TestCase):
     def test_forced_bank_calibration_cannot_overlap_ai(self):
         monitor = Monitor(self.settings, True)
         try:
-            with patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=snap()), patch.object(monitor, "ai_running", return_value=True), patch.object(monitor.market, "calibrate_banks") as banks, patch.object(monitor, "poll_jin10_if_due"), patch.object(monitor, "run_ai_if_due", return_value=[]), patch.object(monitor.accounts, "run_daily", return_value=[]), patch.object(monitor, "refresh_macro_if_due"), patch.object(monitor, "digest_if_due", return_value=[]), patch.object(monitor, "weekly_report_if_due", return_value=[]):
+            with patch.object(monitor.market, "refresh_fx_if_due"), patch.object(monitor.market, "snapshot", return_value=snap()), patch.object(monitor, "ai_running", return_value=True), patch.object(monitor.market, "calibrate_banks") as banks, patch.object(monitor, "poll_jin10_if_due"), patch.object(monitor, "run_ai_if_due", return_value=[]), patch.object(monitor.accounts, "run_daily", return_value=[]), patch.object(monitor, "refresh_macro_if_due"):
                 monitor.tick(force_bank=True)
             banks.assert_not_called()
         finally:

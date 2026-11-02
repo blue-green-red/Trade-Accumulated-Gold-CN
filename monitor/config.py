@@ -56,8 +56,7 @@ class Settings:
     bank_refresh_minutes: float = _env_float("GOLD_MONITOR_BANK_REFRESH_MINUTES", 20)
     fx_refresh_minutes: float = _env_float("GOLD_MONITOR_FX_REFRESH_MINUTES", 15)
     stale_minutes: float = _env_float("GOLD_MONITOR_STALE_MINUTES", 10)   # 报价超过此时长未更新视为休市
-    alert_cooldown_minutes: float = _env_float("GOLD_MONITOR_ALERT_COOLDOWN_MINUTES", 60)
-    level_touch_usd: float = _env_float("GOLD_MONITOR_LEVEL_TOUCH_USD", 3)
+    move_cooldown_minutes: float = _env_float("GOLD_MONITOR_MOVE_COOLDOWN_MINUTES", _env_float("GOLD_MONITOR_ALERT_COOLDOWN_MINUTES", 60))
     move_window_minutes: float = _env_float("GOLD_MONITOR_MOVE_WINDOW_MINUTES", 30)   # 价格异动：窗口
     move_pct: float = _env_float("GOLD_MONITOR_MOVE_PCT", 0.6)                        # 价格异动：涨跌幅阈值 %
     paper_bank: str = os.environ.get("GOLD_MONITOR_PAPER_BANK", "zheshang")
@@ -75,9 +74,7 @@ class Settings:
     ai_inflight_max_move_pct: float = max(0.01, _env_float("GOLD_AI_INFLIGHT_MAX_MOVE_PCT", 0.4))
     ai_decision_max_age_minutes: float = _env_float("GOLD_AI_DECISION_MAX_AGE_MINUTES", 15)
     account_budget: float = _env_float("GOLD_MONITOR_ACCOUNT_BUDGET", 100_000)   # 每个日线策略账户的虚拟本金
-    weekly_report_bj: tuple = (5, 10)   # 每周六 10 点推送战绩榜（周几, 小时）
     reentry_cooldown_minutes: float = _env_float("GOLD_MONITOR_REENTRY_COOLDOWN_MINUTES", 60)
-    digest_hours_bj: tuple = tuple(int(h) for h in os.environ.get("GOLD_MONITOR_DIGEST_HOURS", "9,20").split(",") if h)
     pushplus_token: str = os.environ.get("PUSHPLUS_TOKEN", "").strip()
     serverchan_sendkey: str = os.environ.get("SERVERCHAN_SENDKEY", "").strip()
     anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "").strip()

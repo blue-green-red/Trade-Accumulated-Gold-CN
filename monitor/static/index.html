@@ -1127,12 +1127,11 @@ const notificationPending=new Set();
 let notificationError="";
 function notificationControls(d) {
   const n=d.notifications || {},message=el("div",{class:"sub",role:"status"},n.configured ? `已配置 ${n.channel} · 修改后即时生效` : "尚未配置推送密钥，请在服务器配置后重启监控服务。"),
-    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"按事件独立订阅，新增项默认关闭。真实建议需人工确认，各类通知与模型开关互不影响。")),grid=el("div",{class:"grid-2"});
+    box=card("微信操作通知",null,message,notificationError ? el("div",{class:"notice warn",role:"alert"},notificationError):null,el("p",{class:"sub"},"仅订阅真实账户建议、模型分析摘要和模拟盘成交。行情异动与复评事件只在内部调度，不发微信；通知开关与模型开关独立。")),grid=el("div",{class:"grid-2"});
   const categories=[
     ["真实账户建议 · 人工执行",c=>c.key.includes(":live_"),"按模型与银行分别订阅。买卖或价格/数量实质调整才提醒；建议到期、数据过期或账户变化后，不发送旧建议。"],
     ["模型分析摘要",c=>c.key.endsWith(":analysis"),"每轮成功分析的研究摘要，与真实建议和模拟成交独立。"],
-    ["模拟盘成交与保护退出",c=>!c.key.includes(":live_") && !c.key.endsWith(":analysis") && (c.key.startsWith("codex:") || c.key.startsWith("claude:")),"每个风险档包含初始满仓和空仓两户，这些是模拟账户内的成交。"],
-    ["行情与报告",c=>c.key==="system","行情异动、价格点位提醒与定时报告。"]
+    ["模拟盘成交与保护退出",c=>!c.key.includes(":live_") && !c.key.endsWith(":analysis") && (c.key.startsWith("codex:") || c.key.startsWith("claude:")),"每个风险档包含初始满仓和空仓两户，这些是模拟账户内的成交。"]
   ];
   categories.forEach(([title,matches,description])=>{
     const rows=(n.subscriptions || []).filter(matches);if(!rows.length)return;
@@ -1164,14 +1163,14 @@ function renderNotifications(d) {
     el("div",{class:"sub"},"这里显示实际发送的消息标题；服务受理不代表手机已收到或已读。"),
     el("ul",{class:"list"},deliveries.map(r=>el("li",{},
       el("div",{class:"row"},el("strong",{class:"grow"},displayEventTitle(r.title)),el("span",{class:"tag"},({accepted:"服务已受理",failed:"发送失败",uncertain:"受理结果待核对",not_sent:"未发送"})[r.status] || "状态未知")),
-      el("div",{class:"sub"},`${fmtTs(r.ts)} · ${r.category==="real_advice"?"真实账户建议独立通知":"模拟盘/摘要/行情通知"}`),
+      el("div",{class:"sub"},`${fmtTs(r.ts)} · ${r.category==="real_advice"?"真实账户建议独立通知":"分析/操盘等通知"}`),
       r.provider_id?el("details",{class:"more","data-detail-key":`delivery-${r.id}`},el("summary",{},"查看消息流水号"),el("code",{style:"overflow-wrap:anywhere"},r.provider_id)):null)))):null;
   const outbox=d.notifications?.outbox || [];
   if(outbox.length)panel.appendChild(card("发送重试与待核对",null,el("div",{class:"sub"},"明确失败最多尝试3次；超时等受理结果不明的消息保留待核对，避免重复提醒。"),
     el("ul",{class:"list"},outbox.map(r=>el("li",{},el("strong",{},displayEventTitle(r.title)),el("div",{class:"sub"},`${({pending:"待发送",retry:"等待重试",uncertain:"受理结果待核对",cancelled:"已停止发送",failed:"重试已结束",sending:"正在发送"})[r.status] || r.status} · 已尝试 ${r.attempts} 次${r.status==="retry"?" · 下次 "+fmtTs(r.next_attempt_at):""}`))))));
   if(receipts)panel.appendChild(receipts);
   const recent=d.notifications?.recent || [];
-  const category=k=>k.startsWith("live-advice:")?"真实账户建议":k.startsWith("autonomous:")?"模拟盘操作":k.startsWith("ai:")?"模型摘要":"行情/报告";
+  const category=k=>k.startsWith("live-advice:")?"真实账户建议":k.startsWith("autonomous:")?"模拟盘操作":k.startsWith("ai:")?"模型摘要":"历史系统事件";
   const noticeRow=r=>el("li",{},el("div",{class:"row"},el("strong",{class:"grow"},displayEventTitle(r.title)),el("span",{class:"tag"},r.delivered?"服务已受理":"仅记录")),el("div",{class:"sub"},`${fmtTs(r.ts)} · ${category(r.key)}`));
   panel.appendChild(card("最近通知记录",null,
     el("div",{class:"sub"},"真实建议单独发送，同轮两家真实建议可合并；事件记录条数不等于微信消息条数。已受理仅表示推送服务接收。"),
@@ -1508,7 +1507,7 @@ function renderRecords(d) {
       !["analysis","alerts"].includes(recordKind) ? chooser("筛选账户",[["all","全部账户"],...keys],fillFilter,(v)=>fillFilter=v) : null));
   controls.classList.add("record-controls");panel.appendChild(controls);
   const title=({fills:"实际成交",plans:"AI 操盘决策",cycles:"交易周期",analysis:"分析历史",alerts:"系统提醒"})[recordKind];
-  const descriptions={fills:"AI 模拟盘成交，按时间倒序；初始化建仓单独标注。银行真实成交与条件单在账户页查看。",plans:"AI 模拟盘决策，按时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮包含全部活动账户决策，不代表已经成交。",alerts:"系统监控提醒，不代表 AI 已下单。"};
+  const descriptions={fills:"AI 模拟盘成交，按时间倒序；初始化建仓单独标注。银行真实成交与条件单在账户页查看。",plans:"AI 模拟盘决策，按时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",cycles:"从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",analysis:"模型每轮分析的结果，一轮包含全部活动账户决策，不代表已经成交。",alerts:"系统事件与内部复评触发记录，不代表 AI 已下单；旧规则提醒仅保留历史记录，不再生成或推送。"};
   panel.appendChild(el("div",{class:"notice info"},descriptions[recordKind]));
   const items=historyItems.filter(r=>{const m=(r.account || r.strategy || "").split(":")[0];return (!["claude","codex"].includes(m) || visibleModel(d,m)) && !(d.model_controls || []).some(c=>!c.enabled && (r.title || "").toLowerCase().includes(c.key));});
   const list=items.map((r)=>{

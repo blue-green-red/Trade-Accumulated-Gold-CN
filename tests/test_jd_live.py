@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock,patch
 
+from monitor.config import Settings
 from monitor.store import Store
 from monitor.jd_live_readonly import ensure_schema,parse_account,record_success,record_failure,accounts,model_input,PRODUCTS,declare_full_position
 from monitor.jd_live_advice import LiveAdviceSet,save
@@ -250,7 +251,7 @@ class LiveCashAndNotificationTests(unittest.TestCase):
         self.assertTrue(all('程序未自动下单' in e['body'] for e in events))
         self.assertEqual(selected_events(self.c,events),[])
         for bank in PRODUCTS:set_subscription(self.c,'codex:live_'+bank,True)
-        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events);m.notifier.send.assert_called_once()
         self.assertEqual(notification_events(self.c,'codex',1),[])
         save(self.c,'codex',2,{'zheshang':advice(),'minsheng':advice()},model_input(self.c));self.c.commit()

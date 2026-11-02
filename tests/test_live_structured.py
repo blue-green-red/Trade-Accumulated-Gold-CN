@@ -6,6 +6,7 @@ from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from unittest.mock import Mock,patch
 
+from monitor.config import Settings
 from monitor.store import Store
 from monitor.jd_live_readonly import ensure_schema,parse_account,record_success,model_input,accounts
 from monitor.jd_live_advice import LiveAdvice,save,notification_events
@@ -147,7 +148,7 @@ class StructuredAdviceTests(unittest.TestCase):
         view=self.saved();self.assertEqual(notification_events(self.s.conn,'codex',view),[])
         view=self.saved(self.value('cancel'));events=notification_events(self.s.conn,'codex',view)
         self.assertEqual(len(events),1);self.assertIn('撤单建议',events[0]['title'])
-        m=object.__new__(Monitor);m.store=self.s;m.notifier=Mock();m.notifier.send.return_value=True;m.dispatch(events)
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.s;m.notifier=Mock();m.notifier.send.return_value=True;m.dispatch(events)
         view=self.saved(self.value('cancel'));self.assertEqual(notification_events(self.s.conn,'codex',view),[])
         value=self.value('replace',review_conditions=[self.condition()]);value['order_management'][0]['replacement']={'price_cny':848.}
         view=self.saved(value);events=notification_events(self.s.conn,'codex',view)

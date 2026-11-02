@@ -101,7 +101,6 @@ class RuleAccountRemovalTests(unittest.TestCase):
              patch.object(m, 'poll_jin10_if_due'), patch.object(m, 'refresh_macro_if_due'), \
              patch.object(m, 'request_ai_after_data_release'), patch.object(m, 'run_ai_if_due', return_value=[]), \
              patch('monitor.cadence.request_periodic'), patch('monitor.jd_live_review.request_reviews'), \
-             patch.object(m, 'digest_if_due', return_value=[]), patch.object(m, 'weekly_report_if_due', return_value=[]), \
              patch.object(m.alerts, 'check', return_value=[event]) as alerts:
             m.analysts = {'codex': Mock()}
             _, _, events = m.tick()

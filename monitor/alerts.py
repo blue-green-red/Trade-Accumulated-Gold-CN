@@ -1,4 +1,4 @@
-"""提醒规则与消息格式。同一 key 在冷却期内只推一次。"""
+"""行情异动内部事件与CLI计划格式；同方向事件在冷却期内只记录一次。"""
 
 from __future__ import annotations
 
@@ -61,10 +61,10 @@ class AlertEngine:
 
     def cooled_down(self, key: str, minutes: Optional[float] = None) -> bool:
         last = self.store.last_alert_time(key)
-        window = timedelta(minutes=minutes if minutes is not None else self.settings.alert_cooldown_minutes)
+        window = timedelta(minutes=minutes if minutes is not None else self.settings.move_cooldown_minutes)
         return last is None or utc_now() - last >= window
 
-    def check(self, snap: Dict[str, Any], plan: Dict[str, Any]) -> List[Dict[str, str]]:
+    def check(self, snap: Dict[str, Any]) -> List[Dict[str, str]]:
         if not snap.get("market_open") or snap.get("xauusd") is None:
             return []
         events: List[Dict[str, str]] = []
@@ -78,40 +78,6 @@ class AlertEngine:
             if abs(pct) >= self.settings.move_pct:
                 events.append({"key": f"move:{'up' if pct > 0 else 'down'}",
                                "title": f"⚡{window}分钟{'急涨' if pct > 0 else '急跌'} {pct:+.2f}%",
-                               "body": f"XAUUSD {window} 分钟内 {prev:.2f} → {price:.2f}（{pct:+.2f}%），已触发 AI 查消息面原因"})
-
-        if plan.get("ok"):
-            # 2. 触及关键点位
-            touch = self.settings.level_touch_usd
-            for side, label, action in (("resistance", "R", "持仓可分批减仓"), ("support", "S", "观察是否止跌")):
-                for i, lv in enumerate(plan[side][:2]):
-                    if abs(price - lv["price"]) <= touch:
-                        events.append({"key": f"touch:{label}{i + 1}:{lv['price']:.0f}",
-                                       "title": f"📍触及{label}{i + 1} {lv['price']:.0f}",
-                                       "body": f"XAUUSD {price:.2f} 触及 {label}{i + 1} {lv['price']:.1f}"
-                                               f"（约 {fmt_cny(lv['cny'])} 元/克，{'、'.join(lv['reasons'])}）：{action}"})
-            # 3. 进入低吸区（给真人决策用，与模拟盘独立）
-            buy = plan.get("buy")
-            if buy and buy.get("valid") and buy["zone"][0] <= price <= buy["zone"][1]:
-                events.append({"key": f"zone:buy:{buy['entry']:.0f}",
-                               "title": f"💰进入{buy['level']}低吸区 {price:.0f}",
-                               "body": f"价格进入低吸区 {buy['zone'][0]:.0f}–{buy['zone'][1]:.0f}，"
-                                       f"门控：{plan['gate_text']}。{plan['summary']}"})
-            # 4. 门控切换
-            last_gate = self.store.get_state("last_gate")
-            if last_gate and last_gate != plan["gate"] and plan["gate"] in ("allow", "block"):
-                events.append({"key": f"gate:{plan['gate']}", "title": f"🚦门控切换：{plan['gate_text'][:10]}",
-                               "body": f"30m/1H 门控由「{last_gate}」变为「{plan['gate_text']}」"})
-            self.store.set_state("last_gate", plan["gate"])
+                               "body": f"XAUUSD {window} 分钟内 {prev:.2f} → {price:.2f}（{pct:+.2f}%），达到异动复评阈值，交由已开启模型调度；不代表买卖建议"})
 
         return [e for e in events if self.cooled_down(e["key"])]
-
-    def premium_events(self, issues: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        events = []
-        for issue in issues:
-            level = "🚨溢价越界" if issue["status"] == "abort" else "⚠️溢价偏大"
-            events.append({"key": f"premium:{issue['bank']}:{issue['status']}",
-                           "title": f"{level} {BANK_NAMES[issue['bank']]}",
-                           "body": f"{BANK_NAMES[issue['bank']]} 报价 {issue['price']:.2f}，溢价 {issue['premium']:+.1f} 元/克"
-                                   + ("，已拒用该换算比，请到银行 APP 核实盘口" if issue["status"] == "abort" else "")})
-        return [e for e in events if self.cooled_down(e["key"], 180)]

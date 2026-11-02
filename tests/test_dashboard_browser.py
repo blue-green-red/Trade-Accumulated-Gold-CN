@@ -443,6 +443,8 @@ class DashboardBrowserTests(unittest.TestCase):
                 self.assertIn('高风险短线',text);self.assertNotIn('中线',text)
                 self.assertIn('📊真实账户建议 · 浏览器验证',text);self.assertNotIn('🧠',text);self.assertIn('服务已受理',text)
                 self.assertNotIn('对照策略',text)
+                self.assertNotIn('行情与报告',text)
+                self.assertEqual(page.get_by_role('switch',name='行情提醒与定时报告 通知',exact=True).count(),0)
                 self.assertIn('服务受理不代表手机已收到或已读',text)
                 page.get_by_text('查看消息流水号',exact=True).click()
                 self.assertTrue(page.get_by_text('receipt-browser-only',exact=True).is_visible())

@@ -54,6 +54,8 @@ class Monitor:
             reset_experiment(self.store.conn)
         from .rule_accounts import remove_rule_accounts
         remove_rule_accounts(self.store.conn)
+        from .notification_control import retire_subscriptions
+        retire_subscriptions(self.store.conn, settings.ai_trading_mode)
         from .jd_live_readonly import ensure_schema as ensure_live_readonly
         ensure_live_readonly(self.store.conn)
         self.market = Market(settings, self.store)
@@ -461,7 +463,6 @@ class Monitor:
             self.store.set_state("jd_session_closed", False)
         if snap.get("xauusd") is None:
             log.warning("本轮取价全部失败: %s", snap["errors"])
-            events += self.weekly_report_if_due(snap)
             return snap, None, events
 
         # JD direct quotes drive execution and conversion; no bank Chromium in the daemon.
@@ -470,7 +471,6 @@ class Monitor:
         self.poll_jin10_if_due(snap["market_open"])
         if not snap["market_open"]:
             self.publish_for_web(snap, None)
-            events += self.weekly_report_if_due(snap)
             return snap, None, events
 
         self.refresh_macro_if_due()
@@ -489,7 +489,7 @@ class Monitor:
         views = {name: a.latest(self.settings.ai_view_max_age_hours) for name, a in self.analysts.items()} if not self.portfolios else {}
         ai_plans = {name: self.build_ai_led_plan(snap, view, cost) for name, view in views.items() if view}
         plan = base_plan  # Technical levels remain available without rule trading accounts.
-        alert_events = self.alerts.check(snap, plan)
+        alert_events = self.alerts.check(snap)
         if self.ai and any(e["key"].startswith("move:") for e in alert_events):
             for analyst in self.enabled_analysts().values():
                 analyst.request_refresh(f"{int(self.settings.move_window_minutes)}分钟异动", min_gap_minutes=30)
@@ -505,8 +505,6 @@ class Monitor:
             events += self.legacy_short.on_tick(snap, {"ok": False})
         events += self.accounts.run_daily(snap, daily_views)
         self.publish_for_web(snap, plan, base_plan, "base", ai_plans)
-        events += self.digest_if_due(snap, plan)
-        events += self.weekly_report_if_due(snap)
         return snap, plan, events
 
     def leaderboard_text(self, snap) -> str:
@@ -522,46 +520,18 @@ class Monitor:
             body += f"\n\n**{model['name']} 独立操盘**：收益 {ret}，完整平仓 {model['trades']} 次，胜率 {rate}"
         return body
 
-    def weekly_report_if_due(self, snap) -> List[Dict[str, str]]:
-        now_bj = datetime.now(BJ)
-        weekday, hour = self.settings.weekly_report_bj
-        if now_bj.weekday() != weekday or now_bj.hour != hour:
-            return []
-        key = f"weekly:{now_bj:%Y-%m-%d}"
-        if not self.alerts.cooled_down(key, 24 * 60):
-            return []
-        body = self.leaderboard_text(snap)
-        if self.ai:
-            body += "\n\n" + scorecard_summary(evaluate_scorecard(self.store.conn))
-        return [{"key": key, "title": f"🏆模拟盘周报 {now_bj:%m-%d}", "body": body}]
-
-    def digest_if_due(self, snap, plan) -> List[Dict[str, str]]:
-        now_bj = datetime.now(BJ)
-        if now_bj.hour not in self.settings.digest_hours_bj:
-            return []
-        key = f"digest:{now_bj:%Y-%m-%d}:{now_bj.hour}"
-        if not self.alerts.cooled_down(key, 24 * 60):
-            return []
-        return [{"key": key, "title": f"📊黄金计划 {now_bj:%H:%M} XAUUSD {snap['xauusd']:.0f}",
-                 "body": format_plan(snap, plan) + "\n\n---\n\n" + self.leaderboard_text(snap)}]
-
     def dispatch(self, events: List[Dict[str, str]]) -> None:
         """Real-account advice has its own message; merge only within each category."""
         from .notification_outbox import dispatch
-        dispatch(self.store,self.notifier,events)
+        dispatch(self.store,self.notifier,events,mode=self.settings.ai_trading_mode)
 
     def run_forever(self) -> None:
         log.info("监控启动：推送通道=%s，每 %ss 一轮，模拟盘=%s", self.notifier.channel,
                  self.settings.tick_seconds, BANK_NAMES[self.settings.paper_bank])
-        first = True
         while True:
             started = time.monotonic()
             try:
                 snap, plan, events = self.tick()
-                if first and plan:
-                    events.insert(0, {"key": f"startup:{utc_now().isoformat()}", "title": "✅黄金监控已启动",
-                                      "body": format_plan(snap, plan)})
-                    first = False
                 self.dispatch(events)
                 if snap.get("xauusd"):
                     log.info("XAUUSD %.2f open=%s 事件=%d %s", snap["xauusd"], snap["market_open"], len(events),

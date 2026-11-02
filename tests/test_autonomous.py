@@ -362,7 +362,6 @@ class AutonomousTests(unittest.TestCase):
         self.m.portfolios.on_tick(snapshot())
         self.m.market.refresh_fx_if_due=Mock()
         self.m.market.snapshot=Mock(return_value={'xauusd':None,'errors':['offline']})
-        self.m.weekly_report_if_due=Mock(return_value=[])
         with patch('monitor.autonomous.utc_now',return_value=utc_now()+timedelta(minutes=2)):
             self.m.tick()
         self.assertEqual(self.plan()['status'],'expired')
