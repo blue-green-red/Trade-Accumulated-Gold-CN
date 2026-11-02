@@ -1072,11 +1072,18 @@ function notificationControls(d) {
 function renderNotifications(d) {
   const panel=clear(document.getElementById("panel-notifications"));
   panel.appendChild(notificationControls(d));
+  const deliveries=d.notifications?.deliveries || [];
+  if(deliveries.length)panel.appendChild(card("微信发送回执",null,
+    el("div",{class:"sub"},"这里显示实际发送的消息标题；服务受理不代表手机已收到或已读。"),
+    el("ul",{class:"list"},deliveries.map(r=>el("li",{},
+      el("div",{class:"row"},el("strong",{class:"grow"},r.title),el("span",{class:"tag"},({accepted:"服务已受理",failed:"发送失败",not_sent:"未发送"})[r.status] || "状态未知")),
+      el("div",{class:"sub"},`${fmtTs(r.ts)} · ${r.category==="real_advice"?"真实账户建议独立通知":"模拟盘/摘要/行情通知"}`),
+      r.provider_id?el("details",{class:"more","data-detail-key":`delivery-${r.id}`},el("summary",{},"查看消息流水号"),el("code",{style:"overflow-wrap:anywhere"},r.provider_id)):null)))));
   const recent=d.notifications?.recent || [];
   const category=k=>k.startsWith("live-advice:")?"真实账户建议":k.startsWith("autonomous:")?"模拟盘操作":k.startsWith("ai:")?"模型摘要":"行情/报告";
-  const noticeRow=r=>el("li",{},el("div",{class:"row"},el("strong",{class:"grow"},r.title),el("span",{class:"tag"},r.delivered?"已发送":"仅记录")),el("div",{class:"sub"},`${fmtTs(r.ts)} · ${category(r.key)}`));
+  const noticeRow=r=>el("li",{},el("div",{class:"row"},el("strong",{class:"grow"},r.title),el("span",{class:"tag"},r.delivered?"服务已受理":"仅记录")),el("div",{class:"sub"},`${fmtTs(r.ts)} · ${category(r.key)}`));
   panel.appendChild(card("最近通知记录",null,
-    el("div",{class:"sub"},"同轮事件可能合并，记录条数不等于微信消息条数。已发送表示推送服务已接收。"),
+    el("div",{class:"sub"},"真实建议单独发送，同轮两家真实建议可合并；事件记录条数不等于微信消息条数。已受理仅表示推送服务接收。"),
     recent.length?el("ul",{class:"list"},recent.slice(0,6).map(noticeRow)):el("div",{class:"empty"},"暂无发送记录"),
     recent.length>6?el("details",{class:"more","data-detail-key":"notice-history"},el("summary",{},`较早记录 · ${recent.length-6} 条`),el("ul",{class:"list"},recent.slice(6).map(noticeRow))):null));
 
@@ -1450,7 +1457,7 @@ function renderRecords(d) {
       el("div",{class:"sub"},r.error ? "" : `短期${BIAS[v.bias_short] || "—"} · 中长期${BIAS[v.bias_long] || "—"}`),
       v._performance ? el("div",{class:"sub"},`耗时 ${num(v._performance.wall_seconds,1)} 秒 · 输入 ${num(v._performance.input_tokens,0)} / 缓存 ${num(v._performance.cached_input_tokens,0)} / 输出 ${num(v._performance.output_tokens,0)} Token · ${v._performance.mode==="resume" ? "续接第"+v._performance.session_turn+"轮" : "新会话"}`) : null,
       r.outcomes ? el("div",{class:"sub"},Object.entries(r.outcomes).map(([k,o])=>`${k}：${o.status==="done" ? (o.hit ? "命中 " : "未命中 ")+pct(o.ret) : o.status==="pending" ? "待到期" : "缺数据"}`).join(" · ")) : null);}
-    return el("li",{},heading(r.title),el("div",{class:"sub"},r.delivered ? "已推送" : "仅记录"));
+    return el("li",{},heading(r.title),el("div",{class:"sub"},r.delivered ? "服务已受理" : "仅记录"));
   });
   list.forEach((n,i)=>n.dataset.recordKey=`${recordKind}:${items[i].account}:${items[i].id || items[i].stamp}`);
   const box=card(title,el("span",{class:"sub"},`已显示 ${items.length} 条${historyMore ? " · 还有更多" : ""}`),

@@ -398,6 +398,9 @@ class DashboardBrowserTests(unittest.TestCase):
         import test_risk_accounts as risk
         from playwright.sync_api import sync_playwright
         f=risk.RiskAccountTests();f.setUp()
+        with f.m.store.conn:
+            f.m.store.conn.execute('INSERT INTO notification_deliveries(ts,category,title,channel,status,provider_id,event_keys_json) VALUES(?,?,?,?,?,?,?)',
+                (utc_now().isoformat(),'real_advice','真实账户建议 · 浏览器验证','pushplus','accepted','receipt-browser-only','[]'))
         class Local(Handler):
             password=''
             def log_message(self,*args):pass
@@ -430,6 +433,10 @@ class DashboardBrowserTests(unittest.TestCase):
                 page.get_by_role('tab',name='通知',exact=True).click()
                 text=page.locator('#panel-notifications').inner_text()
                 self.assertIn('高风险短线',text);self.assertNotIn('中线',text)
+                self.assertIn('真实账户建议 · 浏览器验证',text);self.assertIn('服务已受理',text)
+                self.assertIn('服务受理不代表手机已收到或已读',text)
+                page.get_by_text('查看消息流水号',exact=True).click()
+                self.assertTrue(page.get_by_text('receipt-browser-only',exact=True).is_visible())
                 # A slow, older dashboard response must not delay or undo a saved switch.
                 stale=page.evaluate('DATA');held=[]
                 page.route('**/api/dashboard',lambda route:held.append(route))

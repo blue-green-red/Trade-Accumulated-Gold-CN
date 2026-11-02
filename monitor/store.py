@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS alerts (
     ts TEXT NOT NULL, key TEXT NOT NULL, title TEXT, body TEXT, delivered INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_key ON alerts(key, ts);
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id INTEGER PRIMARY KEY, ts TEXT NOT NULL, category TEXT NOT NULL, title TEXT NOT NULL,
+    channel TEXT NOT NULL, status TEXT NOT NULL, provider_id TEXT, provider_code TEXT,
+    event_keys_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS paper_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bank TEXT NOT NULL, status TEXT NOT NULL,          -- open / closed

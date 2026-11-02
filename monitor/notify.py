@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import requests
 
@@ -18,6 +19,7 @@ class Notifier:
     def __init__(self, settings: Settings, dry_run: bool = False):
         self.settings = settings
         self.dry_run = dry_run
+        self.last_receipt = {}
 
     @property
     def channel(self) -> str:
@@ -30,9 +32,10 @@ class Notifier:
         return "log-only"
 
     def send(self, title: str, body_markdown: str) -> bool:
-        """返回是否真正送达微信。"""
+        """Return provider acceptance, not proof of delivery to or reading on the phone."""
         title = title[:32]
         channel = self.channel
+        self.last_receipt = {'channel':channel,'status':'not_sent','provider_id':None,'provider_code':None}
         if channel in ("dry-run", "log-only"):
             log.info("[%s] %s\n%s", channel, title, body_markdown)
             return False
@@ -41,20 +44,25 @@ class Notifier:
                 resp = requests.post(
                     PUSHPLUS_URL,
                     json={"token": self.settings.pushplus_token, "title": title,
-                          "content": body_markdown, "template": "markdown"},
+                          "content": body_markdown, "template": "markdown", "channel":"wechat"},
                     timeout=15,
                 )
-                ok = resp.ok and resp.json().get("code") == 200
+                payload=resp.json();ok = resp.ok and payload.get("code") == 200
+                message_id=payload.get('data')
+                if isinstance(message_id,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',message_id) and message_id!=self.settings.pushplus_token:
+                    self.last_receipt['provider_id']=message_id
             else:
                 resp = requests.post(
                     SERVERCHAN_URL.format(key=self.settings.serverchan_sendkey),
                     data={"title": title, "desp": body_markdown},
                     timeout=15,
                 )
-                ok = resp.ok and resp.json().get("code") == 0
+                payload=resp.json();ok = resp.ok and payload.get("code") == 0
+            self.last_receipt.update(status='accepted' if ok else 'failed',provider_code=str(payload.get('code'))[:32])
             if not ok:
-                log.warning("推送失败 [%s]: %s", channel, resp.text[:300])
+                log.warning("推送失败 [%s]: HTTP %s, provider code %s",channel,resp.status_code,self.last_receipt['provider_code'])
             return ok
         except Exception as exc:
-            log.warning("推送异常 [%s]: %s", channel, exc)
+            self.last_receipt['status']='failed'
+            log.warning("推送异常 [%s]: %s", channel, type(exc).__name__)
             return False

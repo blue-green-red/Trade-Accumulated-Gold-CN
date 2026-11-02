@@ -545,18 +545,32 @@ class Monitor:
                  "body": format_plan(snap, plan) + "\n\n---\n\n" + self.leaderboard_text(snap)}]
 
     def dispatch(self, events: List[Dict[str, str]]) -> None:
-        """同一轮多条提醒合并为一条推送，节省额度。"""
+        """Real-account advice has its own message; merge only within each category."""
         if not events:
             return
         from .notification_control import selected_events
         selected = selected_events(self.store.conn, events)
-        delivered = False
-        if selected:
-            title = selected[0]["title"] if len(selected) == 1 else f"{selected[0]['title']} 等{len(selected)}条"
-            body = "\n\n---\n\n".join(f"### {e['title']}\n\n{e['body']}" for e in selected)
-            delivered = self.notifier.send(title, body)
+        real=[e for e in selected if ':live_' in e.get('notification_topic','')]
+        other=[e for e in selected if e not in real]
+        accepted=set()
+        for category,group in (('real_advice',real),('other',other)):
+            if not group:continue
+            if category=='real_advice':
+                title=group[0]['title'] if len(group)==1 else f"💡真实账户建议 · {len(group)}条"
+            else:title=group[0]['title'] if len(group)==1 else f"{group[0]['title']} 等{len(group)}条"
+            title=title[:32]
+            body="\n\n---\n\n".join(f"### {e['title']}\n\n{e['body']}" for e in group)
+            ok=self.notifier.send(title,body)
+            if ok:accepted.update(e['key'] for e in group)
+            receipt=getattr(self.notifier,'last_receipt',{})
+            if not isinstance(receipt,dict):receipt={}
+            channel=receipt.get('channel','unknown')
+            with self.store.conn:
+                self.store.conn.execute('INSERT INTO notification_deliveries(ts,category,title,channel,status,provider_id,provider_code,event_keys_json) VALUES(?,?,?,?,?,?,?,?)',
+                    (utc_now().isoformat(),category,title,channel if isinstance(channel,str) else 'unknown',
+                     receipt.get('status','accepted' if ok else 'failed'),receipt.get('provider_id'),receipt.get('provider_code'),json.dumps([e['key'] for e in group])))
         for e in events:
-            self.store.add_alert(e["key"], e["title"], e["body"], delivered and e in selected)
+            self.store.add_alert(e["key"], e["title"], e["body"], e['key'] in accepted)
 
     def run_forever(self) -> None:
         log.info("监控启动：推送通道=%s，每 %ss 一轮，模拟盘=%s", self.notifier.channel,

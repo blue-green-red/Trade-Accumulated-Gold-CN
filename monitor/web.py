@@ -359,6 +359,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
                 "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode),
+                "deliveries": [dict(r) for r in conn.execute("SELECT id,ts,category,title,channel,status,provider_id,provider_code,event_keys_json FROM notification_deliveries ORDER BY id DESC LIMIT 10")] if table_exists(conn,"notification_deliveries") else [],
                 "recent": [dict(r) for r in conn.execute("SELECT ts,key,title,delivered FROM alerts WHERE delivered=1 OR key LIKE 'live-advice:%' ORDER BY rowid DESC LIMIT 20")]},
             "sell_fee_rate": settings.sell_fee_rate, "snapshot": snap,
             "leaderboard": board, "equity": curves, "short": shorts,

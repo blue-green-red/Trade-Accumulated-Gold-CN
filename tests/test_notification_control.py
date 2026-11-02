@@ -87,3 +87,58 @@ class NotificationTests(unittest.TestCase):
             self.assertEqual(post(headers=good),200)
             self.assertEqual([r['key'] for r in subscriptions(self.store.conn) if r['enabled']],['codex:short'])
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_real_advice_is_a_separate_prioritized_message(self):
+        for topic in ('codex:live_zheshang','codex:analysis','codex:high'):set_subscription(self.store.conn,topic,True)
+        events=[{'key':'autonomous:fake','notification_topic':'codex:high','title':'模拟买入','body':'simulation'},
+                {'key':'ai:fake','notification_topic':'codex:analysis','title':'Codex摘要','body':'research'},
+                {'key':'live-advice:fake','notification_topic':'codex:live_zheshang','title':'真实账户·浙商卖出建议','body':'需手动确认'}]
+        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock()
+        m.notifier.send.side_effect=[False,True]
+        m.dispatch(events)
+        self.assertEqual(m.notifier.send.call_count,2)
+        calls=m.notifier.send.call_args_list
+        self.assertEqual(calls[0].args[0],'真实账户·浙商卖出建议')
+        self.assertNotIn('simulation',calls[0].args[1]);self.assertNotIn('需手动确认',calls[1].args[1])
+        receipts=self.store.conn.execute('SELECT category,status FROM notification_deliveries ORDER BY id').fetchall()
+        self.assertEqual([tuple(r) for r in receipts],[('real_advice','failed'),('other','accepted')])
+        recorded={r[0]:r[1] for r in self.store.conn.execute('SELECT key,delivered FROM alerts')}
+        self.assertEqual(recorded,{'autonomous:fake':1,'ai:fake':1,'live-advice:fake':0})
+
+    def test_both_banks_merge_without_disabled_simulation(self):
+        for bank in ('zheshang','minsheng'):set_subscription(self.store.conn,f'codex:live_{bank}',True)
+        events=[{'key':f'live-advice:{bank}','notification_topic':f'codex:live_{bank}','title':bank,'body':bank}
+                for bank in ('zheshang','minsheng')]
+        events.append({'key':'sim:disabled','notification_topic':'codex:high','title':'模拟买入','body':'disabled'})
+        m=object.__new__(Monitor);m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m.dispatch(events)
+        m.notifier.send.assert_called_once()
+        title,body=m.notifier.send.call_args.args
+        self.assertEqual(title,'💡真实账户建议 · 2条')
+        self.assertIn('zheshang',body);self.assertIn('minsheng',body);self.assertNotIn('disabled',body)
+        self.assertEqual(self.store.conn.execute('SELECT COUNT(*) FROM notification_deliveries').fetchone()[0],1)
+
+class ProviderReceiptTests(unittest.TestCase):
+    def test_acceptance_keeps_message_id_without_claiming_phone_delivery(self):
+        from dataclasses import replace
+        from monitor.config import Settings
+        from monitor.notify import Notifier
+        from unittest.mock import patch
+        notifier=Notifier(replace(Settings(),pushplus_token='unit-test-token',serverchan_sendkey=''))
+        response=Mock(ok=True,status_code=200);response.json.return_value={'code':200,'data':'receipt-unit-1'}
+        with patch('monitor.notify.requests.post',return_value=response) as request:
+            self.assertTrue(notifier.send('真实建议','人工执行'))
+            self.assertEqual(request.call_args.kwargs['json']['channel'],'wechat')
+        self.assertEqual(notifier.last_receipt,{'channel':'pushplus','status':'accepted','provider_id':'receipt-unit-1','provider_code':'200'})
+
+    def test_failure_logs_do_not_expose_secret_urls(self):
+        from dataclasses import replace
+        from monitor.config import Settings
+        from monitor.notify import Notifier
+        from unittest.mock import patch
+        import requests
+        notifier=Notifier(replace(Settings(),pushplus_token='',serverchan_sendkey='unit-private-sendkey'))
+        with patch('monitor.notify.requests.post',side_effect=requests.ConnectionError('https://sctapi.ftqq.com/unit-private-sendkey.send')):
+            with self.assertLogs('monitor.notify',level='WARNING') as logs:self.assertFalse(notifier.send('test','test'))
+        self.assertNotIn('unit-private-sendkey',''.join(logs.output))
+        self.assertEqual(notifier.last_receipt['status'],'failed')

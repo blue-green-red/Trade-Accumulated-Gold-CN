@@ -82,5 +82,5 @@ def notification_events(conn,analyst,view_id):
               f"{quantity} · {condition}{price}\n\n有效至北京时间{expiry} · 建议 #{row[0]}\n\n"
               f"{value['reason']}\n\n风险：{value['risk_note']}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
         events.append({'key':key,'live_advice_id':row[0],'notification_topic':f"{analyst}:live_{account['bank']}",
-                       'title':f"💡{analyst.title()} · {account['name']} · {action}",'body':body})
+                       'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
     return events
