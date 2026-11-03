@@ -213,6 +213,7 @@ def validate_content(value, context, require_basis=False):
     if sorted(r["position_pct"] for r in data["recommendations"]) != list(POSITIONS):
         raise ValueError("Incomplete position coverage")
     for row in data["recommendations"]:
+        row["invalidation"] = row["invalidation"].replace("decision_basis.review_triggers", "共用复评条件").replace("decision_basis", "共用操作依据")
         current, target, action = row["position_pct"], row["target_position_pct"], row["action"]
         if not ((action == "buy" and target > current) or (action == "sell" and target < current) or (action in ("hold", "wait") and target == current)):
             raise ValueError("Inconsistent position action")
@@ -233,7 +234,33 @@ def publication_content(value, context):
     if basis and basis["entry_scenario"] and not privacy_ok({"scenario": basis["entry_scenario"]}, context):
         basis["entry_scenario"] = None
         basis["no_entry_reason"] = "无法核验该情景全部价位的公共来源，暂不展示数值情景；按共用复评条件重估。"
+        omit_scenario_math(data, context)
     return validate_content(data, context, require_basis=True)
+
+
+def omit_scenario_math(data, context=None):
+    """An omitted scenario must not survive through its calculated prose returns."""
+    allowed = {POLICY["trade_risk_pct"], POLICY["drawdown_reference_pct"],
+               float(((context or {}).get("public_reference") or {}).get("sell_fee_rate", .004)) * 100}
+    for row in data["recommendations"]:
+        allowed.update((row["position_pct"], row["target_position_pct"]))
+        allowed.update(c["target_position_pct"] for c in row["conditions"])
+    def clean(text, fallback):
+        pieces = []
+        for sentence in re.split(r"(?<=[。！？])", text):
+            percentages = [abs(float(n)) for n in re.findall(r"([+-]?\d+(?:\.\d+)?)\s*[%％]", sentence)]
+            if any(not any(abs(n - a) < 1e-8 for a in allowed) for n in percentages):
+                continue
+            if re.search(r"(?:收益风险比|盈亏比|\bRR\b)\s*[约为:=：]*\s*\d", sentence, re.I):
+                continue
+            pieces.append(sentence)
+        return "".join(pieces).strip() or fallback
+    basis = data["decision_basis"]
+    basis["position_rationale"] = clean(basis["position_rationale"], "数值情景未通过公共来源核验，目标仓位的量化依据待复核；按共用条件重估。")
+    basis["no_conditions_reason"] = clean(basis["no_conditions_reason"], "数值情景待复核，本轮不提供条件方案。") if basis["no_conditions_reason"] else None
+    for row in data["recommendations"]:
+        row["reason"] = clean(row["reason"], "数值情景待复核，本档目标仅供观察。")
+        row["invalidation"] = clean(row["invalidation"], "按共用复评条件重估。")
 
 
 def save(conn, analyst, generation, view_id, created_at, snapshot_at, value, context, invalidated=False):
@@ -328,6 +355,9 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
     try:
         content = validate_content(json.loads(raw), {})
         quote = json.loads(quote_raw) if quote_raw else None
+        # Also protect the short-lived public records written before this cleanup.
+        if ((content.get("decision_basis") or {}).get("no_entry_reason") or "").startswith("无法核验该情景全部价位的公共来源"):
+            omit_scenario_math(content, {"public_reference": quote or {}})
         reason = None
         if now < stamp(created) or now >= stamp(expiry):
             reason = "expired"

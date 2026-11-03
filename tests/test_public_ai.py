@@ -216,11 +216,22 @@ class PublicTests(unittest.TestCase):
         d = content()
         d["decision_basis"]["entry_scenario"] = {"entry_price_cny": 850, "target_price_cny": 881.23,
             "exit_price_cny": 820, "basis": "假设情景"}
+        d["decision_basis"]["position_rationale"] = "已有40%可保留反弹参与，更高仓位增加风险。当前情景目标+2.19%、退出-3.48%，补偿不足。卖费参考0.4%。"
+        d["recommendations"][0]["reason"] = "候选情景收益风险比0.63，暂不入场。"
         self.assertEqual(self.publish(d), "ready")
         result = self.read()
         self.assertIsNone(result["decision_basis"]["entry_scenario"])
         self.assertIn("无法核验", result["decision_basis"]["no_entry_reason"])
         self.assertNotIn("881.23", json.dumps(result))
+        for n in ("2.19", "3.48", "0.63"):
+            self.assertNotIn(n, json.dumps(result))
+        self.assertIn("已有40%", result["decision_basis"]["position_rationale"])
+        self.assertIn("0.4%", result["decision_basis"]["position_rationale"])
+        # Older public rows with the omission marker also lose unsupported math on read.
+        stored = json.loads(self.store.conn.execute('SELECT content_json FROM public_ai_reports WHERE view_id=1').fetchone()[0])
+        stored["decision_basis"]["position_rationale"] += "情景收益+2.19%，退出-3.48%。"
+        self.store.conn.execute('UPDATE public_ai_reports SET content_json=? WHERE view_id=1',(json.dumps(stored),))
+        self.assertNotIn("3.48", json.dumps(self.read()))
         d["recommendations"][0]["invalidation"] = "报价881.23时重估"
         self.assertEqual(self.publish(d, view_id=3), "unavailable")
         d["recommendations"][0]["invalidation"] = "按共用条件重估"
