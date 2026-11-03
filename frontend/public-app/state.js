@@ -1,0 +1,73 @@
+import { ref, computed } from "vue";
+import { feeds } from "./cache.js";
+export const clock = ref(Date.now());
+export const analyst = ref("codex");
+export const models = ref(["codex"]);
+export const report = ref(null);
+export const reportError = ref(false);
+export const reportLoading = ref(false);
+let generation = 0;
+export async function loadReport(force = false) {
+  const token = ++generation;
+  const owner = analyst.value;
+  const url = `/api/public/ai?analyst=${owner}`;
+  report.value = feeds.peek(url) || null;
+  reportLoading.value = true;
+  reportError.value = false;
+  try {
+    const data = await feeds.read(url, { force });
+    if (token !== generation || analyst.value !== owner) return;
+    models.value = data.available_analysts || [owner];
+    if (models.value.length && !models.value.includes(owner)) {
+      analyst.value = models.value[0];
+      return loadReport(force);
+    }
+    report.value = data;
+  } catch {
+    if (token === generation) reportError.value = true;
+  } finally {
+    if (token === generation) reportLoading.value = false;
+  }
+}
+export const reportStatus = computed(() => {
+  const value = report.value;
+  if (!value?.analysis) return "unavailable";
+  if (Date.parse(value.expires_at) <= clock.value) return "expired";
+  if (reportError.value) return "refresh_failed";
+  return value.status === "current" ? "current" : value.reason || "stale";
+});
+export const statusText = {
+  current: "本轮参考有效",
+  unavailable: "等待公开分析",
+  expired: "方案已到期，等待新分析",
+  market_closed: "当前休市，方案仅供回顾",
+  quote_unavailable: "报价待更新，方案待复核",
+  price_changed: "价格已变化，等待复核",
+  review_due: "已达到复评条件，等待更新",
+  stale: "方案待复核",
+  refresh_failed: "更新失败，已有方案仅供回顾",
+};
+export const fmt = (v, digits = 2) =>
+  v == null || !Number.isFinite(Number(v))
+    ? "—"
+    : Number(v).toLocaleString("zh-CN", {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      });
+const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Hong_Kong",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+export const time = (v) =>
+  v && Number.isFinite(Date.parse(v)) ? timeFormatter.format(new Date(v)) : "—";
+export const names = { codex: "Codex", claude: "Claude" };
+export const actions = {
+  buy: "增加仓位",
+  sell: "降低仓位",
+  hold: "维持仓位",
+  wait: "继续观望",
+};

@@ -14,4 +14,7 @@ def deploy(source=None,target=None):
     temporary=target/'index.html.tmp';shutil.copyfile(source/'index.html',temporary);os.replace(temporary,target/'index.html')
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--source');parser.add_argument('--target');args=parser.parse_args();deploy(args.source,args.target)
+    public_source=ROOT/'frontend'/'dist-public'
+    if not args.source and not args.target and (public_source/'index.html').is_file():
+        deploy(public_source,ROOT/'monitor'/'public_static')
     print('Frontend published; previous hashed assets retained')

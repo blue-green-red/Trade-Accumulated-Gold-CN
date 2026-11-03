@@ -1,0 +1,128 @@
+<script setup>
+import {
+  ref,
+  computed,
+  defineAsyncComponent,
+  onMounted,
+  onUnmounted,
+  watch,
+  nextTick,
+} from "vue";
+import { analyst, models, names, clock, loadReport } from "./state.js";
+const views = {
+  market: defineAsyncComponent(() => import("./views/Market.vue")),
+  analysis: defineAsyncComponent(() => import("./views/Analysis.vue")),
+  recommendations: defineAsyncComponent(
+    () => import("./views/Recommendations.vue"),
+  ),
+};
+const choices = [
+  ["market", "行情", "行情与走势"],
+  ["analysis", "AI分析", "理解当前市场"],
+  ["recommendations", "仓位推荐", "找到适合的下一步"],
+];
+const route = () =>
+  Object.hasOwn(views, location.hash.slice(1))
+    ? location.hash.slice(1)
+    : "market";
+const page = ref(route());
+const description = computed(
+  () => choices.find(([key]) => key === page.value)[2],
+);
+const lastScroll = {};
+function syncRoute() {
+  lastScroll[page.value] = window.scrollY;
+  page.value = route();
+}
+function navigate(key) {
+  if (key !== page.value) location.hash = key;
+}
+function refresh() {
+  window.dispatchEvent(new CustomEvent("public-refresh"));
+}
+watch(page, async (key) => {
+  await nextTick();
+  requestAnimationFrame(() => scrollTo(0, lastScroll[key] || 0));
+});
+watch(analyst, () => {
+  if (page.value !== "market") loadReport();
+});
+let timer;
+onMounted(() => {
+  window.addEventListener("hashchange", syncRoute);
+  timer = setInterval(() => {
+    clock.value = Date.now();
+  }, 1000);
+});
+onUnmounted(() => {
+  window.removeEventListener("hashchange", syncRoute);
+  clearInterval(timer);
+});
+</script>
+<template>
+  <header class="topbar">
+    <div class="top-inner">
+      <a class="brand" href="#market" aria-label="金析AI首页"
+        ><span class="brand-mark">金</span
+        ><span>金析AI<small>GOLD INSIGHTS</small></span></a
+      >
+      <span class="edition">市场公开观察</span>
+      <button class="refresh" aria-label="刷新当前页面" @click="refresh">
+        ↻ <span>更新</span>
+      </button>
+    </div>
+  </header>
+  <main class="shell">
+    <div class="page-heading">
+      <div>
+        <span class="eyebrow">{{
+          page === "market"
+            ? "MARKET"
+            : page === "analysis"
+              ? "AI INSIGHTS"
+              : "POSITION GUIDE"
+        }}</span>
+        <h1>{{ description }}</h1>
+      </div>
+      <select
+        v-if="page !== 'market' && models.length > 1"
+        v-model="analyst"
+        aria-label="选择分析模型"
+      >
+        <option v-for="model in models" :key="model" :value="model">
+          {{ names[model] }}
+        </option>
+      </select>
+      <span
+        v-else-if="page !== 'market' && models.length"
+        class="model-badge"
+        >{{ names[analyst] }}</span
+      >
+    </div>
+    <KeepAlive :max="3"><component :is="views[page]" :key="page" /></KeepAlive>
+    <footer class="footnote">
+      数据及AI观点仅供参考 · 高风险波段 · 不保证收益<br />报价与观点均标明时间，请结合当前市场判断。
+    </footer>
+  </main>
+  <nav class="bottom-nav" aria-label="公众页面导航">
+    <div>
+      <button
+        v-for="([key, label], i) in choices"
+        :key="key"
+        :aria-current="page === key ? 'page' : undefined"
+        @click="navigate(key)"
+      >
+        <svg v-if="i === 0" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 18h18M4 14l5-5 4 3 7-8" />
+        </svg>
+        <svg v-else-if="i === 1" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 20V12h4v8M10 20V7h4v13M16 20V3h4v17" />
+        </svg>
+        {{ label }}
+      </button>
+    </div>
+  </nav>
+</template>

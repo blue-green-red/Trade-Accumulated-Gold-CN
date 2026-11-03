@@ -340,6 +340,7 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
         raise ValueError("Invalid position")
     now = now or datetime.now(timezone.utc)
     result = {"schema_version": 2, "analyst": analyst, "status": "unavailable", "policy": dict(POLICY),
+              "available_analysts": [m for m in settings.ai_analysts if m in ('claude', 'codex') and active(conn, m)],
               "analysis": None, "decision_basis": None, "scenario_metrics": None, "recommendations": []}
     if not active(conn, analyst):
         return result

@@ -490,6 +490,7 @@ class Handler(BaseHTTPRequestHandler):
     settings: Settings
     password: str
     static_root = None
+    public_static_root = None
     server_version = "gold-dashboard"
     sys_version = ""
 
@@ -627,10 +628,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, b'{"error":"model control unavailable"}', "application/json")
 
     def do_GET(self):
-        # The sole anonymous API reads only the dedicated, validated public DTO.
-        # Every existing dashboard route still passes through password validation.
-        if urlsplit(self.path).path == "/api/public/ai":
+        path = urlsplit(self.path).path
+        # Anonymous routes are explicit. The private shell/assets/APIs stay authenticated.
+        if path == "/api/public/ai":
             self._public_ai_response()
+            return
+        if path == "/api/public/market":
+            self._public_market_response()
+            return
+        if path == "/public":
+            self._send(301, b"", "text/plain", {"Location": "/public/"})
+            return
+        if path.startswith("/public/"):
+            self._public_static_response(path)
             return
         ip = self._auth_client_ip()
         if _locked_out(ip):
@@ -724,9 +734,38 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("public AI unavailable")
             self._send(503, b'{"error":"public AI unavailable"}', "application/json")
 
-    def _static_response(self, body, content_type, immutable=False):
+    def _public_market_response(self):
+        from .public_market import cached_market
+        try:
+            body, tag = cached_market(self.settings, parse_qs(urlsplit(self.path).query, keep_blank_values=True))
+            extra = {"ETag": tag, "Cache-Control": "public, no-cache"}
+            self._send(304 if tag in [v.strip() for v in self.headers.get("If-None-Match", "").split(",")] else 200,
+                       b"" if tag in [v.strip() for v in self.headers.get("If-None-Match", "").split(",")] else body,
+                       "application/json; charset=utf-8", extra)
+        except ValueError:
+            self._send(400, b'{"error":"invalid public market query"}', "application/json")
+        except Exception:
+            log.exception("public market unavailable")
+            self._send(503, b'{"error":"public market unavailable"}', "application/json")
+
+    def _public_static_response(self, path):
+        root = (self.public_static_root or Path(__file__).with_name("public_static")).resolve()
+        shell = path in ("/public/", "/public/index.html")
+        target = root / "index.html" if shell else (root / unquote(path.removeprefix("/public/"))).resolve()
+        types = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
+        if not shell and (not path.startswith('/public/assets/') or not target.is_relative_to(root / 'assets') or target.suffix not in types):
+            self._send(404, b"not found", "text/plain")
+            return
+        if not target.is_file():
+            self._send(404, b"not found", "text/plain")
+            return
+        self._static_response(target.read_bytes(), "text/html; charset=utf-8" if shell else types[target.suffix],
+                              immutable=not shell, public=True)
+
+    def _static_response(self, body, content_type, immutable=False, public=False):
         tag = 'W/"'+hashlib.sha256(body).hexdigest()[:24]+'"'
-        extra = {'ETag':tag,'Cache-Control':'private, max-age=31536000, immutable' if immutable else 'private, no-cache'}
+        scope = 'public' if public else 'private'
+        extra = {'ETag':tag,'Cache-Control':scope + (', max-age=31536000, immutable' if immutable else ', no-cache')}
         if tag in [value.strip() for value in self.headers.get('If-None-Match','').split(',')]:
             self._send(304,b'',content_type,extra)
         else:

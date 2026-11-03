@@ -1,0 +1,134 @@
+{
+  "url": "https://gold.goalgoal.fun/public/",
+  "environment": "ECS local headless Chromium, anonymous fresh browser contexts; not an external user network measurement",
+  "results": [
+    {
+      "view": "market",
+      "data_ready_ms": 3670.7,
+      "api_requests": [
+        "public/market?view=quote",
+        "public/market?view=history&range=7d"
+      ],
+      "resource_transfer_bytes": 43759,
+      "resources": [
+        {
+          "path": "/public/assets/index-CuogQ_dP.js",
+          "bytes": 33091,
+          "duration_ms": 303
+        },
+        {
+          "path": "/public/assets/index-BVmU8Ai3.css",
+          "bytes": 3609,
+          "duration_ms": 229
+        },
+        {
+          "path": "/public/assets/Market-BORwLnMs.js",
+          "bytes": 2271,
+          "duration_ms": 251
+        },
+        {
+          "path": "/public/assets/usePage-BwnZJLhC.js",
+          "bytes": 727,
+          "duration_ms": 232
+        },
+        {
+          "path": "/api/public/market",
+          "bytes": 914,
+          "duration_ms": 609
+        },
+        {
+          "path": "/api/public/market",
+          "bytes": 1341,
+          "duration_ms": 611
+        },
+        {
+          "path": "/public/assets/PriceChart-GGU4bwLb.js",
+          "bytes": 1806,
+          "duration_ms": 155
+        }
+      ]
+    },
+    {
+      "view": "analysis",
+      "data_ready_ms": 1619.7,
+      "api_requests": [
+        "public/ai?analyst=codex"
+      ],
+      "resource_transfer_bytes": 42371,
+      "resources": [
+        {
+          "path": "/public/assets/index-CuogQ_dP.js",
+          "bytes": 33091,
+          "duration_ms": 217
+        },
+        {
+          "path": "/public/assets/index-BVmU8Ai3.css",
+          "bytes": 3609,
+          "duration_ms": 143
+        },
+        {
+          "path": "/public/assets/Analysis-CylZFHHk.js",
+          "bytes": 1376,
+          "duration_ms": 147
+        },
+        {
+          "path": "/public/assets/usePage-BwnZJLhC.js",
+          "bytes": 727,
+          "duration_ms": 146
+        },
+        {
+          "path": "/public/assets/Review-Btsr1p_n.js",
+          "bytes": 1178,
+          "duration_ms": 147
+        },
+        {
+          "path": "/api/public/ai",
+          "bytes": 2390,
+          "duration_ms": 576
+        }
+      ],
+      "cached_recommendations_ms": 1926.5,
+      "extra_api_requests_on_switch": 0
+    },
+    {
+      "view": "recommendations",
+      "data_ready_ms": 4845.4,
+      "api_requests": [
+        "public/ai?analyst=codex"
+      ],
+      "resource_transfer_bytes": 43692,
+      "resources": [
+        {
+          "path": "/public/assets/index-CuogQ_dP.js",
+          "bytes": 33091,
+          "duration_ms": 557
+        },
+        {
+          "path": "/public/assets/index-BVmU8Ai3.css",
+          "bytes": 3609,
+          "duration_ms": 489
+        },
+        {
+          "path": "/public/assets/Recommendations-DOy6MxIk.js",
+          "bytes": 2697,
+          "duration_ms": 181
+        },
+        {
+          "path": "/public/assets/usePage-BwnZJLhC.js",
+          "bytes": 727,
+          "duration_ms": 183
+        },
+        {
+          "path": "/public/assets/Review-Btsr1p_n.js",
+          "bytes": 1178,
+          "duration_ms": 183
+        },
+        {
+          "path": "/api/public/ai",
+          "bytes": 2390,
+          "duration_ms": 1125
+        }
+      ]
+    }
+  ]
+}
