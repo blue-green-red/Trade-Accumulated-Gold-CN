@@ -98,7 +98,16 @@ class PublicSiteTests(unittest.TestCase):
                 self.assertEqual(get(path)[0],404,path)
             for path in ('/api/public/market?view=live','/api/public/market?range=bad','/api/public/market?bank=minsheng'):
                 self.assertEqual(get(path)[0],400,path)
-            data=json.loads(get('/api/public/ai')[2]);self.assertEqual(data['available_analysts'],['codex'])
+            data=json.loads(get('/api/public/ai?model=primary')[2]);self.assertEqual(data['available_models'],['primary'])
+            self.assertNotIn('codex',json.dumps(data).lower())
+            self.assertNotIn('confidence',json.dumps(data))
+            self.assertEqual(data['update_policy']['move_threshold_pct'],settings.ai_periodic_min_move_pct)
+            self.assertEqual(data['update_policy']['max_idle_minutes'],settings.ai_review_max_idle_minutes)
+            self.assertEqual(get('/api/public/ai?model=unknown')[0],400)
+            self.assertEqual(get('/api/public/ai?model=primary&analyst=codex')[0],400)
+            archive=json.loads(get('/api/public/ai/history?model=primary')[2])
+            self.assertEqual(archive['available_models'],['primary'])
+            self.assertNotIn('codex',json.dumps(archive).lower())
 
 
 class PublicSiteBrowserTests(unittest.TestCase):

@@ -4,7 +4,7 @@ import { useFeed } from "../useFeed.js";
 import { clock, time } from "../state.js";
 import { eventName } from "../events.js";
 const { data, error, loading } = useFeed("/api/public/market?view=calendar");
-const scope = ref("today"),
+const scope = ref("week"),
   filter = ref("upcoming");
 const dayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Hong_Kong",

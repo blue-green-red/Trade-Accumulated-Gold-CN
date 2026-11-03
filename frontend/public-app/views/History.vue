@@ -20,7 +20,7 @@ let version = 0,
 const snapshots = new Map();
 const key = () => analyst.value + ":" + days.value;
 function available(data, owner) {
-  models.value = data.available_analysts || [owner];
+  models.value = data.available_models || [owner];
   if (!models.value.includes(owner)) {
     rows.value = [];
     cursor.value = null;
@@ -39,7 +39,7 @@ async function load(force = false) {
   loading.value = true;
   try {
     const data = await feeds.read(
-      `/api/public/ai/history?analyst=${owner}&days=${span}&limit=10`,
+      `/api/public/ai/history?model=${owner}&days=${span}&limit=10`,
       { ttl: 60000, force },
     );
     if (token !== version) return;
@@ -73,7 +73,7 @@ async function more() {
   error.value = false;
   try {
     const data = await feeds.read(
-      `/api/public/ai/history?analyst=${owner}&days=${days.value}&limit=10&before=${cursor.value}`,
+      `/api/public/ai/history?model=${owner}&days=${days.value}&limit=10&before=${cursor.value}`,
       { ttl: 60000 },
     );
     if (token !== version || !available(data, owner)) return;
@@ -100,7 +100,7 @@ async function expand(id) {
   detailError.value = false;
   try {
     const data = await feeds.read(
-      `/api/public/ai/history?analyst=${owner}&report_id=${id}`,
+      `/api/public/ai/history?model=${owner}&report_id=${id}`,
       { ttl: 60000 },
     );
     if (token === detailVersion && owner === analyst.value) {

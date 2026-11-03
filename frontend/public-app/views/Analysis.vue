@@ -35,7 +35,7 @@ usePage(loadReport);
         </div>
       </section>
       <section class="card">
-        <h2>关键价位与依据</h2>
+        <h2>关注价位</h2>
         <KeyLevels :levels="report.key_levels || []" />
       </section>
       <section class="card">

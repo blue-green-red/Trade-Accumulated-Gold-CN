@@ -110,7 +110,7 @@ onUnmounted(() => {
       <select
         v-if="parent !== 'market' && models.length > 1"
         v-model="analyst"
-        aria-label="选择分析模型"
+        aria-label="选择分析视角"
       >
         <option v-for="model in models" :key="model" :value="model">
           {{ names[model] }}

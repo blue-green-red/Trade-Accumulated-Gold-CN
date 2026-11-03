@@ -11,7 +11,7 @@ import {
 } from "../state.js";
 import { usePage } from "../usePage.js";
 import FeedState from "../components/FeedState.vue";
-import Review from "../components/Review.vue";
+import UpdatePolicy from "../components/UpdatePolicy.vue";
 function initialPosition() {
   try {
     const n = Number(localStorage.getItem("gold-public-position"));
@@ -150,7 +150,7 @@ usePage(loadReport);
           · 数日至两周波段
         </div>
         <div v-if="reportStatus !== 'current'" class="muted small">
-          方案待复核，请先查看最新报价及下方复评条件。
+          方案待复核，请先查看最新报价及AI分析页的关注点。
         </div>
       </section>
       <section v-if="basis" class="card">
@@ -218,12 +218,13 @@ usePage(loadReport);
         </p>
       </section>
       <section class="card">
-        <h2>什么情况下重新评估</h2>
-        <Review v-if="basis" :triggers="basis.review_triggers" />
+        <h2>分析更新方式</h2>
+        <UpdatePolicy :policy="report.update_policy" />
         <p
           v-if="!basis || !recommendation.invalidation.includes('共用')"
           class="muted"
         >
+          本档方案失效条件：
           {{ recommendation.invalidation }}
         </p>
         <div class="muted small">

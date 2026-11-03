@@ -58,8 +58,8 @@ function move(e) {
       >
         <defs>
           <linearGradient id="public-gold-fill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stop-color="#a5792d" stop-opacity=".2" />
-            <stop offset="100%" stop-color="#a5792d" stop-opacity="0" />
+            <stop offset="0%" stop-color="var(--series-1)" stop-opacity=".2" />
+            <stop offset="100%" stop-color="var(--series-1)" stop-opacity="0" />
           </linearGradient>
         </defs>
         <g v-for="n in 4" :key="n">
@@ -68,13 +68,13 @@ function move(e) {
             x2="536"
             :y1="20 + (n - 1) * 63.33"
             :y2="20 + (n - 1) * 63.33"
-            stroke="#e9e5da"
+            stroke="var(--grid)"
           />
           <text
             x="47"
             :y="24 + (n - 1) * 63.33"
             text-anchor="end"
-            fill="#8a8b80"
+            fill="var(--text-3)"
             font-size="16"
           >
             {{ fmt(domain[1] - ((domain[1] - domain[0]) * (n - 1)) / 3, 1) }}
@@ -87,7 +87,7 @@ function move(e) {
         <path
           :d="line"
           fill="none"
-          stroke="#a5792d"
+          stroke="var(--series-1)"
           stroke-width="2.5"
           stroke-linejoin="round"
           stroke-linecap="round"
@@ -96,28 +96,40 @@ function move(e) {
           :cx="x(selected)"
           :cy="y(points[selected][1])"
           r="4.5"
-          fill="#a5792d"
-          stroke="white"
+          fill="var(--series-1)"
+          stroke="var(--surface)"
           stroke-width="2"
         />
         <g
           :transform="`translate(${bubbleX},${Math.max(0, y(points[selected][1]) - 41)})`"
         >
-          <rect x="-52" width="104" height="32" rx="8" fill="#26382e" />
+          <rect
+            x="-52"
+            width="104"
+            height="32"
+            rx="8"
+            fill="var(--surface-2)"
+          />
           <text
             y="24"
             text-anchor="middle"
-            fill="white"
+            fill="var(--text)"
             font-size="20"
             font-weight="600"
           >
             {{ fmt(points[selected][1]) }}
           </text>
         </g>
-        <text x="56" y="244" fill="#8a8b80" font-size="16">
+        <text x="56" y="244" fill="var(--text-3)" font-size="16">
           {{ time(points[0][0]) }}
         </text>
-        <text x="536" y="244" text-anchor="end" fill="#8a8b80" font-size="16">
+        <text
+          x="536"
+          y="244"
+          text-anchor="end"
+          fill="var(--text-3)"
+          font-size="16"
+        >
           {{ time(points[points.length - 1][0]) }}
         </text>
       </svg>

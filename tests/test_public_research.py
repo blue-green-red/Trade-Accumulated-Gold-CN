@@ -12,6 +12,20 @@ from test_public_ai import content
 
 
 class ExpandedPublicTests(unittest.TestCase):
+    def test_public_wording_hides_provider_and_sampling_notes_without_changing_stored_content(self):
+        from monitor.public_presentation import present,clean_text
+        with site() as (store,settings,url):
+            source={'analyst':'codex','available_analysts':['codex'],'market_assessment':{'confidence':'high','bias_short':'bullish'},
+                    'analysis':{'outlook':'Codex认为震荡，京东采样不完整，但美元走弱。',
+                                'risk':'京东报价缺失时需等待更新。'}}
+            data=present(source,settings)
+            self.assertEqual(source['market_assessment']['confidence'],'high')
+            self.assertEqual(data['analysis']['outlook'],'金析AI认为震荡，但美元走弱。')
+            self.assertEqual(data['analysis']['risk'],source['analysis']['risk'])
+            self.assertEqual(data['model'],'primary')
+            self.assertNotIn('confidence',data['market_assessment'])
+            self.assertEqual(clean_text('京东采样并非完整日线。建议关注美元。'),'建议关注美元。')
+
     def test_news_calendar_and_indicators_allowlist_mask_future_and_keep_zero(self):
         with site() as (store,settings,url):
             now=datetime.now(timezone.utc)
@@ -130,12 +144,18 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 self.assertEqual(page.locator('.public-news-list li').count(),2)
                 self.assertEqual(sum('view=news' in u for u in requests),1)
                 page.get_by_role('link',name='日历',exact=True).click();page.locator('[data-public-view="calendar"][data-ready="true"]').wait_for()
+                self.assertEqual(page.get_by_role('button',name='7天范围',exact=True).get_attribute('aria-pressed'),'true')
+                page.get_by_role('button',name='今天',exact=True).click()
+                self.assertEqual(page.get_by_role('button',name='今天',exact=True).get_attribute('aria-pressed'),'true')
                 self.assertNotIn('FUTURE-NOT-PUBLISH',page.locator('body').inner_text())
                 page.get_by_role('button',name='7天范围',exact=True).click();page.get_by_role('button',name='已公布',exact=True).click()
                 self.assertIn('0',page.locator('.event-values strong').inner_text())
                 page.get_by_role('link',name='市场指标',exact=True).click();page.get_by_role('heading',name='宏观环境',exact=True).wait_for()
-                page.get_by_role('button',name='AI分析',exact=True).click();page.get_by_role('heading',name='关键价位与依据',exact=True).wait_for()
+                page.get_by_role('button',name='AI分析',exact=True).click();page.get_by_role('heading',name='关注价位',exact=True).wait_for()
                 self.assertIn('偏空',page.locator('.assessment').inner_text())
+                self.assertNotIn('判断置信度',page.locator('body').inner_text())
+                self.assertNotIn('Codex',page.locator('body').inner_text())
+                page.locator('.level-source summary').first.click()
                 self.assertIn('2026-11-02',page.locator('.key-levels').inner_text())
                 page.screenshot(path='/tmp/public-expanded-analysis.png',full_page=True)
                 page.get_by_role('link',name='历史观点',exact=True).click();page.locator('.history-card').first.wait_for()
@@ -145,6 +165,9 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 self.assertEqual(sum('report_id=' in u for u in requests),1)
                 page.get_by_role('button',name='加载更早的观点',exact=True).click();page.wait_for_function('document.querySelectorAll(".history-card").length===14')
                 page.get_by_role('button',name='仓位推荐',exact=True).click();page.get_by_text('11档仓位推荐总览',exact=True).click()
+                self.assertIn('0.4%',page.locator('.update-policy').inner_text())
+                self.assertIn('相对上次分析输入价',page.locator('.update-policy').inner_text())
+                self.assertIn('不代表已启动新分析',page.locator('.update-policy').inner_text())
                 self.assertEqual(page.locator('.position-overview tbody tr').count(),11)
                 before=sum('/api/public/ai?' in u for u in requests)
                 page.get_by_role('button',name='查看100%仓位推荐',exact=True).click()
@@ -159,6 +182,14 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                         page.locator(f'[data-public-view="{view}"]').wait_for()
                         self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'),(width,route))
                         self.assertNotIn('DO-NOT-PUBLISH',page.locator('body').inner_text())
+                        self.assertNotIn('Codex',page.locator('body').inner_text())
+                        self.assertNotIn('判断置信度',page.locator('body').inner_text())
+                self.assertFalse(any('analyst=codex' in u for u in requests))
+                for theme,bg,brand in (('light','rgb(246, 245, 242)','rgb(154, 107, 18)'),('dark','rgb(16, 16, 16)','rgb(224, 169, 74)')):
+                    page.evaluate('(theme)=>document.documentElement.dataset.theme=theme',theme)
+                    self.assertEqual(page.evaluate('getComputedStyle(document.documentElement).backgroundColor'),bg)
+                    self.assertEqual(page.evaluate('getComputedStyle(document.querySelector(".eyebrow")).color'),brand)
+                page.screenshot(path='/tmp/gold-public-dark.png',full_page=True)
                 page.evaluate('location.hash="analysis/history"');page.locator('.history-card').first.wait_for()
                 set_enabled(store.conn,'codex',False)
                 page.get_by_role('button',name='刷新当前页面',exact=True).click()

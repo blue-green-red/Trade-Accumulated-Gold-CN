@@ -1,0 +1,72 @@
+/* 与私人看板共用同一套颜色令牌；仅复制主题，不引入私人页面。 */
+/* ── 设计令牌：界面色（金色主题只用于导航/按钮）与数据色（图表系列）分开 ── */
+:root {
+  color-scheme: light;
+  --bg: #f6f5f2;
+  --surface: #fffefc;
+  --surface-2: #f1efea;
+  --border: #e6e3dc;
+  --grid: #ece9e3;
+  --text: #121212;
+  --text-2: #54524d;
+  --text-3: #85837d;
+  --brand: #9a6b12;
+  --brand-soft: #f6ead2;
+  --on-brand: #ffffff;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --radius: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #101010;
+    --surface: #1a1a19;
+    --surface-2: #232321;
+    --border: #2f2f2c;
+    --grid: #282826;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e88;
+    --brand: #e0a94a;
+    --brand-soft: #3a2f1a;
+    --on-brand: #1a1408;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101010;
+  --surface: #1a1a19;
+  --surface-2: #232321;
+  --border: #2f2f2c;
+  --grid: #282826;
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --text-3: #8f8e88;
+  --brand: #e0a94a;
+  --brand-soft: #3a2f1a;
+  --on-brand: #1a1408;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --shadow: none;
+}

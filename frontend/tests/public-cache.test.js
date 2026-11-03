@@ -19,7 +19,7 @@ test("public feeds coalesce reads, cache by route, revalidate with ETags and omi
     },
     () => now,
   );
-  const url = "/api/public/ai?analyst=codex";
+  const url = "/api/public/ai?model=primary";
   const [a, b] = await Promise.all([cache.read(url), cache.read(url)]);
   assert.equal(calls.length, 1);
   assert.equal(a, b);

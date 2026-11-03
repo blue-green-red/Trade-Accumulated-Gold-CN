@@ -712,9 +712,10 @@ class Handler(BaseHTTPRequestHandler):
     def _public_ai_response(self):
         from contextlib import closing
         from .public_ai import latest
+        from .public_presentation import resolve, present
         try:
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-            if set(query) - {"analyst", "position_pct"} or any(len(v) != 1 for v in query.values()):
+            if set(query) - {"analyst", "model", "position_pct"} or any(len(v) != 1 for v in query.values()):
                 raise ValueError("Invalid public query")
             position = query.get("position_pct", [None])[0]
             if position is not None:
@@ -722,7 +723,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid position")
                 position = int(position)
             with closing(connect(self.settings.db_path)) as conn:
-                result = latest(conn, self.settings, query.get("analyst", ["codex"])[0], position)
+                result = present(latest(conn, self.settings, resolve(query, self.settings), position), self.settings)
             body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
             tag = 'W/"' + hashlib.sha256(body).hexdigest()[:24] + '"'
             # Revalidation recalculates expiry/price validity; never serve a long-lived action.
@@ -754,9 +755,15 @@ class Handler(BaseHTTPRequestHandler):
     def _public_history_response(self):
         from contextlib import closing
         from .public_research import history
+        from .public_presentation import resolve, present
         try:
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if any(len(v) != 1 for v in query.values()): raise ValueError('Invalid history query')
+            engine = resolve(query, self.settings)
+            internal_query = {k: v for k, v in query.items() if k != 'model'}
+            internal_query['analyst'] = [engine]
             with closing(connect(self.settings.db_path)) as conn:
-                result = history(conn, self.settings, parse_qs(urlsplit(self.path).query, keep_blank_values=True))
+                result = present(history(conn, self.settings, internal_query), self.settings)
             body = json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode()
             tag = 'W/"' + hashlib.sha256(body).hexdigest()[:24] + '"'
             matched = tag in [v.strip() for v in self.headers.get('If-None-Match', '').split(',')]

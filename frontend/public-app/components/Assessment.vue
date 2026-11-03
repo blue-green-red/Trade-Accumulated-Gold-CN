@@ -4,9 +4,6 @@ const labels = {
   bullish: "偏多",
   bearish: "偏空",
   neutral: "中性",
-  low: "低",
-  medium: "中",
-  high: "高",
 };
 const percent = (n) =>
   typeof n === "number" ? Math.round(n * 100) + "%" : "—";
@@ -21,10 +18,6 @@ const percent = (n) =>
       <div>
         <span>中长期 · 1–3个月</span
         ><strong>{{ labels[value.bias_long] || "未记录" }}</strong>
-      </div>
-      <div>
-        <span>判断置信度</span
-        ><strong>{{ labels[value.confidence] || "未记录" }}</strong>
       </div>
     </div>
     <details v-if="!compact && value.p_up_3d != null" class="details">
@@ -42,5 +35,5 @@ const percent = (n) =>
       </p>
     </details>
   </div>
-  <p v-else class="muted small">这一轮尚未记录可公开的方向与置信度。</p>
+  <p v-else class="muted small">这一轮尚未记录可公开的方向判断。</p>
 </template>
