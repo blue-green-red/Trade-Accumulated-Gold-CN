@@ -160,3 +160,45 @@ export const sourceState = (stamp, max = 180) =>
         clock.value - new Date(stamp).getTime() < -60000
       ? "更新延迟"
       : "已更新";
+
+// Rendering must expire a cached quote even between the page's one-minute polls.
+export function executionStatus(data) {
+  const q = data.execution?.quote || data.execution?.valuation_quote;
+  const session = data.snapshot?.jd_session || {};
+  const closed =
+    session.is_open === false ||
+    (session.close_at && new Date(session.close_at).getTime() <= clock.value);
+  const ages = q
+    ? [q.quote_at, q.fetched_at].map(
+        (t) => (clock.value - new Date(t).getTime()) / 1000,
+      )
+    : [];
+  const valid =
+    !!data.execution?.ready &&
+    q?.source === "jd_latest_price_api" &&
+    Number.isFinite(Number(q.price)) &&
+    Number(q.price) > 0 &&
+    ages.every((age) => Number.isFinite(age) && age >= -30 && age <= 120);
+  const cached = valid && !!q.cache_reused;
+  return {
+    ready: valid && !closed,
+    cached: cached && !closed,
+    label: closed
+      ? "京东休市 · 暂停模拟成交"
+      : valid
+        ? cached
+          ? "沿用缓存 · 仍在120秒有效期内"
+          : "有效执行报价"
+        : ages.some((age) => Number.isFinite(age) && age > 120)
+          ? "报价超过120秒 · 暂停模拟成交"
+          : data.execution?.status?.reason === "fetch_failed"
+            ? "本轮取价失败 · 暂停模拟成交"
+            : "暂无有效报价 · 暂停模拟成交",
+    note:
+      cached && !closed
+        ? "保留原报价时间，到期自动停用"
+        : !valid || closed
+          ? "历史参考不用于执行"
+          : "",
+  };
+}

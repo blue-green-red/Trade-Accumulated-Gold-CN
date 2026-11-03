@@ -193,7 +193,7 @@ def page_data(settings: Settings, page, view='auto'):
             return dashboard_visible(conn,result)
         if page == 'overview' or (page == 'market' and view in ('auto','prices')):
             result['snapshot'] = {k:snap.get(k) for k in ('ts','market_open','jd_session','xauusd','change_pct','day_high','day_low','fx')}
-            result['execution'] = {'quote':quote,'valuation_quote':valuation,'ready':quote is not None}
+            result['execution'] = {'quote':quote,'valuation_quote':valuation,'ready':quote is not None,'status':snap.get('jd_quote_status')}
         if page in ('overview','strategies'):
             from .jd_live_readonly import accounts as live_accounts
             live = live_accounts(conn)

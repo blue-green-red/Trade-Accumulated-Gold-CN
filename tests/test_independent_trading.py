@@ -226,7 +226,10 @@ class TradingTests(unittest.TestCase):
         self.assertEqual(good["execution_quote"]["price"], 901)
         with patch("monitor.market.fetch_tv_snapshot", return_value={"status": "error", "error": "offline"}), patch("monitor.market.fetch_spot_gold", return_value={"status": "ok", "price": 4000}), patch("monitor.market.fetch_jd_latest_price", side_effect=RuntimeError("offline")):
             bad = market.snapshot()
-        self.assertIsNone(bad["execution_quote"])
+        self.assertEqual(bad["execution_quote"]["price"],901)
+        self.assertTrue(bad["execution_quote"]["cache_reused"])
+        self.assertEqual(bad["execution_quote"]["quote_at"],good["execution_quote"]["quote_at"])
+        self.assertEqual(bad["execution_quote"]["fetched_at"],good["execution_quote"]["fetched_at"])
         self.assertEqual(bad["jd_last_quote"]["price"], 901)
 
     def test_daily_fills_use_jd_price(self):

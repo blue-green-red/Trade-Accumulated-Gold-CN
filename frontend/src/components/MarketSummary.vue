@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from "vue";
-import { num, signed, fmtTs, sourceState } from "../format";
+import { num, signed, fmtTs, sourceState, executionStatus } from "../format";
 const props = defineProps({ data: Object });
+const quoteState = computed(() => executionStatus(props.data));
 const q = computed(
   () =>
     props.data.execution?.quote || props.data.execution?.valuation_quote || {},
@@ -15,13 +16,10 @@ const q = computed(
         {{ num(q.price) }}<span class="quote-unit">元/克</span>
       </div>
       <div class="data-meta">
-        <span class="data-state" :class="{ warn: !data.execution?.ready }">{{
-          data.execution?.ready
-            ? "可模拟成交"
-            : data.snapshot?.jd_session?.is_open === false
-              ? "京东休市 · 暂停成交"
-              : "报价不可用 · 暂停成交"
-        }}</span
+        <span
+          class="data-state"
+          :class="{ warn: !quoteState.ready || quoteState.cached }"
+          >{{ quoteState.label }}</span
         ><span
           >报价 {{ fmtTs(q.quote_at) }} ·
           {{

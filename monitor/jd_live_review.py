@@ -33,6 +33,18 @@ def request_reviews(store,now=None,after_sync=False):
             elif advice.get('schema_version',1)<2:
                 enqueue(store.conn,model,f'真实账户结构化挂单与复评建议升级：{PRODUCTS[bank][1]}',0,
                         event_id=f'live-schema-v2:{model}:{bank}:{advice["id"]}',payload=data)
+            elif ready and (advice.get('input_data_status') or {}).get('account') not in (None,'fresh'):
+                from .jd_live_preflight import missing_inputs
+                if bank not in (missing_inputs(store.conn,now) or {}):
+                    enqueue(store.conn,model,f'真实账户分析数据恢复：{PRODUCTS[bank][1]}',0,
+                            event_id=f'live-inputs-recovered:{model}:{bank}:{advice["id"]}',payload=data)
+            elif ready and (account.get('pending_orders') or {}).get('status')=='fresh' and (account.get('pending_orders') or {}).get('complete') and (
+                    (advice.get('input_data_status') is not None and
+                     (advice['input_data_status'].get('orders')!='fresh' or advice['input_data_status'].get('orders_complete') is False)) or
+                    any('挂单明细不是新鲜数据' in warning for warning in advice.get('checks',[]))):
+                enqueue(store.conn,model,f'真实账户挂单明细恢复：{PRODUCTS[bank][1]}',0,
+                        event_id=f'live-orders-recovered:{model}:{bank}:{advice["id"]}',
+                        payload={**data,'advice_id':advice['id']})
             elif ready and not old_ready and (advice['action']=='wait' or advice.get('input_quote_status') not in (None,'fresh')):
                 enqueue(store.conn,model,f'真实账户报价恢复：{PRODUCTS[bank][1]}',0,
                         event_id=f'live-recovered:{model}:{bank}:{advice["id"]}',payload=data)

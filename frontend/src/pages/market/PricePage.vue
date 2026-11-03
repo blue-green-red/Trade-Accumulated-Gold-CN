@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, onMounted, onActivated } from "vue";
 import Card from "../../components/Card.vue";
-import { num, signed, fmtTs } from "../../format";
+import { num, signed, fmtTs, executionStatus } from "../../format";
 const props = defineProps({ data: Object });
 
 import Chart from "../../components/Chart.vue";
@@ -11,6 +11,7 @@ const quote = computed(
   () =>
     props.data.execution?.quote || props.data.execution?.valuation_quote || {},
 );
+const quoteState = computed(() => executionStatus(props.data));
 const daily = computed(() => props.data.wave_evidence?.jd_daily || {});
 const points = computed(() =>
   range.value === "daily"
@@ -40,14 +41,12 @@ onActivated(() => emit("ready"));
         {{ num(quote.price) }}<span class="quote-unit">元/克</span>
       </div>
       <div class="data-meta">
-        <span class="data-state" :class="{ warn: !data.execution?.ready }">{{
-          data.execution?.ready
-            ? "可模拟成交"
-            : data.snapshot?.jd_session?.is_open === false
-              ? "京东休市 · 最近有效报价"
-              : "报价不可用 · 暂停成交"
-        }}</span
+        <span
+          class="data-state"
+          :class="{ warn: !quoteState.ready || quoteState.cached }"
+          >{{ quoteState.label }}</span
         ><span>报价 {{ fmtTs(quote.quote_at) }}</span>
+        <span v-if="quoteState.note">{{ quoteState.note }}</span>
       </div>
       <div class="price-aux">
         <div>

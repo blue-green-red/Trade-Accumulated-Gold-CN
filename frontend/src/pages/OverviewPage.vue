@@ -11,11 +11,13 @@ import {
   actions,
   pastDeadline,
   sourceState,
+  executionStatus,
 } from "../format";
 const props = defineProps({ data: Object });
 const quote = computed(
   () => props.data.execution?.quote || props.data.execution?.valuation_quote,
 );
+const quoteState = computed(() => executionStatus(props.data));
 const current = (a) =>
   (a.advice_summary || []).filter(
     (v) => v.status === "current" && !pastDeadline(v) && a.connected,
@@ -23,9 +25,7 @@ const current = (a) =>
 </script>
 <template>
   <section id="panel-overview" class="page-stack" data-page-ready="true">
-    <Card
-      title="京东积存金"
-      :subtitle="data.execution?.ready ? '有效执行报价' : '当前无有效执行报价'"
+    <Card title="京东积存金" :subtitle="quoteState.label"
       ><template #action
         ><button class="link-btn" @click="selectView('market', 'prices')">
           金价走势 →
@@ -37,7 +37,7 @@ const current = (a) =>
       <div class="sub">
         京东通用参考报价 ·
         {{ fmtTs(quote?.quote_at)
-        }}<span v-if="!data.execution?.ready"> · 历史参考不用于执行</span>
+        }}<span v-if="quoteState.note"> · {{ quoteState.note }}</span>
       </div>
     </Card>
     <Card title="真实账户待关注"

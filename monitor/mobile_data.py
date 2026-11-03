@@ -132,7 +132,7 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
         return True
     if page=='overview' and view=='summary':
         from .page_data import _totals,_plans
-        result['execution']={'quote':quote,'valuation_quote':valuation,'ready':quote is not None}
+        result['execution']={'quote':quote,'valuation_quote':valuation,'ready':quote is not None,'status':snap.get('jd_quote_status')}
         result['snapshot']={k:snap.get(k) for k in ('ts','market_open','jd_session')}
         result['live_readonly']=[live_summary(a) for a in live_accounts(conn)]
         data=summaries(conn,settings,price) if enabled(settings) and exists(conn) else []

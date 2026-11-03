@@ -73,6 +73,10 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['risk_profile']=inputs.get('risk_profile')
         value['input_quote_status']=(source.get('quote') or {}).get('status')
         value['input_quote_at']=(source.get('quote') or {}).get('quoted_at')
+        input_orders=source.get('pending_orders') or {}
+        value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
+            'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
+            'orders_at':(source.get('component_times') or {}).get('pending_orders')}
         value['schema_version']=3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
         value['input_state']={k:source.get(k) for k in ('total_grams','cash_cny','pending_order_count','recent_trade')}
         if source.get('status')!='fresh':warnings.append('输入账户数据不可用或过期')

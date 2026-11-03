@@ -147,6 +147,10 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
             observed=(row.get('component_times') or {}).get('pending_orders')
             available=(row.get('coverage') or {}).get('pending_orders')=='available' and 0<=age(observed,now)<=900
             pending['status']='fresh' if fresh and available else 'stale'
+            pending['freshness_reason']=('account_unavailable' if not fresh else
+                'refresh_failed' if (row.get('coverage') or {}).get('pending_orders','').startswith('unavailable:') else
+                'cache_old' if not available and observed else 'not_fetched' if not available else
+                'incomplete' if not pending.get('complete') else None)
             if not available:pending['complete']=False
             row['pending_orders']=pending
         from .jd_live_orders import history,progress

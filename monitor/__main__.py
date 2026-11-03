@@ -256,14 +256,31 @@ class Monitor:
         log.info("AI 消息面分析开始（%s，后台串行）", " → ".join(f"{n}:{t}" for n, t in due.items()))
         try:
             from .ai_events import read as read_events
+            from .jd_live_preflight import prepare as prepare_live
             coverage_store = Store(self.settings.db_path)
             try:
+                live_preflight = prepare_live(coverage_store)
+                if not live_preflight['can_analyze']:
+                    log.info("真实账户仍在刷新，本轮暂缓模型分析；保留手动请求与待覆盖事件")
+                    return
+                if live_preflight.get('waited_seconds', 0) >= 1:
+                    latest = coverage_store.get_state('web_snapshot', {})
+                    if latest.get('ts') and snap.get('ts') and datetime.fromisoformat(latest['ts']) > snap['ts']:
+                        snap = {**snap, **latest, 'ts': datetime.fromisoformat(latest['ts'])}
+                        base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, spread_cny=self.settings.spread_cny,
+                                               sell_fee_rate=self.settings.sell_fee_rate, ratio_bank=self.settings.paper_bank)
                 pending = {name: read_events(coverage_store.conn, name)["pending"] for name in due}
                 portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
             finally:
                 coverage_store.conn.close()
             context = dict(self.ai_context(snap, base_plan, jin10_recent))
+            if live_preflight.get('status') == 'degraded':
+                for bank in live_preflight.get('missing', {}):
+                    account = (context.get('live_readonly_accounts') or {}).get('accounts', {}).get(bank)
+                    if account is not None:
+                        # Keep the observation, but never publish an actionable recommendation on unverified input.
+                        account['status'] = 'stale'
             context["event_coverage"] = {name: [e["id"] for e in events] for name, events in pending.items()}
             shared = {e["id"]: e for events in pending.values() for e in events}
             context["trigger_events"] = [{k: e[k] for k in ("id", "reason", "observed_at", "data")} for e in shared.values()]
@@ -272,7 +289,7 @@ class Monitor:
                 meta = archive.get_state("ai_inputs", {})
                 sizes = {name:len(json.dumps({**context,"trading_accounts":inputs},ensure_ascii=False,separators=(",",":")))
                          for name,inputs in portfolio_inputs.items()}
-                meta.update({"model_context_chars":sizes,"context_chars":max(sizes.values()) if sizes else len(json.dumps(context, ensure_ascii=False, separators=(",", ":"))),
+                meta.update({"live_preflight":live_preflight,"model_context_chars":sizes,"context_chars":max(sizes.values()) if sizes else len(json.dumps(context, ensure_ascii=False, separators=(",", ":"))),
                              "trigger_events": len(shared), "event_coverage": context["event_coverage"]})
                 archive.set_state("ai_inputs", meta)
                 for name, inputs in portfolio_inputs.items():
@@ -293,18 +310,23 @@ class Monitor:
             try:
                 if not active(store.conn, name):
                     return name, None
-                from .manual_ai import claim,TRIGGER
-                if due[name]==TRIGGER:
-                    manual=claim(store.conn,name,run_id)
-                    if not manual:return name,None
-                store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
-                model_context = deepcopy(context)
-                for account in (model_context.get('live_readonly_accounts') or {}).get('accounts',{}).values():
-                    account['previous_advice']=[v for v in account.get('previous_advice',[]) if v['analyst']==name]
-                if name in portfolio_inputs:
-                    model_context["trading_accounts"] = deepcopy(portfolio_inputs[name])
-                result=self.analysts[name].analyze(model_context, due[name], store=store, run_id=run_id)
-                return name,result
+                from .runtime_resources import slot
+                with slot(self.settings.db_path) as acquired:
+                    if not acquired:
+                        log.info("%s 等待账户采集浏览器退出；未消费分析请求", name)
+                        return name,None
+                    from .manual_ai import claim,TRIGGER
+                    if due[name]==TRIGGER:
+                        manual=claim(store.conn,name,run_id)
+                        if not manual:return name,None
+                    store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
+                    model_context = deepcopy(context)
+                    for account in (model_context.get('live_readonly_accounts') or {}).get('accounts',{}).values():
+                        account['previous_advice']=[v for v in account.get('previous_advice',[]) if v['analyst']==name]
+                    if name in portfolio_inputs:
+                        model_context["trading_accounts"] = deepcopy(portfolio_inputs[name])
+                    result=self.analysts[name].analyze(model_context, due[name], store=store, run_id=run_id)
+                    return name,result
             except Exception:
                 log.exception("%s 分析线程异常", name)
                 return name, None
@@ -341,7 +363,7 @@ class Monitor:
 
     def publish_for_web(self, snap, plan, plan_base=None, plan_source: str = "base", ai_plans=None) -> None:
         """网页端只读数据库：把本轮行情与计划存一份，网页不自己联网。"""
-        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "daily_indicators", "market_open", "jd_session", "international_market_open", "fx", "execution_quote", "jd_last_quote")
+        keep = ("xauusd", "change_pct", "day_high", "day_low", "bank_est", "signals", "daily_indicators", "market_open", "jd_session", "international_market_open", "fx", "execution_quote", "jd_last_quote", "jd_quote_status")
         payload = {k: snap.get(k) for k in keep}
         payload["ts"] = snap["ts"].isoformat()
         payload["plan"] = plan

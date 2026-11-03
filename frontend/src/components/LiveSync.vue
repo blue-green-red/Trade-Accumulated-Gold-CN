@@ -44,7 +44,11 @@ const needsLogin = computed(
           v-if="data.live_readonly_refresh?.status === 'completed'"
           class="sub"
         >
-          上次手动刷新已完成
+          {{
+            data.live_readonly_refresh?.source === "analysis"
+              ? "分析前账户刷新已完成"
+              : "上次手动刷新已完成"
+          }}
         </div>
       </div>
       <button

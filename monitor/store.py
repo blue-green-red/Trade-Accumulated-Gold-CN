@@ -72,8 +72,11 @@ def iso(dt: datetime) -> str:
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(path))
+        self.conn = sqlite3.connect(str(path), timeout=15)
         self.conn.row_factory = sqlite3.Row
+        # Readers must not block collection commits while a web page/AI input is read.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=15000")
         self.conn.executescript(SCHEMA)
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(paper_trades)")}
         if "strategy" not in cols:   # 旧库迁移：已有短线记录归入 short

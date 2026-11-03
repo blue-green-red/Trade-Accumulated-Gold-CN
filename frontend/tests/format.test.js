@@ -38,3 +38,30 @@ test("unknown valuations stay unknown and benchmark differences use percentage p
   );
   assert.equal(difference(0.01), "领先基准 1.00 个百分点");
 });
+
+test("cached quotes expire on the local clock without extending either timestamp", async () => {
+  const { executionStatus } = await import("../src/format.js");
+  const at = Date.now();
+  clock.value = at;
+  const q = {
+    source: "jd_latest_price_api",
+    price: 850.12,
+    cache_reused: true,
+    quote_at: new Date(at - 60000).toISOString(),
+    fetched_at: new Date(at - 60000).toISOString(),
+  };
+  const data = {
+    execution: { ready: true, quote: q },
+    snapshot: { jd_session: { is_open: true } },
+  };
+  assert.equal(executionStatus(data).ready, true);
+  assert.match(executionStatus(data).label, /沿用缓存/);
+  clock.value = at + 61000;
+  assert.equal(executionStatus(data).ready, false);
+  assert.match(executionStatus(data).label, /超过120秒/);
+  clock.value = at;
+  data.snapshot.jd_session.close_at = new Date(at - 1).toISOString();
+  assert.equal(executionStatus(data).ready, false);
+  assert.match(executionStatus(data).label, /休市/);
+  clock.value = at;
+});

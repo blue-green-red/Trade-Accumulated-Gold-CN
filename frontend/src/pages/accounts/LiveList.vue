@@ -17,7 +17,7 @@ onMounted(() => emit("ready"));
 onActivated(() => emit("ready"));
 const states = {
   fresh: "已同步",
-  stale: "快照已过期",
+  stale: "账户快照待更新",
   login_required: "需要京东登录",
   unavailable: "查询失败",
   not_checked: "待首次同步",

@@ -353,7 +353,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "live_readonly_sync":get_state(conn,"jd_live_sync_status") or {},
             "live_readonly_refresh":get_state(conn,"jd_live_refresh") or {},
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
-                          "ready": quote is not None, "since": get_state(conn, "jd_execution_since")},
+                          "ready": quote is not None, "status":snap.get("jd_quote_status"), "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
                 "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode),

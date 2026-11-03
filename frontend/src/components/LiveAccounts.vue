@@ -20,7 +20,7 @@ const props = defineProps({
 const rows = computed(() => props.data.live_readonly || []);
 const states = {
   fresh: "已同步",
-  stale: "快照已过期",
+  stale: "账户快照待更新",
   login_required: "需要京东登录",
   unavailable: "查询失败",
   not_checked: "待首次同步",
@@ -61,6 +61,24 @@ const needsLogin = computed(
 const profile = computed(
   () => rows.value.find((a) => a.risk_profile)?.risk_profile,
 );
+const orderDataNote = (a) => {
+  const part = a.pending_orders;
+  if (!part) return "尚未取得挂单明细，不能据此判断没有挂单。";
+  return (
+    {
+      refresh_failed:
+        "挂单明细更新失败，保留上次记录；不代表挂单已撤销或到期。",
+      cache_old:
+        "挂单明细距上次成功查询较久，需刷新核对；挂单本身仍以京东状态为准。",
+      account_unavailable: "账户连接待恢复，以下为上次查询的挂单记录。",
+      not_fetched: "尚未取得最新挂单明细，以下记录待核对。",
+      incomplete: "本次只取得部分挂单，请核对其他委托的资金和克数占用。",
+    }[part.freshness_reason] ||
+    (part.status !== "fresh"
+      ? "挂单明细待刷新，保留上次记录；不代表条件单已到期。"
+      : "")
+  );
+};
 const cashSource = (a) =>
   a.cash_source === "jd_electronic_account_api"
     ? "银行黄金电子户接口 · 不含绑定银行卡"
@@ -108,6 +126,16 @@ const cashSource = (a) =>
                 ? "当前显示上次成功快照，刷新成功前请勿沿用旧建议。"
                 : "账户尚未接通，持仓与资金保持未知。"
             }}
+          </div>
+          <div
+            v-if="['advice', 'orders'].includes(section) && orderDataNote(a)"
+            class="notice warn"
+            role="status"
+          >
+            {{ orderDataNote(a) }}
+            <div class="sub">
+              上次成功查询 {{ fmtTs(a.component_times?.pending_orders) }}
+            </div>
           </div>
           <template v-if="section === 'holdings'">
             <div class="live-gold-label">黄金持仓</div>

@@ -108,7 +108,9 @@ class Market:
         if not snap["jd_session"]["is_open"]:
             snap["jd_price"] = None
             snap["execution_quote"] = None
+            snap["jd_quote_status"] = {"state":"closed"}
         else:
+            reason = None
             try:
                 jd = fetch_jd_latest_price()
                 quote = {key: jd.get(key) for key in ("source", "url", "price", "quote_at", "fetched_at", "product_sku")}
@@ -117,12 +119,24 @@ class Market:
                 if snap["execution_quote"]:
                     self.last_jd_quote = quote
                     self.store.set_state("jd_last_quote", quote)
+                    snap["jd_quote_status"] = {"state":"fresh"}
                 else:
-                    snap["errors"].append("京东积存金报价无效或超过 120 秒，暂停模拟成交")
+                    reason = "invalid_or_old_quote"
+                    snap["errors"].append("京东本轮报价无效或超过 120 秒")
             except Exception as exc:
                 snap["jd_price"] = None
                 snap["execution_quote"] = None
                 snap["errors"].append(f"JD API: {exc}")
+                reason = "fetch_failed"
+            if not snap["execution_quote"]:
+                cached = execution_quote({"execution_quote": self.last_jd_quote})
+                if cached:
+                    # Preserve BOTH timestamps: a failed poll must never renew a quote's lifetime.
+                    snap["execution_quote"] = {**cached,"cache_reused":True}
+                    snap["jd_price"] = cached["price"]
+                    snap["jd_quote_status"] = {"state":"cached","reason":reason}
+                else:
+                    snap["jd_quote_status"] = {"state":"unavailable","reason":reason}
         snap["jd_last_quote"] = self.last_jd_quote
 
         if tv["status"] == "ok":
