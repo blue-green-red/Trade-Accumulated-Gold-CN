@@ -627,6 +627,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503, b'{"error":"model control unavailable"}', "application/json")
 
     def do_GET(self):
+        # The sole anonymous API reads only the dedicated, validated public DTO.
+        # Every existing dashboard route still passes through password validation.
+        if urlsplit(self.path).path == "/api/public/ai":
+            self._public_ai_response()
+            return
         ip = self._auth_client_ip()
         if _locked_out(ip):
             self._send(429, "尝试次数过多，请 10 分钟后再试".encode(), "text/plain; charset=utf-8")
@@ -690,6 +695,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, json.dumps({"error": str(exc)}).encode(), "application/json")
         else:
             self._send(404, b"not found", "text/plain")
+
+    def _public_ai_response(self):
+        from contextlib import closing
+        from .public_ai import latest
+        try:
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if set(query) - {"analyst", "position_pct"} or any(len(v) != 1 for v in query.values()):
+                raise ValueError("Invalid public query")
+            position = query.get("position_pct", [None])[0]
+            if position is not None:
+                if position not in {str(i) for i in range(0, 101, 10)}:
+                    raise ValueError("Invalid position")
+                position = int(position)
+            with closing(connect(self.settings.db_path)) as conn:
+                result = latest(conn, self.settings, query.get("analyst", ["codex"])[0], position)
+            body = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+            tag = 'W/"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+            # Revalidation recalculates expiry/price validity; never serve a long-lived action.
+            extra = {"ETag": tag, "Cache-Control": "public, no-cache"}
+            if tag in [v.strip() for v in self.headers.get("If-None-Match", "").split(",")]:
+                self._send(304, b"", "application/json", extra)
+            else:
+                self._send(200, body, "application/json; charset=utf-8", extra)
+        except ValueError:
+            self._send(400, b'{"error":"invalid public query"}', "application/json")
+        except Exception:
+            log.exception("public AI unavailable")
+            self._send(503, b'{"error":"public AI unavailable"}', "application/json")
 
     def _static_response(self, body, content_type, immutable=False):
         tag = 'W/"'+hashlib.sha256(body).hexdigest()[:24]+'"'

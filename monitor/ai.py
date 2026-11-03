@@ -1,6 +1,6 @@
 """AI 消息面分析。两种后端，策略侧接口完全相同：
 
-- api：Claude API（需 ANTHROPIC_API_KEY），见下方两步调用
+- api：Claude API（需 ANTHROPIC_API_KEY），同一会话提交研究与结构化决策
 - claude_code：复用本机已登录的 Claude Code（`claude -p` 无界面模式，计入订阅用量），
   一次调用完成研究 + 结构化输出；按需开放 WebSearch/WebFetch，在空临时目录运行，不读项目文件
 - codex：复用本机已登录的 Codex CLI（`codex exec`，按需搜索，计入 ChatGPT 订阅用量），只读沙箱、空临时目录
@@ -8,9 +8,8 @@
 多分析师：Claude 与 Codex 用同一份上下文串行判断（同一 run_id），存档后由成绩单对比两者与「一致时」的准确率；
 每个模型独立操盘自己的模拟账户，不共享方向或持仓。
 
-api 后端两步调用（联网搜索结果自带引用，而结构化输出不兼容引用，所以拆开）：
-  1. research：默认解读共同上下文，可选 web_search 补充，输出带来源的中文研究笔记
-  2. structure：不联网，把笔记 + 行情上下文整理成 MarketView（Pydantic 校验）
+api 后端可在同一会话内按需搜索、查历史，最后调用结构化提交工具；
+公众分析与11档推荐随同私人决策返回，不新增公众专用分析请求。
 
 自主账户模式由 AI 统一提交全部活动账户决策，包含数量、委托、止损止盈；程序校验并执行。旧概率模式只输出方向等预测，价位由规则计算。
 每次判断（含笔记、来源、token 用量）存入 ai_views 表，供事后评估 AI 准确率。
@@ -38,6 +37,7 @@ from .controls import control, active
 from .ai_events import enqueue, read as read_events, acknowledge
 from .autonomous import PortfolioDecisions, FourPortfolioDecisions, RiskPortfolioDecisions, decision_type, policy_version, trading_prompt, TRADING_PROMPT, VERSION as TRADING_VERSION
 from .jd_live_advice import LiveAdviceSet, prompt_for as live_advice_prompt
+from .public_ai import PublicContent, PROMPT as PUBLIC_PROMPT, SCHEMA as PUBLIC_SCHEMA
 
 log = logging.getLogger("monitor.ai")
 
@@ -74,6 +74,7 @@ class UpcomingEvent(BaseModel):
 
 
 class MarketView(BaseModel):
+    public_content: Optional[PublicContent] = Field(default=None, description="同轮公众市场分析及11档仓位建议；必须生成，不含任何私人账户信息")
     live_account_advice: LiveAdviceSet = Field(default_factory=LiveAdviceSet,description="真实账户的人工执行参考建议，完全独立于模拟账户决策；无输入则两项null")
     bias_short: Literal["bullish", "bearish", "neutral"] = Field(description="未来 1-3 个交易日的消息面方向")
     bias_long: Literal["bullish", "bearish", "neutral"] = Field(description="未来 1-3 个月的宏观方向")
@@ -210,7 +211,7 @@ def strict_schema(schema: Any) -> Any:
 
 
 def ensure_schema(store: Store) -> None:
-    store.conn.executescript(SCHEMA)
+    store.conn.executescript(SCHEMA + PUBLIC_SCHEMA)
     cols = {r["name"] for r in store.conn.execute("PRAGMA table_info(ai_views)")}
     if "analyst" not in cols:   # 旧库迁移：已有判断都来自 Claude
         store.conn.execute("ALTER TABLE ai_views ADD COLUMN analyst TEXT NOT NULL DEFAULT 'claude'")
@@ -349,17 +350,17 @@ class AIAnalyst:
         else:
             from .ai_inputs import market_context
             context=market_context(context)
+        from .public_ai import previous_analysis
+        previous_public = previous_analysis(store.conn, self.analyst, self._generation)
+        if previous_public:
+            context["previous_public_analysis"] = previous_public
         after_chars=len(json.dumps(context,ensure_ascii=False,separators=(",",":")))
         usage["performance"]={"input_chars_before":before_chars,"input_chars_after":after_chars}
         training.add("model_context",context)
         if run_id: store.set_state(f"ai_model_input:{run_id}:{self.analyst}",context)
         try:
             if self.backend == "api":
-                if context.get("trading_accounts"):
-                    notes, sources, view = self._run_api_autonomous(context, usage)
-                else:
-                    notes, sources = self._research(context, usage)
-                    view = self._structure(notes, context, usage)
+                notes, sources, view = self._run_api_autonomous(context, usage)
             elif self.backend == "codex":
                 notes, sources, view = self._run_codex(context, usage)
             else:
@@ -443,6 +444,10 @@ class AIAnalyst:
             (view_ts, self.model_label, trigger, json.dumps(data, ensure_ascii=False), notes,
              json.dumps(sources, ensure_ascii=False), price, usage["input"], usage["output"], usage["searches"],
              self.analyst, run_id, snapshot_at, started_at, view_ts))
+        from .public_ai import save as save_public
+        public_status = save_public(store.conn, self.analyst, self._generation, cur.lastrowid,
+            view_ts, snapshot_at, data.get("public_content"), context,
+            invalidated=bool(guard.get("invalidated_at")))
         if context.get("live_readonly_accounts"):
             from .jd_live_advice import save as save_live_advice
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],context["live_readonly_accounts"],
@@ -450,6 +455,8 @@ class AIAnalyst:
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):acknowledge(store.conn, self.analyst, covered_ids)
         store.conn.commit()
+        if public_status == "unavailable":
+            log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)
         if guard.get("invalidated_at"):
             from .price_guard import request_refresh
             request_refresh(store.conn,self.analyst,guard)
@@ -554,7 +561,7 @@ class AIAnalyst:
             policy = "本轮禁止联网搜索或抓取网页，仅允许结构化提交及只读账户历史查询工具；只根据共同上下文独立判断；缺失数据注明未知并降低置信度。"
         else:
             policy = f"本轮最多搜索 {self.settings.ai_max_searches} 次，仅补充上下文缺失的事实；数据缺失、过期或出现重大突发事件线索时优先核实。优先官方/一手来源，保留发布日期与网址；无新增可靠信息时停止搜索，不必用满次数。"
-        return (RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode=="risk_six_account" else RESEARCH_SYSTEM) + "\n" + policy
+        return (RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode=="risk_six_account" else RESEARCH_SYSTEM) + "\n" + policy + PUBLIC_PROMPT
 
     def result_instructions(self):
         if self.settings.ai_trading_mode=="risk_six_account":
@@ -647,7 +654,7 @@ class AIAnalyst:
             usage["searches"] += getattr(stu, "web_search_requests", 0) or 0
 
     def _run_api_autonomous(self, context, usage):
-        """History tool calls remain in one conversation before the final six-account submission."""
+        """One conversation submits public research and any private account decisions."""
         from .history_access import session as history_session
         from .history_tool import NAME,DESCRIPTION,SCHEMA
         system=self.research_system()+"\n"+STRUCTURE_SYSTEM+self.trading_system(context)+"\n"+self.result_instructions()+live_advice_prompt(context)+"\n最终必须调用 submit_portfolio_decisions 提交全部活动账户的决策。先读取历史工具结果，再单独提交，不要在同一响应中同时查历史和提交。"
@@ -660,7 +667,7 @@ class AIAnalyst:
             for _ in range(MAX_PAUSE_CONTINUATIONS+self.settings.ai_history_max_queries+2):
                 self._check_active()
                 from .analysis_archive import record
-                request=dict(max_tokens=6000,system=system,messages=messages,tools=tools)
+                request=dict(max_tokens=12000,system=system,messages=messages,tools=tools)
                 record(usage,"request",{"stage":"api_autonomous","model":self.model,**request})
                 response=self._create(**request)
                 record(usage,"api_response",response)

@@ -11,6 +11,10 @@ import { navigate, selectView } from "../../composables/dashboard";
 import { rate, fmtTs, bias, actions, safeUrl } from "../../format";
 const props = defineProps({ data: Object });
 const analysts = computed(() => props.data.ai?.analysts || []);
+const publicOpen = ref({});
+const PublicAdvicePreview = defineAsyncComponent(
+  () => import("../../components/PublicAdvicePreview.vue"),
+);
 function live() {
   selectView("strategies", "live");
 }
@@ -112,6 +116,16 @@ onActivated(() => emit("ready"));
               >
             </li>
           </ul>
+        </details>
+        <details
+          class="more"
+          @toggle="publicOpen[v.analyst] = $event.target.open"
+        >
+          <summary>公众内容预览 · 市场分析与11档仓位推荐</summary>
+          <PublicAdvicePreview
+            v-if="publicOpen[v.analyst]"
+            :analyst="v.analyst"
+          />
         </details>
         <div class="chips">
           <span
