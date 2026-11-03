@@ -2,7 +2,7 @@
 export function createFeedCache(fetcher = globalThis.fetch, now = Date.now) {
   const entries = new Map();
   function check(url) {
-    if (!/^\/api\/public\/(?:ai|market)(?:\?|$)/.test(url))
+    if (!/^\/api\/public\/(?:ai(?:\/history)?|market)(?:\?|$)/.test(url))
       throw new Error("Unsupported feed");
   }
   return {

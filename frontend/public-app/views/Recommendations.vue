@@ -71,6 +71,49 @@ usePage(loadReport);
       </p>
     </div>
     <FeedState />
+    <details
+      v-if="report?.recommendations.length"
+      class="card overview-details"
+    >
+      <summary>11档仓位推荐总览</summary>
+      <p class="muted small">
+        当前、目标以%计；调整以百分点计。同一轮参考，点击仓位切换详情。
+      </p>
+      <div class="overview-scroll">
+        <table class="position-overview">
+          <thead>
+            <tr>
+              <th>当前</th>
+              <th>操作</th>
+              <th>目标</th>
+              <th>调整</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in report.recommendations"
+              :key="row.position_pct"
+              :class="{ selected: position === row.position_pct }"
+            >
+              <td>
+                <button
+                  @click="choose(row.position_pct)"
+                  :aria-label="`查看${row.position_pct}%仓位推荐`"
+                >
+                  {{ row.position_pct }}%
+                </button>
+              </td>
+              <td>{{ actions[row.action] }}</td>
+              <td>{{ row.target_position_pct }}%</td>
+              <td>
+                {{ row.target_position_pct - row.position_pct > 0 ? "+" : ""
+                }}{{ row.target_position_pct - row.position_pct }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
     <template v-if="recommendation">
       <section
         class="card recommendation"

@@ -23,6 +23,9 @@ NOW=datetime.now(timezone.utc)
 
 class PreflightTests(unittest.TestCase):
     def setUp(self):
+        # Each fixture starts fresh even when an earlier CLI test waited on a live model.
+        global NOW
+        NOW=datetime.now(timezone.utc)
         self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/'test.db'
         self.s=Store(self.path);ensure_schema(self.s.conn)
         self.s.set_state('ai_status:codex',{'available':True})

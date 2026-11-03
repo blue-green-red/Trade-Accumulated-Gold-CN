@@ -633,6 +633,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/public/ai":
             self._public_ai_response()
             return
+        if path == "/api/public/ai/history":
+            self._public_history_response()
+            return
         if path == "/api/public/market":
             self._public_market_response()
             return
@@ -747,6 +750,23 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             log.exception("public market unavailable")
             self._send(503, b'{"error":"public market unavailable"}', "application/json")
+
+    def _public_history_response(self):
+        from contextlib import closing
+        from .public_research import history
+        try:
+            with closing(connect(self.settings.db_path)) as conn:
+                result = history(conn, self.settings, parse_qs(urlsplit(self.path).query, keep_blank_values=True))
+            body = json.dumps(result, ensure_ascii=False, separators=(',', ':')).encode()
+            tag = 'W/"' + hashlib.sha256(body).hexdigest()[:24] + '"'
+            matched = tag in [v.strip() for v in self.headers.get('If-None-Match', '').split(',')]
+            self._send(304 if matched else 200, b'' if matched else body, 'application/json; charset=utf-8',
+                       {'ETag': tag, 'Cache-Control': 'public, no-cache'})
+        except ValueError:
+            self._send(400, b'{"error":"invalid public history query"}', 'application/json')
+        except Exception:
+            log.exception('public history unavailable')
+            self._send(503, b'{"error":"public history unavailable"}', 'application/json')
 
     def _public_static_response(self, path):
         root = (self.public_static_root or Path(__file__).with_name("public_static")).resolve()

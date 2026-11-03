@@ -83,14 +83,15 @@ CREATE TABLE IF NOT EXISTS public_ai_reports (
  id INTEGER PRIMARY KEY, analyst TEXT NOT NULL, generation INTEGER NOT NULL,
  view_id INTEGER NOT NULL, created_at TEXT NOT NULL, snapshot_at TEXT NOT NULL,
  expires_at TEXT NOT NULL, status TEXT NOT NULL, content_json TEXT,
- quote_json TEXT, UNIQUE(analyst, view_id)
+ quote_json TEXT, assessment_json TEXT, evidence_json TEXT, UNIQUE(analyst, view_id)
 );
 CREATE INDEX IF NOT EXISTS idx_public_ai_latest ON public_ai_reports(analyst,id DESC);
 """
 
 
 def stamp(value):
-    dt = datetime.fromisoformat(value)
+    if not isinstance(value, str): raise ValueError("ISO timestamp required")
+    dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
     if dt.tzinfo is None:
         raise ValueError("Timezone required")
     return dt
@@ -263,7 +264,7 @@ def omit_scenario_math(data, context=None):
         row["invalidation"] = clean(row["invalidation"], "按共用复评条件重估。")
 
 
-def save(conn, analyst, generation, view_id, created_at, snapshot_at, value, context, invalidated=False):
+def save(conn, analyst, generation, view_id, created_at, snapshot_at, value, context, invalidated=False, assessment=None):
     """Within the existing analysis transaction; no network, model call or commit."""
     at = stamp(created_at)
     quote = public_quote(context.get("jd_accumulation_quote"), stamp(snapshot_at))
@@ -283,9 +284,11 @@ def save(conn, analyst, generation, view_id, created_at, snapshot_at, value, con
         except (ValueError, TypeError):
             content = None
     expiry = min(at + timedelta(minutes=TTL_MINUTES), stamp(snapshot_at) + timedelta(minutes=TTL_MINUTES))
-    conn.execute("INSERT INTO public_ai_reports(analyst,generation,view_id,created_at,snapshot_at,expires_at,status,content_json,quote_json) VALUES(?,?,?,?,?,?,?,?,?)",
+    from .public_research import assessment_projection, evidence_for
+    conn.execute("INSERT INTO public_ai_reports(analyst,generation,view_id,created_at,snapshot_at,expires_at,status,content_json,quote_json,assessment_json,evidence_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                  (analyst, generation, view_id, created_at, snapshot_at, expiry.isoformat(), status,
-                  json.dumps(content, ensure_ascii=False) if content else None, json.dumps(quote) if quote else None))
+                  json.dumps(content, ensure_ascii=False) if content else None, json.dumps(quote) if quote else None,
+                  json.dumps(assessment_projection(assessment)), json.dumps(evidence_for(content, context), ensure_ascii=False)))
     return status
 
 
@@ -346,10 +349,10 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
         return result
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_ai_reports'").fetchone():
         return result
-    row = conn.execute("SELECT generation,created_at,snapshot_at,expires_at,status,content_json,quote_json FROM public_ai_reports WHERE analyst=? ORDER BY id DESC LIMIT 1", (analyst,)).fetchone()
+    row = conn.execute("SELECT generation,created_at,snapshot_at,expires_at,status,content_json,quote_json,assessment_json,evidence_json FROM public_ai_reports WHERE analyst=? ORDER BY id DESC LIMIT 1", (analyst,)).fetchone()
     if not row or not active(conn, analyst, row[0]):
         return result
-    generation, created, snapshot, expiry, status, raw, quote_raw = row
+    generation, created, snapshot, expiry, status, raw, quote_raw, assessment_raw, evidence_raw = row
     result.update(created_at=created, snapshot_at=snapshot, expires_at=expiry)
     if not raw or status != "ready":
         return result
@@ -379,6 +382,8 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
                       status="stale" if reason else "current", reason=reason, analysis=content["analysis"],
                       decision_basis=content.get("decision_basis"), scenario_metrics=scenario_metrics(content, quote, position),
                       reference_quote=quote, recommendations=[r for r in content["recommendations"] if position is None or r["position_pct"] == position])
+        from .public_research import metadata
+        result.update(metadata(assessment_raw, evidence_raw))
     except (ValueError, TypeError, KeyError):
         pass
     return result

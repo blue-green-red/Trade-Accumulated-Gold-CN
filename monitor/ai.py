@@ -222,6 +222,8 @@ def ensure_schema(store: Store) -> None:
             store.conn.execute(f"ALTER TABLE ai_views ADD COLUMN {name} TEXT")
     run_cols={r["name"] for r in store.conn.execute("PRAGMA table_info(ai_runs)")}
     if "metrics_json" not in run_cols: store.conn.execute("ALTER TABLE ai_runs ADD COLUMN metrics_json TEXT")
+    from .public_research import ensure_columns
+    ensure_columns(store.conn)
     store.conn.commit()
 
 
@@ -449,7 +451,7 @@ class AIAnalyst:
         from .public_ai import save as save_public
         public_status = save_public(store.conn, self.analyst, self._generation, cur.lastrowid,
             view_ts, snapshot_at, data.get("public_content"), context,
-            invalidated=bool(guard.get("invalidated_at")))
+            invalidated=bool(guard.get("invalidated_at")), assessment=data)
         if context.get("live_readonly_accounts"):
             from .jd_live_advice import save as save_live_advice
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],context["live_readonly_accounts"],

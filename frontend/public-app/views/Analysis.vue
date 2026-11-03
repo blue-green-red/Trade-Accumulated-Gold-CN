@@ -10,6 +10,8 @@ import {
 import { usePage } from "../usePage.js";
 import FeedState from "../components/FeedState.vue";
 import Review from "../components/Review.vue";
+import Assessment from "../components/Assessment.vue";
+import KeyLevels from "../components/KeyLevels.vue";
 usePage(loadReport);
 </script>
 <template>
@@ -27,9 +29,14 @@ usePage(loadReport);
           ><span class="risk-label">高风险 · 数日至两周</span>
         </div>
         <p class="lead-text">{{ report.analysis.outlook }}</p>
+        <Assessment :value="report.market_assessment" />
         <div class="change-note">
           <span>本轮变化</span>{{ report.analysis.change_summary }}
         </div>
+      </section>
+      <section class="card">
+        <h2>关键价位与依据</h2>
+        <KeyLevels :levels="report.key_levels || []" />
       </section>
       <section class="card">
         <div class="section-heading">
@@ -64,6 +71,14 @@ usePage(loadReport);
           行情快照 {{ time(report.snapshot_at) }} · 参考有效至
           {{ time(report.expires_at) }}
         </div>
+        <details v-if="report.data_sources?.length" class="details">
+          <summary>本轮公共数据来源</summary>
+          <ul class="review-list">
+            <li v-for="source in report.data_sources" :key="source.name">
+              {{ source.name }} · {{ time(source.as_of) }}
+            </li>
+          </ul>
+        </details>
       </section>
       <a class="text-link" href="#recommendations"
         >根据当前仓位查看操作参考 <span>→</span></a
