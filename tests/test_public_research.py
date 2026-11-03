@@ -113,7 +113,7 @@ class ExpandedPublicTests(unittest.TestCase):
 
 class ExpandedPublicBrowserTests(unittest.TestCase):
     def test_subpages_load_on_demand_preserve_cache_and_history_and_overview_are_public_only(self):
-        from playwright.sync_api import sync_playwright
+        from playwright.sync_api import sync_playwright, expect
         from monitor.config import BJ
         with site() as (store,settings,url),sync_playwright() as p:
             now=datetime.now(timezone.utc);q={'price':850,'source':'jd_latest_price_api','quote_at':now.isoformat(),'fetched_at':now.isoformat()}
@@ -139,9 +139,9 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 self.assertFalse(any('view=news' in u or 'view=calendar' in u or '/ai/history' in u for u in requests))
                 page.get_by_role('link',name='快讯',exact=True).click();page.locator('[data-public-view="news"][data-ready="true"]').wait_for()
                 self.assertEqual(page.locator('.public-news-list li').count(),1)
-                page.get_by_role('button',name='全部',exact=True).click();self.assertEqual(page.locator('.public-news-list li').count(),2)
+                page.get_by_role('button',name='全部',exact=True).click();expect(page.locator('.public-news-list li')).to_have_count(2)
                 page.get_by_role('link',name='金价',exact=True).click();page.get_by_role('link',name='快讯',exact=True).click()
-                self.assertEqual(page.locator('.public-news-list li').count(),2)
+                expect(page.locator('.public-news-list li')).to_have_count(2)
                 self.assertEqual(sum('view=news' in u for u in requests),1)
                 page.get_by_role('link',name='日历',exact=True).click();page.locator('[data-public-view="calendar"][data-ready="true"]').wait_for()
                 self.assertEqual(page.get_by_role('button',name='7天范围',exact=True).get_attribute('aria-pressed'),'true')
@@ -152,6 +152,9 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 self.assertIn('0',page.locator('.event-values strong').inner_text())
                 page.get_by_role('link',name='市场指标',exact=True).click();page.get_by_role('heading',name='宏观环境',exact=True).wait_for()
                 page.get_by_role('button',name='AI分析',exact=True).click();page.get_by_role('heading',name='关注价位',exact=True).wait_for()
+                page.get_by_role('heading',name='本轮风险',exact=True).wait_for()
+                self.assertIn('0.4%',page.locator('.update-policy').inner_text())
+                self.assertNotIn('风险与下一次观察',page.locator('body').inner_text())
                 self.assertIn('偏空',page.locator('.assessment').inner_text())
                 self.assertNotIn('判断置信度',page.locator('body').inner_text())
                 self.assertNotIn('Codex',page.locator('body').inner_text())

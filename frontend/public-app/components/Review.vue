@@ -12,8 +12,10 @@ defineProps({ triggers: { type: Array, default: () => [] } });
           <strong>{{ trigger.price_cny }} 元/克</strong></template
         >
         <template v-else
-          ><strong v-if="trigger.at">{{ time(trigger.at) }}</strong>
-          {{ trigger.event || "定时复评" }}</template
+          ><template v-if="trigger.at"
+            >建议关注时间：<strong>{{ time(trigger.at) }}</strong></template
+          >
+          {{ trigger.event || "届时关注行情与观点变化" }}</template
         >
       </span>
     </li>

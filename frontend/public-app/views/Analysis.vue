@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from "vue";
 import {
   report,
   loadReport,
@@ -12,6 +13,12 @@ import FeedState from "../components/FeedState.vue";
 import Review from "../components/Review.vue";
 import Assessment from "../components/Assessment.vue";
 import KeyLevels from "../components/KeyLevels.vue";
+import UpdatePolicy from "../components/UpdatePolicy.vue";
+const observations = computed(() =>
+  (report.value?.decision_basis?.review_triggers || []).filter(
+    (trigger) => trigger.kind !== "price",
+  ),
+);
 usePage(loadReport);
 </script>
 <template>
@@ -53,20 +60,26 @@ usePage(loadReport);
         </ol>
       </section>
       <section class="card">
-        <h2>风险与下一次观察</h2>
+        <h2>本轮风险</h2>
         <p>{{ report.analysis.risk }}</p>
-        <Review
-          v-if="report.decision_basis"
-          :triggers="report.decision_basis.review_triggers"
-        />
-        <ul v-else class="review-list">
-          <li
-            v-for="item in report.analysis.watch_conditions || []"
-            :key="item"
-          >
-            {{ item }}
-          </li>
-        </ul>
+        <details
+          v-if="
+            observations.length ||
+            (!report.decision_basis && report.analysis.watch_conditions?.length)
+          "
+          class="details"
+        >
+          <summary>本轮其他观察点</summary>
+          <p class="muted small">
+            以下是AI建议关注的事件或时间，用于复核本轮观点，不是系统自动分析的安排。价格观察点见上方“关注价位”。
+          </p>
+          <Review v-if="report.decision_basis" :triggers="observations" />
+          <ul v-else class="review-list">
+            <li v-for="item in report.analysis.watch_conditions" :key="item">
+              {{ item }}
+            </li>
+          </ul>
+        </details>
         <div class="muted small">
           行情快照 {{ time(report.snapshot_at) }} · 参考有效至
           {{ time(report.expires_at) }}
@@ -79,6 +92,10 @@ usePage(loadReport);
             </li>
           </ul>
         </details>
+      </section>
+      <section class="card">
+        <h2>分析更新方式</h2>
+        <UpdatePolicy :policy="report.update_policy" />
       </section>
       <a class="text-link" href="#recommendations"
         >根据当前仓位查看操作参考 <span>→</span></a
