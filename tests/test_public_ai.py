@@ -15,7 +15,7 @@ from monitor.ai import AIAnalyst, FourAccountResult, strict_schema
 from monitor.config import Settings
 from monitor.controls import set_enabled
 from monitor.public_ai import (SCHEMA, POLICY, PROMPT, PublicContent, latest,
-                               previous_analysis, save, validate_content)
+                               previous_analysis, save, validate_content, scenario_metrics)
 from monitor.store import Store
 from monitor.web import Handler, ThreadingHTTPServer
 
@@ -26,7 +26,12 @@ def content():
     return {
         "analysis": {"outlook": "短期震荡，关注宏观变化。", "change_summary": "本轮重新评估市场方向。",
                      "drivers": ["金十快讯 11-03：美元波动影响黄金。"], "risk": "突发消息可能改变方向。",
-                     "watch_conditions": ["突破或跌破公共参考区间后复评。"]},
+                     "watch_conditions": []},
+        "decision_basis": {"position_rationale": "暂无可证实的收益风险优势，维持各档现状；较高仓位承担更多波动，减仓另有费用。",
+                           "entry_scenario": None, "no_entry_reason": "公开输入尚不能支持新的目标及退出假设。",
+                           "no_conditions_reason": "事件公布后的方向未知，先复评再决定，不预设挂单。",
+                           "review_triggers": [{"kind": "time", "at": (NOW + timedelta(hours=2)).isoformat(),
+                                                "event": None, "condition": None, "price_cny": None}]},
         "recommendations": [{"position_pct": p, "action": "wait" if p == 0 else "hold",
                              "target_position_pct": p, "reason": "暂维持仓位，等待更清晰的市场信号。",
                              "invalidation": "市场方向改变时复评。", "conditions": []} for p in range(0, 101, 10)]}
@@ -73,7 +78,7 @@ class PublicTests(unittest.TestCase):
         self.assertEqual([r["position_pct"] for r in result["recommendations"]], list(range(0, 101, 10)))
         self.assertEqual(result["policy"]["risk"], "high")
         self.assertEqual(POLICY["trade_risk_pct"], 4)
-        self.assertEqual(PROMPT.count("公众基准"), 1)
+        self.assertIn("不得为补字段强行买入或生成条件单", PROMPT)
 
     def test_duplicate_missing_and_unknown_fields_rejected(self):
         for mutate in (lambda d: d["recommendations"].pop(),
@@ -169,6 +174,83 @@ class PublicTests(unittest.TestCase):
         self.store.conn.execute("UPDATE public_ai_reports SET content_json=?", (json.dumps(value),))
         self.assertIsNone(self.read()["analysis"])
 
+    def test_empty_entry_and_all_empty_orders_are_valid_with_shared_reasons(self):
+        self.assertEqual(self.publish(), "ready")
+        self.assertTrue(all(not r["conditions"] for r in self.read()["recommendations"]))
+        self.assertIsNone(self.read()["scenario_metrics"])
+        for key in ("no_entry_reason", "no_conditions_reason"):
+            d = content(); d["decision_basis"][key] = None
+            with self.assertRaises(ValueError): validate_content(d, self.context, require_basis=True)
+
+    def test_new_publications_require_basis_but_legacy_reports_remain_readable(self):
+        d = content(); d.pop("decision_basis")
+        self.assertEqual(self.publish(d), "unavailable")
+        self.publish(view_id=2)
+        self.store.conn.execute("UPDATE public_ai_reports SET content_json=? WHERE view_id=2", (json.dumps(d),))
+        result = self.read()
+        self.assertEqual(result["schema_version"], 1)
+        self.assertIsNone(result["decision_basis"])
+        self.assertIsNotNone(result["analysis"])
+
+    def test_program_computes_fee_adjusted_scenarios_and_position_weight(self):
+        d = content()
+        d["decision_basis"]["entry_scenario"] = {"entry_price_cny": 850, "target_price_cny": 880,
+            "exit_price_cny": 820, "basis": "公共日线情景；假设值，不是买入指令。"}
+        d["decision_basis"]["no_entry_reason"] = None
+        self.publish(d)
+        result = self.read(position=40)
+        metrics = result["scenario_metrics"]
+        self.assertAlmostEqual(metrics["net_upside_pct"], (880 * .996 / 850 - 1) * 100, places=3)
+        self.assertAlmostEqual(metrics["net_downside_pct"], (820 * .996 / 850 - 1) * 100, places=3)
+        self.assertAlmostEqual(metrics["at_target_position"]["net_downside_pct"], (820 * .996 / 850 - 1) * 40, places=3)
+        self.assertEqual(result["recommendations"][0]["action"], "hold")
+        d["decision_basis"]["entry_scenario"]["target_price_cny"] = 851
+        m = scenario_metrics(d, {"sell_fee_rate": .004})
+        self.assertLess(m["net_upside_pct"], 0)
+        self.assertIsNone(m["reward_risk_ratio"])
+        for target, stop in ((840, 820), (880, 860)):
+            d["decision_basis"]["entry_scenario"].update(target_price_cny=target, exit_price_cny=stop)
+            with self.assertRaises(ValueError): validate_content(d, self.context)
+
+    def test_scenario_cannot_borrow_private_price_or_quote(self):
+        d = content()
+        d["decision_basis"]["entry_scenario"] = {"entry_price_cny": 850, "target_price_cny": 881.23,
+            "exit_price_cny": 820, "basis": "假设情景"}
+        self.assertEqual(self.publish(d), "ready")
+        result = self.read()
+        self.assertIsNone(result["decision_basis"]["entry_scenario"])
+        self.assertIn("无法核验", result["decision_basis"]["no_entry_reason"])
+        self.assertNotIn("881.23", json.dumps(result))
+        d["recommendations"][0]["invalidation"] = "报价881.23时重估"
+        self.assertEqual(self.publish(d, view_id=3), "unavailable")
+        d["recommendations"][0]["invalidation"] = "按共用条件重估"
+        d["decision_basis"]["entry_scenario"]["target_price_cny"] = 880
+        self.context["jd_accumulation_quote"] = None
+        self.assertEqual(self.publish(d, view_id=2), "unavailable")
+
+    def test_price_time_and_named_event_triggers_are_structured_and_mark_review_due(self):
+        d = content()
+        d["decision_basis"]["review_triggers"] = [{"kind": "price", "condition": "at_or_below", "price_cny": 849,
+                                                   "event": None, "at": None}]
+        self.publish(d)
+        self.assertEqual(self.read()["status"], "current")
+        self.store.set_state("web_snapshot", {"execution_quote": quote(849)})
+        self.assertEqual(self.read()["reason"], "review_due")
+        self.publish(content(), view_id=2)
+        self.store.set_state("web_snapshot", {"execution_quote": quote(at=NOW + timedelta(hours=2))})
+        self.assertEqual(self.read(now=NOW + timedelta(hours=2))["reason"], "review_due")
+        d["decision_basis"]["review_triggers"] = [{"kind": "event", "event": "美国职位空缺数据公布",
+            "at": (NOW + timedelta(hours=3)).isoformat(), "condition": None, "price_cny": None}]
+        validate_content(d, self.context)
+        d["decision_basis"]["review_triggers"] = [{"kind": "time", "event": "即使未触价也复评", "at": (NOW + timedelta(hours=3)).isoformat(),
+                                                   "condition": None, "price_cny": None}]
+        validate_content(d, self.context)
+        for bad in ({"kind": "price", "condition": None, "price_cny": 849},
+                    {"kind": "event", "event": None}, {"kind": "time", "at": None},
+                    {"kind": "time", "at": "2026-11-03T10:00:00"}):
+            d["decision_basis"]["review_triggers"] = [{"event": None, "at": None, "price_cny": None, "condition": None, **bad}]
+            with self.assertRaises(ValueError): validate_content(d, self.context)
+
     def test_http_anonymous_allowlist_auth_etag_and_invalid_queries(self):
         self.publish()
         settings = self.settings
@@ -241,7 +323,11 @@ class PublicBrowserTests(unittest.TestCase):
         from test_dashboard_browser import local_dashboard
         with local_dashboard() as (f, url), sync_playwright() as p:
             now = datetime.now(timezone.utc).isoformat()
-            save(f.m.store.conn, "codex", 0, 999, now, now, content(), {})
+            preview = content()
+            preview["decision_basis"]["entry_scenario"] = {"entry_price_cny": 850, "target_price_cny": 880,
+                "exit_price_cny": 820, "basis": "公共行情假设情景，用于测试扣费比较。"}
+            preview["decision_basis"]["no_entry_reason"] = None
+            save(f.m.store.conn, "codex", 0, 999, now, now, preview, {"jd_accumulation_quote": quote(at=datetime.fromisoformat(now))})
             f.m.store.conn.commit()
             browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             try:
@@ -265,6 +351,9 @@ class PublicBrowserTests(unittest.TestCase):
                 self.assertEqual(sum("/api/public/ai" in u for u in requests), 1)
                 self.assertEqual(f.a._run_codex.call_count, 1)
                 self.assertIn("高风险", page.locator("#panel-ai").inner_text())
+                self.assertIn("仓位取舍", page.locator("#panel-ai").inner_text())
+                self.assertIn("扣费目标收益", page.locator("#panel-ai").inner_text())
+                self.assertIn("未推荐条件方案", page.locator("#panel-ai").inner_text())
                 self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= innerWidth"))
                 page.evaluate("Date.now = () => new Date().getTime() + 86400000")
                 page.get_by_text("已到期，等待下一轮分析", exact=True).wait_for()

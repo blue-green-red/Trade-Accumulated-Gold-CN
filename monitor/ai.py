@@ -351,6 +351,8 @@ class AIAnalyst:
             from .ai_inputs import market_context
             context=market_context(context)
         from .public_ai import previous_analysis
+        context["public_reference"] = {"sell_fee_rate": self.settings.sell_fee_rate, "spread_cny": self.settings.spread_cny,
+            "scope": "公开产品费用参考，实际以用户所选产品为准"}
         previous_public = previous_analysis(store.conn, self.analyst, self._generation)
         if previous_public:
             context["previous_public_analysis"] = previous_public

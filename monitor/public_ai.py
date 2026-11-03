@@ -16,8 +16,9 @@ POSITION_BASIS = "黄金市值 /（黄金市值 + 为黄金投资预留的现金
 POLICY = {"risk": "high", "horizon": "数日至两周", "position_basis": POSITION_BASIS,
           "trade_risk_pct": 4.0, "drawdown_reference_pct": 20.0}
 
-PROMPT = """\n公众输出public_content与私人决策共用本轮研究，不再复述研究笔记。仅据公共行情/资讯，排除trading_accounts、live_readonly_accounts、账户历史及其触发事件；不得引用或暗示私人持仓、成本、余额、盈亏、挂单或账户标识。
-公众基准：高风险、数日至两周波段，单次计划风险参考总资金4%、回撤参考20%，均非损失保证或仓位硬上限；可积极分批参与、调整，亦可有据观望。仓位=黄金市值/(黄金市值+黄金投资预留现金)。analysis简述形势、变化、驱动、风险和复评条件；recommendations覆盖0至100每10个百分点的11种独立当前仓位，各写操作、目标仓位、简短理由、失效条件及至多2个条件方案。数量只用仓位百分比，不用金额/克数；条件方案目标为触发后的总仓位，与即时目标分开；人民币价只据公共京东报价及可说明的市场证据，国际价不可直接充作元/克。没有可靠公共京东价时conditions为空、仅给仓位方向；休市不建议立即成交。共用理由写analysis，各档只写差异，不强制交易、不承诺收益。"""
+PROMPT = """\n公众输出public_content仅用公共行情/资讯、public_reference，禁止引用私人账户、历史、账户事件及持仓/成本/余额/盈亏/挂单/标识。analysis写共用形势，驱动注明日期/来源。
+高风险、数日至两周；4%单次风险、20%回撤为参考，不保证损失。仓位=黄金市值/(黄金市值+黄金预留现金)。decision_basis共用解释仓位高低取舍、扣费与风险；假设入场/目标/退出须从公共数据取值或推导并列依据，不用私人独有价位；无法可靠量化则null并说明，不代表买入。复评须有人民币阈值、具名事件或带时区时点，不用“日线修复”；watch_conditions留空。
+recommendations覆盖0至100每10%的11档，只写动作、目标、差异，共用失效条件引用decision_basis。条件方案允许全空，共用说明原因及何时复评；不得为补字段强行买入或生成条件单。数量仅用仓位%，条件目标与即时目标分开；无有效公共京东价则入场情景null、条件单空，不以国际价代替元/克；休市不建议立即成交。"""
 
 
 class PublicModel(BaseModel):
@@ -29,7 +30,30 @@ class PublicAnalysis(PublicModel):
     change_summary: str = Field(min_length=1, max_length=120)
     drivers: list[str] = Field(min_length=1, max_length=4)
     risk: str = Field(min_length=1, max_length=180)
-    watch_conditions: list[str] = Field(min_length=1, max_length=3)
+    watch_conditions: list[str] = Field(default_factory=list, max_length=3, description="旧版兼容；新版复评只写decision_basis.review_triggers")
+
+
+class PublicEntryScenario(PublicModel):
+    entry_price_cny: float = Field(gt=0, allow_inf_nan=False)
+    target_price_cny: float = Field(gt=0, allow_inf_nan=False)
+    exit_price_cny: float = Field(gt=0, allow_inf_nan=False)
+    basis: str = Field(min_length=1, max_length=160, description="公共来源、日期及情景取值依据；假设情景不是买入指令")
+
+
+class PublicReviewTrigger(PublicModel):
+    kind: Literal["price", "event", "time"]
+    condition: Literal["at_or_above", "at_or_below"] | None = None
+    price_cny: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    event: str | None = Field(default=None, min_length=1, max_length=120, description="具名且可核验的事件，不写笼统趋势改善")
+    at: str | None = Field(default=None, max_length=40, description="已知事件/复评时点的ISO8601时间，必须带时区")
+
+
+class PublicDecisionBasis(PublicModel):
+    position_rationale: str = Field(min_length=1, max_length=240, description="比较主目标与更低/更高仓位的收益、风险及费用；区分已有仓位和新增买入，缺数时说明假设或缺口")
+    entry_scenario: PublicEntryScenario | None
+    no_entry_reason: str | None = Field(max_length=160)
+    no_conditions_reason: str | None = Field(max_length=160)
+    review_triggers: list[PublicReviewTrigger] = Field(min_length=1, max_length=4)
 
 
 class PublicCondition(PublicModel):
@@ -50,6 +74,7 @@ class PublicRecommendation(PublicModel):
 
 class PublicContent(PublicModel):
     analysis: PublicAnalysis
+    decision_basis: PublicDecisionBasis | None = Field(default=None, description="新版必填的共用操作依据；旧记录可缺省，勿重复到11档")
     recommendations: list[PublicRecommendation] = Field(min_length=11, max_length=11)
 
 
@@ -158,8 +183,33 @@ def privacy_ok(content, context):
     return True
 
 
-def validate_content(value, context):
+def validate_content(value, context, require_basis=False):
     data = PublicContent.model_validate(value).model_dump()
+    basis = data.get("decision_basis")
+    if require_basis and not basis:
+        raise ValueError("Public decision basis missing")
+    if basis:
+        scenario = basis["entry_scenario"]
+        if scenario:
+            if not 0 < scenario["exit_price_cny"] < scenario["entry_price_cny"] < scenario["target_price_cny"]:
+                raise ValueError("Invalid public entry scenario")
+        elif not (basis["no_entry_reason"] or "").strip():
+            raise ValueError("Missing reason for absent entry scenario")
+        if not any(r["conditions"] for r in data["recommendations"]) and not (basis["no_conditions_reason"] or "").strip():
+            raise ValueError("Missing reason for absent conditional plans")
+        for trigger in basis["review_triggers"]:
+            if trigger["at"] is not None:
+                stamp(trigger["at"])
+            kind = trigger["kind"]
+            if kind == "price":
+                if trigger["condition"] is None or trigger["price_cny"] is None or trigger["event"] is not None or trigger["at"] is not None:
+                    raise ValueError("Invalid public price trigger")
+            elif trigger["condition"] is not None or trigger["price_cny"] is not None:
+                raise ValueError("Non-price trigger contains price")
+            elif kind == "event" and not (trigger["event"] or "").strip():
+                raise ValueError("Missing named review event")
+            elif kind == "time" and not trigger["at"]:
+                raise ValueError("Missing review time")
     if sorted(r["position_pct"] for r in data["recommendations"]) != list(POSITIONS):
         raise ValueError("Incomplete position coverage")
     for row in data["recommendations"]:
@@ -176,16 +226,31 @@ def validate_content(value, context):
     return data
 
 
+def publication_content(value, context):
+    """Omit an unsafe optional scenario, never relax checks on the remaining output."""
+    data = PublicContent.model_validate(value).model_dump()
+    basis = data.get("decision_basis")
+    if basis and basis["entry_scenario"] and not privacy_ok({"scenario": basis["entry_scenario"]}, context):
+        basis["entry_scenario"] = None
+        basis["no_entry_reason"] = "无法核验该情景全部价位的公共来源，暂不展示数值情景；按共用复评条件重估。"
+    return validate_content(data, context, require_basis=True)
+
+
 def save(conn, analyst, generation, view_id, created_at, snapshot_at, value, context, invalidated=False):
     """Within the existing analysis transaction; no network, model call or commit."""
     at = stamp(created_at)
     quote = public_quote(context.get("jd_accumulation_quote"), stamp(snapshot_at))
+    if quote:
+        reference = context.get("public_reference") or {}
+        quote.update(sell_fee_rate=reference.get("sell_fee_rate", 0.004), spread_cny=reference.get("spread_cny", 0.0))
     status, content = "unavailable", None
     if value is not None:
         try:
-            content = validate_content(value, context)
+            content = publication_content(value, context)
             # Conditional prices must never be borrowed from a private bank quote.
-            if not quote and any(r["conditions"] for r in content["recommendations"]):
+            basis = content["decision_basis"]
+            has_prices = basis["entry_scenario"] or any(t["kind"] == "price" for t in basis["review_triggers"])
+            if not quote and (has_prices or any(r["conditions"] for r in content["recommendations"])):
                 raise ValueError("Public quote missing")
             status = "invalidated" if invalidated else "ready"
         except (ValueError, TypeError):
@@ -208,6 +273,38 @@ def previous_analysis(conn, analyst, generation):
         return None
 
 
+def scenario_metrics(content, quote, position=None):
+    """Program arithmetic for a hypothetical new position, never personal P/L."""
+    scenario = (content.get("decision_basis") or {}).get("entry_scenario")
+    if not scenario or not quote:
+        return None
+    fee, spread = float(quote.get("sell_fee_rate", 0.004)), float(quote.get("spread_cny", 0))
+    if not 0 <= fee < 1 or not math.isfinite(spread) or spread < 0:
+        raise ValueError("Invalid public fee assumption")
+    entry = scenario["entry_price_cny"]
+    upside = ((scenario["target_price_cny"] * (1 - fee) - spread) / entry - 1) * 100
+    downside = ((scenario["exit_price_cny"] * (1 - fee) - spread) / entry - 1) * 100
+    result = {"sell_fee_rate": fee, "spread_cny": spread, "net_upside_pct": round(upside, 3),
+              "net_downside_pct": round(downside, 3), "reward_risk_ratio": round(upside / -downside, 3) if upside > 0 and downside < 0 else None}
+    if position is not None:
+        row = next(r for r in content["recommendations"] if r["position_pct"] == position)
+        result["at_target_position"] = {"target_position_pct": row["target_position_pct"],
+            "net_upside_pct": round(upside * row["target_position_pct"] / 100, 3),
+            "net_downside_pct": round(downside * row["target_position_pct"] / 100, 3)}
+    return result
+
+
+def review_due(content, current_quote, now):
+    for trigger in (content.get("decision_basis") or {}).get("review_triggers", []):
+        if trigger["at"] and now >= stamp(trigger["at"]):
+            return True
+        if trigger["kind"] == "price" and current_quote:
+            price = current_quote["price_cny"]
+            if (price >= trigger["price_cny"] if trigger["condition"] == "at_or_above" else price <= trigger["price_cny"]):
+                return True
+    return False
+
+
 def latest(conn, settings, analyst="codex", position=None, now=None):
     """Explicit public DTO from its own table; no fallback to ai_views/accounts."""
     if analyst not in ("claude", "codex") or analyst not in settings.ai_analysts:
@@ -215,8 +312,8 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
     if position is not None and (type(position) is not int or position not in POSITIONS):
         raise ValueError("Invalid position")
     now = now or datetime.now(timezone.utc)
-    result = {"schema_version": 1, "analyst": analyst, "status": "unavailable", "policy": dict(POLICY),
-              "analysis": None, "recommendations": []}
+    result = {"schema_version": 2, "analyst": analyst, "status": "unavailable", "policy": dict(POLICY),
+              "analysis": None, "decision_basis": None, "scenario_metrics": None, "recommendations": []}
     if not active(conn, analyst):
         return result
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='public_ai_reports'").fetchone():
@@ -244,8 +341,12 @@ def latest(conn, settings, analyst="codex", position=None, now=None):
             reason = "quote_unavailable"
         if not reason and quote and abs(current["price_cny"] / quote["price_cny"] - 1) * 100 >= MOVE_PCT - 1e-9:
             reason = "price_changed"
+        if not reason and review_due(content, current, now):
+            reason = "review_due"
         # Rebuild the response: never pass through arbitrary stored top-level fields.
-        result.update(status="stale" if reason else "current", reason=reason, analysis=content["analysis"],
+        result.update(schema_version=2 if content.get("decision_basis") else 1,
+                      status="stale" if reason else "current", reason=reason, analysis=content["analysis"],
+                      decision_basis=content.get("decision_basis"), scenario_metrics=scenario_metrics(content, quote, position),
                       reference_quote=quote, recommendations=[r for r in content["recommendations"] if position is None or r["position_pct"] == position])
     except (ValueError, TypeError, KeyError):
         pass
