@@ -503,7 +503,7 @@ class Monitor:
             from .cadence import request_periodic
             request_periodic(self.settings,self.store,self.enabled_analysts(),snap,utc_now())
         from .jd_live_review import request_reviews
-        request_reviews(self.store,utc_now())
+        request_reviews(self.store,utc_now(),settings=self.settings)
         events += self.run_ai_if_due(snap, force=force_ai)
         cost = {"spread_cny": self.settings.spread_cny, "sell_fee_rate": self.settings.sell_fee_rate,
                 "ratio_bank": self.settings.paper_bank}

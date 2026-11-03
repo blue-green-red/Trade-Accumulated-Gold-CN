@@ -109,7 +109,9 @@ onActivated(() => emit("ready"));
           data.cadence?.review_minutes > 0
             ? data.cadence.review_minutes + " 分钟后，"
             : "无最小时间间隔，"
-        }}国际金价较上次分析变化≥{{ data.cadence?.min_move_pct }}%才启动；最长{{
+        }}国际金价或任一真实账户银行价，较各自上次分析输入变化≥{{
+          data.cadence?.min_move_pct
+        }}%可触发同一轮复查；最长{{
           (data.cadence?.max_idle_minutes || 240) / 60
         }}小时兜底。重大事件另外排队，执行器每分钟检查。
       </p>

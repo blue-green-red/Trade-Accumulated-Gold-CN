@@ -216,6 +216,8 @@ def model_input(conn,now=None):
                     reason=value.get('reason') or ''
                     brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
+                    from .jd_live_feedback import strategy_review
+                    brief['strategy_review']=strategy_review(conn,row,name,now)
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
                 brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key','reason')} for o in value.get('review_conditions',[])] if counts[name]==1 else []
                 if value.get('suggested_orders'):

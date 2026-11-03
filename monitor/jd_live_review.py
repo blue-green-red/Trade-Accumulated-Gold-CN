@@ -1,13 +1,17 @@
 """Coalesced account/order changes, data recovery and one expiry review per actionable advice."""
 import json
+import math
 from datetime import datetime,timezone
 from .jd_live_readonly import accounts,PRODUCTS,age
 from .controls import MODELS,active
 from .ai_events import enqueue
 
 
-def request_reviews(store,now=None,after_sync=False):
+def request_reviews(store,now=None,after_sync=False,settings=None):
     now=now or datetime.now(timezone.utc)
+    from .config import Settings
+    config=settings or Settings()
+    threshold=config.ai_periodic_min_move_pct
     from .trading_hours import trading_session
     if not trading_session(now)['is_open']:return
     sync=store.get_state('jd_live_sync_status',{})
@@ -54,5 +58,36 @@ def request_reviews(store,now=None,after_sync=False):
                     enqueue(store.conn,model,f'真实建议到期复评：{PRODUCTS[bank][1]}',0,
                             event_id=f'live-expired:{model}:{bank}:{advice["id"]}',payload={**data,'advice_id':advice['id']})
             if advice:
+                if ready and not (advice.get('input_strategy_review') or {}).get('revalidate_unchanged_plan'):
+                    from .jd_live_feedback import strategy_review
+                    feedback=strategy_review(store.conn,account,model,now)
+                    if feedback and feedback['revalidate_unchanged_plan']:
+                        enqueue(store.conn,model,f'真实账户连续弱化但方案未变，复核旧价位：{PRODUCTS[bank][1]}',0,
+                                event_id=f'live-plan-review:v1:{model}:{bank}:{advice["id"]}',
+                                payload={**data,'advice_id':advice['id'],
+                                         'same_plan_rounds':feedback['same_plan_rounds'],'weakened_rounds':feedback['weakened_rounds']})
+                request_bank_move(store,account,advice,threshold,now,config.ai_short_review_minutes)
                 from .jd_live_conditions import monitor_prices
                 monitor_prices(store,account,advice,now)
+
+
+def request_bank_move(store,account,advice,threshold,now,interval=0):
+    """One event per bank/model's last observed input; the existing worker coalesces all triggers."""
+    from .jd_live_feedback import input_quote,price
+    from .jd_live_conditions import stamp
+    quote=account.get('quote') or {}
+    current=price(quote.get('sell_price_cny'))
+    if not account.get('connected') or quote.get('status')!='fresh' or current is None:return
+    if not math.isfinite(threshold) or threshold<0 or interval<0:return
+    if age(advice.get('created_at'),now)<interval*60:return
+    anchor=input_quote(store.conn,advice)
+    if not anchor or not stamp(quote.get('quoted_at')) or stamp(quote['quoted_at'])<stamp(anchor['quoted_at']):return
+    change=(current/anchor['price_cny']-1)*100
+    if abs(change)+1e-9<threshold:return
+    model=advice['analyst'];bank=account['bank']
+    enqueue(store.conn,model,f'真实账户人民币金价变化{change:+.2f}%：{PRODUCTS[bank][1]}',interval,
+            event_id=f'live-move:{model}:{bank}:{advice["id"]}',
+            payload={'source':'银行报价复查','bank':bank,'advice_id':advice['id'],
+                     'previous_quote_cny':anchor['price_cny'],'previous_quote_at':anchor['quoted_at'],
+                     'current_quote_cny':current,'current_quote_at':quote['quoted_at'],
+                     'change_pct':round(change,3)})

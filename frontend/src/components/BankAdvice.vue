@@ -146,6 +146,32 @@ const proposalState = (order) => {
         分析 {{ fmtTs(advice.created_at) }} · 到期
         {{ fmtTs(advice.expires_at) }} · 北京时间
       </div>
+      <div v-if="advice.input_strategy_review" class="live-quote">
+        <strong>本轮复核背景</strong>
+        <div
+          v-if="advice.input_strategy_review.move_since_previous_pct != null"
+          class="sub"
+        >
+          银行报价较上轮输入
+          {{
+            advice.input_strategy_review.move_since_previous_pct > 0 ? "+" : ""
+          }}{{ num(advice.input_strategy_review.move_since_previous_pct) }}%
+        </div>
+        <div class="sub">
+          最近{{
+            advice.input_strategy_review.lookback_rounds ||
+            advice.input_strategy_review.same_plan_rounds
+          }}轮中，同一交易方案连续
+          {{ advice.input_strategy_review.same_plan_rounds }} 轮，其中
+          {{ advice.input_strategy_review.weakened_rounds }} 轮判断削弱或失效。
+        </div>
+        <div
+          v-if="advice.input_strategy_review.revalidate_unchanged_plan"
+          class="sub"
+        >
+          本轮重点复核旧价位，以及继续等待与现价减仓的取舍，依据见下方本轮变化和方案比较。
+        </div>
+      </div>
       <section v-if="advice.reassessment" class="live-quote live-reassessment">
         <div class="live-section-heading">
           <strong>本轮变化</strong>

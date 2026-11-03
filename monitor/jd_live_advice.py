@@ -50,7 +50,7 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 分别给浙商、民生人工建议，与模拟执行隔离；按risk_profile判断，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
-- 填写reassessment复核上一轮假设及价位；旧条件未触不独立构成持有理由，情景目标不是涨幅上限。reason只比较本户方案。
+- reassessment结合previous_advice.strategy_review复核假设和旧价位；假设削弱/失效仍沿用时，price_basis给当前证据与目标可达依据，reason重算等待、现价部分减仓及退出的扣费收益/风险与仓位取舍；旧条件未触不能独立支持持有，情景目标不是涨幅上限。
 - 每轮评估适合无人盯盘时预挂的suggested_orders：限价买≤、限价卖≥或组合止盈止损卖出，不凑单；具体克数、价格、截止时间和依据见schema。与现有挂单及本轮买卖合计占用，不借用待卖出收入或别户资金，不重复推荐已有单；休市不保证触发成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
@@ -73,6 +73,10 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['risk_profile']=inputs.get('risk_profile')
         value['input_quote_status']=(source.get('quote') or {}).get('status')
         value['input_quote_at']=(source.get('quote') or {}).get('quoted_at')
+        from .jd_live_feedback import price
+        value['input_quote_cny']=price((source.get('quote') or {}).get('sell_price_cny')) if value['input_quote_status']=='fresh' else None
+        previous=next((v for v in source.get('previous_advice',[]) if v.get('analyst')==analyst),{})
+        if previous.get('strategy_review') is not None:value['input_strategy_review']=previous['strategy_review']
         input_orders=source.get('pending_orders') or {}
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
