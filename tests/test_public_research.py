@@ -25,6 +25,10 @@ class ExpandedPublicTests(unittest.TestCase):
             self.assertEqual(data['model'],'primary')
             self.assertNotIn('confidence',data['market_assessment'])
             self.assertEqual(clean_text('京东采样并非完整日线。建议关注美元。'),'建议关注美元。')
+            from dataclasses import replace
+            policy=present({},replace(settings,ai_periodic_min_move_pct=.7))
+            self.assertEqual(policy['update_policy']['move_threshold_pct'],.7)
+            self.assertEqual(policy['reference_validity']['move_threshold_pct'],.4)
 
     def test_news_calendar_and_indicators_allowlist_mask_future_and_keep_zero(self):
         with site() as (store,settings,url):
@@ -165,11 +169,13 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 self.assertEqual(page.locator('.history-card').count(),10)
                 self.assertFalse(any('report_id=' in u for u in requests))
                 page.get_by_role('button',name='展开该轮分析',exact=True).first.click();page.get_by_role('heading',name='当时的市场依据',exact=True).wait_for()
+                self.assertIn('仅用于回顾',page.locator('.history-detail .key-levels').inner_text())
                 self.assertEqual(sum('report_id=' in u for u in requests),1)
                 page.get_by_role('button',name='加载更早的观点',exact=True).click();page.wait_for_function('document.querySelectorAll(".history-card").length===14')
                 page.get_by_role('button',name='仓位推荐',exact=True).click();page.get_by_text('11档仓位推荐总览',exact=True).click()
                 self.assertIn('0.4%',page.locator('.update-policy').inner_text())
                 self.assertIn('相对上次分析输入价',page.locator('.update-policy').inner_text())
+                page.locator('.reference-rules summary').click()
                 self.assertIn('不代表已启动新分析',page.locator('.update-policy').inner_text())
                 self.assertEqual(page.locator('.position-overview tbody tr').count(),11)
                 before=sum('/api/public/ai?' in u for u in requests)
@@ -191,12 +197,15 @@ class ExpandedPublicBrowserTests(unittest.TestCase):
                 for theme,bg,brand in (('light','rgb(246, 245, 242)','rgb(154, 107, 18)'),('dark','rgb(16, 16, 16)','rgb(224, 169, 74)')):
                     page.evaluate('(theme)=>document.documentElement.dataset.theme=theme',theme)
                     self.assertEqual(page.evaluate('getComputedStyle(document.documentElement).backgroundColor'),bg)
-                    self.assertEqual(page.evaluate('getComputedStyle(document.querySelector(".eyebrow")).color'),brand)
+                    expect(page.locator('.bottom-nav button[aria-current=page]')).to_have_css('color',brand)
                 page.screenshot(path='/tmp/gold-public-dark.png',full_page=True)
                 page.evaluate('location.hash="analysis/history"');page.locator('.history-card').first.wait_for()
                 set_enabled(store.conn,'codex',False)
                 page.get_by_role('button',name='刷新当前页面',exact=True).click()
                 page.wait_for_function('document.querySelectorAll(".history-card").length===0')
+                page.get_by_role('link',name='最新观点',exact=True).click()
+                page.get_by_role('heading',name='暂无公开观点',exact=True).wait_for()
+                self.assertEqual(page.locator('.analysis-lead').count(),0)
                 self.assertFalse(any('/api/' in u and '/api/public/' not in u for u in requests))
                 self.assertEqual(errors,[])
             finally:browser.close()

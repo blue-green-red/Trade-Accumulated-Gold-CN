@@ -1,5 +1,6 @@
 import { ref, computed } from "vue";
 import { feeds } from "./cache.js";
+import { referenceStatus } from "./presentation.js";
 export const clock = ref(Date.now());
 export const analyst = ref("primary");
 export const models = ref(["primary"]);
@@ -7,6 +8,18 @@ export const report = ref(null);
 export const reportError = ref(false);
 export const reportLoading = ref(false);
 let generation = 0;
+export function syncModels(available, owner) {
+  const next = available || [owner];
+  const removed = models.value.filter((model) => !next.includes(model));
+  models.value = next;
+  for (const model of removed) feeds.forgetModel(model);
+  if (removed.includes(analyst.value)) {
+    generation++;
+    report.value = null;
+    reportError.value = false;
+    reportLoading.value = false;
+  }
+}
 export async function loadReport(force = false) {
   const token = ++generation;
   const owner = analyst.value;
@@ -17,7 +30,7 @@ export async function loadReport(force = false) {
   try {
     const data = await feeds.read(url, { force });
     if (token !== generation || analyst.value !== owner) return;
-    models.value = data.available_models || [owner];
+    syncModels(data.available_models, owner);
     if (models.value.length && !models.value.includes(owner)) {
       analyst.value = models.value[0];
       return loadReport(force);
@@ -29,26 +42,25 @@ export async function loadReport(force = false) {
     if (token === generation) reportLoading.value = false;
   }
 }
-export const reportStatus = computed(() => {
-  const value = report.value;
-  if (!value?.analysis) return "unavailable";
-  if (Date.parse(value.expires_at) <= clock.value) return "expired";
-  if (reportError.value) return "refresh_failed";
-  return value.status === "current" ? "current" : value.reason || "stale";
-});
+export const reportStatus = computed(() =>
+  referenceStatus(report.value, reportError.value, clock.value),
+);
 export const statusText = {
-  current: "本轮参考有效",
+  current: "本轮最新参考",
   unavailable: "等待公开分析",
   expired: "方案已到期，等待新分析",
   market_closed: "当前休市，方案仅供回顾",
   quote_unavailable: "报价待更新，方案待复核",
-  price_changed: "参考价格已变化，当前方案需复核",
+  price_changed: "京东参考价变化已达阈值，方案需复核",
   review_due: "已触及本轮关注点，需结合当前行情复核",
   stale: "方案待复核",
   refresh_failed: "更新失败，已有方案仅供回顾",
 };
 export const fmt = (v, digits = 2) =>
-  v == null || !Number.isFinite(Number(v))
+  v == null ||
+  typeof v === "boolean" ||
+  String(v).trim() === "" ||
+  !Number.isFinite(Number(v))
     ? "—"
     : Number(v).toLocaleString("zh-CN", {
         minimumFractionDigits: digits,

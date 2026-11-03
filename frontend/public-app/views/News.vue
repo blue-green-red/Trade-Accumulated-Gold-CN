@@ -11,11 +11,14 @@ const items = computed(() =>
 </script>
 <template>
   <div class="view-stack" data-public-view="news" :data-ready="data !== null">
-    <div v-if="error" class="notice warn">快讯暂时无法更新，保留上次内容。</div>
+    <div v-if="error" class="notice warn">
+      {{
+        data ? "快讯更新失败，保留上次内容。" : "暂时无法读取快讯，请稍后刷新。"
+      }}
+    </div>
     <section class="card">
       <div class="section-heading">
         <div>
-          <span class="eyebrow">GOLD NEWS</span>
           <h2>黄金相关快讯</h2>
         </div>
         <div class="segmented" aria-label="快讯筛选">
@@ -39,7 +42,7 @@ const items = computed(() =>
         </div>
       </div>
       <p class="muted small">
-        近24小时 · {{ data?.source || "金十数据" }} · 最新
+        近24小时收录 · {{ data?.source || "金十数据" }} · 最新消息
         {{ time(data?.latest_at) }}
       </p>
       <ol v-if="items.length" class="public-news-list">

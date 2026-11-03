@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useFeed } from "../useFeed.js";
 import { clock, time } from "../state.js";
 import { eventName } from "../events.js";
+import { freshness } from "../presentation.js";
 const { data, error, loading } = useFeed("/api/public/market?view=calendar");
 const scope = ref("week"),
   filter = ref("upcoming");
@@ -11,9 +12,16 @@ const dayFormatter = new Intl.DateTimeFormat("en-CA", {
 });
 const minute = computed(() => Math.floor(clock.value / 60000) * 60000);
 const date = (v) => dayFormatter.format(new Date(v));
+const calendarStatus = computed(() =>
+  freshness(data.value?.status, data.value?.fetched_at, 2100, clock.value),
+);
+const inScope = computed(() =>
+  (data.value?.items || []).filter(
+    (e) => scope.value === "week" || date(e.at) === date(minute.value),
+  ),
+);
 const events = computed(() =>
-  (data.value?.items || [])
-    .filter((e) => scope.value === "week" || date(e.at) === date(minute.value))
+  inScope.value
     .filter(
       (e) =>
         filter.value === "all" ||
@@ -27,7 +35,7 @@ const events = computed(() =>
 );
 const next = computed(
   () =>
-    (data.value?.items || [])
+    inScope.value
       .filter((e) => Date.parse(e.at) > clock.value)
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0],
 );
@@ -38,12 +46,14 @@ const next = computed(
     data-public-view="calendar"
     :data-ready="data !== null"
   >
-    <div v-if="error || (data && data.status !== 'fresh')" class="notice warn">
+    <div
+      v-if="error || (data && calendarStatus !== 'fresh')"
+      class="notice warn"
+    >
       日历更新待确认，以下为上次保存的日程。
     </div>
-    <section v-if="next" class="card event-highlight">
-      <span class="eyebrow">NEXT EVENT</span>
-      <h2>下一项重要事件</h2>
+    <section v-if="next && filter !== 'released'" class="card event-highlight">
+      <h2>下一项日程</h2>
       <p>
         <strong>{{ time(next.at) }}</strong> · {{ eventName(next.title) }}
       </p>
@@ -88,7 +98,11 @@ const next = computed(
             <span
               >实际
               <strong>{{
-                e.released ? (e.actual ?? "—") : "待公布"
+                e.released
+                  ? (e.actual ?? "—")
+                  : Date.parse(e.at) <= clock
+                    ? "待更新"
+                    : "待公布"
               }}</strong></span
             ><span>预期 {{ e.forecast ?? "—" }}</span
             ><span>前值 {{ e.previous ?? "—" }}</span>
@@ -102,7 +116,8 @@ const next = computed(
         </li>
       </ul>
       <p class="muted small">
-        近24小时及未来7天 · 香港/北京时间 · {{ data?.source }} · 更新
+        {{ scope === "today" ? "今天" : "近24小时及未来7天" }} · 北京时间 ·
+        {{ data?.source || "经济日历" }} · 获取
         {{ time(data?.fetched_at) }}
       </p>
     </section>

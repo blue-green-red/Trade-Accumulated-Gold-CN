@@ -6,6 +6,15 @@ export function createFeedCache(fetcher = globalThis.fetch, now = Date.now) {
       throw new Error("Unsupported feed");
   }
   return {
+    forgetModel(model) {
+      for (const url of entries.keys()) {
+        if (
+          url.startsWith("/api/public/ai") &&
+          new URLSearchParams(url.split("?")[1]).get("model") === model
+        )
+          entries.delete(url);
+      }
+    },
     peek(url) {
       check(url);
       return entries.get(url)?.data;

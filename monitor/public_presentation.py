@@ -33,6 +33,7 @@ def clean_text(text):
 
 
 def present(value, settings):
+    from .public_ai import MOVE_PCT, TTL_MINUTES
     aliases = {engine: alias for alias, engine in models(settings).items()}
     def project(item):
         if isinstance(item, dict):
@@ -47,6 +48,11 @@ def present(value, settings):
             return [p for val in item if (p := project(val)) not in ('', None)]
         return clean_text(item) if isinstance(item, str) else item
     result = project(value)
+    result['reference_validity'] = {
+        'max_age_minutes': TTL_MINUTES,
+        'move_threshold_pct': MOVE_PCT,
+        'price_basis': '京东通用参考价相对本轮分析输入价',
+    }
     result['update_policy'] = {
         'move_threshold_pct': settings.ai_periodic_min_move_pct if settings.ai_short_review_minutes >= 0 else None,
         'price_basis': '国际现货黄金相对上次分析输入价的涨跌幅',

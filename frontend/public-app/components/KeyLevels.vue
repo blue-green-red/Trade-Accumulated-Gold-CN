@@ -1,6 +1,9 @@
 <script setup>
 import { fmt } from "../state.js";
-defineProps({ levels: { type: Array, default: () => [] } });
+defineProps({
+  levels: { type: Array, default: () => [] },
+  historical: Boolean,
+});
 const meanings = {
   上行复评: ["上涨时的关注价", "到价后关注上涨趋势是否延续，再评估仓位安排。"],
   下行复评: ["下跌时的关注价", "到价后关注下行风险是否扩大，再评估仓位安排。"],
@@ -12,7 +15,11 @@ const meanings = {
 <template>
   <div v-if="levels.length" class="key-levels">
     <p class="muted small">
-      以下均为京东积存金人民币参考价，用来判断本轮观点何时需要复核。它们不是自动交易指令，也不等同于系统的价格变化分析触发阈值。
+      {{
+        historical
+          ? "以下为当时分析采用的京东参考价，仅用于回顾当时的判断。"
+          : "京东积存金参考价，单位为元/克。用于观察行情或比较情景，不会自动交易。"
+      }}
     </p>
     <article v-for="(level, i) in levels" :key="i">
       <div>
@@ -21,7 +28,10 @@ const meanings = {
       </div>
       <p class="small">
         {{
-          meanings[level.label]?.[1] || "结合该价位观察行情变化，复核本轮判断。"
+          historical
+            ? `当时用途：${meanings[level.label]?.[0] || level.label}。`
+            : meanings[level.label]?.[1] ||
+              "结合该价位观察行情变化，复核本轮判断。"
         }}
       </p>
       <details v-if="level.basis" class="level-source small muted">
@@ -29,7 +39,12 @@ const meanings = {
         <p>{{ level.basis }}</p>
       </details>
     </article>
-    <div class="muted small">情景与关注价位均不代表价格必然到达。</div>
   </div>
-  <p v-else class="muted small">本轮暂无可展示的关注价位。</p>
+  <p v-else class="muted small">
+    {{
+      historical
+        ? "这一轮未记录可展示的关注价位。"
+        : "本轮暂无可展示的关注价位。"
+    }}
+  </p>
 </template>

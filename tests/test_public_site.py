@@ -48,6 +48,28 @@ def site():
 
 
 class PublicSiteTests(unittest.TestCase):
+    def test_daily_fx_metadata_and_missing_international_prices_do_not_look_live(self):
+        from monitor.public_market import indicators_data
+        with site() as (store,settings,url):
+            now=datetime.now(timezone.utc)
+            snap=store.get_state('web_snapshot')
+            snap['xauusd']=None
+            snap['fx'].update(fetched_at=now.isoformat(),rate_date='Wed, 04 Nov 2026 00:00:00 +0000')
+            store.set_state('web_snapshot',snap)
+            data=quote_data(store.conn,now)
+            self.assertEqual(data['international']['status'],'unavailable')
+            self.assertIsNone(data['international']['change_pct'])
+            self.assertEqual(data['fx']['rate_date'],'2026-11-04')
+            self.assertEqual(data['fx']['frequency'],'daily')
+            self.assertNotIn('DO-NOT-PUBLISH',json.dumps(data))
+            snap['fx']['rate_date']='DO-NOT-PUBLISH'
+            store.set_state('web_snapshot',snap)
+            self.assertIsNone(quote_data(store.conn,now)['fx']['rate_date'])
+            store.set_state('web_macro',{'quotes_fetched_at':now.isoformat(),'quotes':{}})
+            self.assertEqual(indicators_data(store.conn,now)['status'],'unavailable')
+            store.set_state('web_macro',{'quotes_fetched_at':now.isoformat(),'quotes':{'美国10年期国债收益率':{'value':0}}})
+            self.assertEqual(indicators_data(store.conn,now)['status'],'partial')
+
     def test_market_allowlist_freshness_and_sampled_history(self):
         with site() as (store,settings,url):
             now=datetime.now(timezone.utc)
@@ -155,5 +177,13 @@ class PublicSiteBrowserTests(unittest.TestCase):
                         if width==390 and tab=='仓位推荐':page.screenshot(path='/tmp/gold-public-recommendations-mobile.png',full_page=True)
                 page.evaluate('Date.now = () => new Date().getTime() + 86400000')
                 page.get_by_text('方案已到期，等待新分析',exact=True).wait_for()
+                self.assertIn('参考已到期',page.locator('body').inner_text())
                 self.assertEqual(errors,[])
+                offline=browser.new_page(viewport={'width':390,'height':844})
+                try:
+                    offline.route('**/api/public/ai?*',lambda route:route.abort())
+                    offline.goto(url+'/public/#analysis')
+                    offline.get_by_role('heading',name='分析暂时无法读取',exact=True).wait_for()
+                    self.assertNotIn('暂无公开观点',offline.locator('body').inner_text())
+                finally:offline.close()
             finally:browser.close()

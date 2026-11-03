@@ -3,6 +3,15 @@ import { ref, computed, defineAsyncComponent, watch } from "vue";
 import { feeds } from "../cache.js";
 import { clock, fmt, time } from "../state.js";
 import { usePage } from "../usePage.js";
+import { freshness, dataLabels } from "../presentation.js";
+const internationalStatus = computed(() =>
+  freshness(
+    quote.value?.international.status,
+    quote.value?.international.as_of,
+    180,
+    clock.value,
+  ),
+);
 const PriceChart = defineAsyncComponent(
   () => import("../components/PriceChart.vue"),
 );
@@ -71,20 +80,22 @@ usePage(load);
     :data-ready="Boolean(quote)"
   >
     <div v-if="error" class="notice warn">
-      行情暂时无法更新，已有价格仅作历史参考。
+      {{
+        quote
+          ? "行情更新失败，显示上次保存的价格。"
+          : "暂时无法读取行情，请稍后刷新。"
+      }}
     </div>
     <section class="card price-card">
       <div class="card-kicker">
-        <span>京东积存金</span><span class="status-pill">{{ quoteState }}</span>
+        <span>京东积存金参考价</span
+        ><span class="status-pill">{{ quoteState }}</span>
       </div>
       <div class="main-price">
         {{ fmt(quote?.quote.price_cny) }}<span>元 / 克</span>
       </div>
-      <div class="muted">
-        {{ quote?.quote.source || "京东通用参考报价" }} ·
-        {{ time(quote?.quote.quoted_at) }}
-      </div>
-      <p class="price-note">实际价格与费用以所选产品为准。</p>
+      <div class="muted">报价时间 {{ time(quote?.quote.quoted_at) }}</div>
+      <p class="price-note">京东通用参考报价，产品价格与费用以交易页面为准。</p>
       <div class="market-metrics">
         <div>
           <span>国际现货黄金</span
@@ -92,21 +103,30 @@ usePage(load);
             >{{ fmt(quote?.international.price_usd_oz)
             }}<small>美元/盎司</small></strong
           ><em v-if="quote?.international.change_pct != null"
-            >{{ quote.international.change_pct > 0 ? "+" : ""
+            >报价涨跌 {{ quote.international.change_pct > 0 ? "+" : ""
             }}{{ fmt(quote.international.change_pct) }}%</em
+          >
+          <small
+            >{{ dataLabels[internationalStatus] }} ·
+            {{ time(quote?.international.as_of) }} 采集</small
           >
         </div>
         <div>
           <span>美元兑人民币</span
           ><strong>{{ fmt(quote?.fx.usd_cny, 4) }}</strong
-          ><small>USD / CNY</small>
+          ><small>USD / CNY · 日更参考汇率</small><small>非实时即期</small>
+          <small v-if="quote?.fx.rate_date"
+            >数据日期 {{ quote.fx.rate_date }}</small
+          >
+          <small v-if="quote?.fx.fetched_at"
+            >{{ time(quote.fx.fetched_at) }} 获取</small
+          >
         </div>
       </div>
     </section>
     <section class="card">
       <div class="section-heading">
         <div>
-          <span class="eyebrow">PRICE HISTORY</span>
           <h2>积存金走势</h2>
         </div>
         <div class="segmented" aria-label="行情范围">
@@ -124,14 +144,18 @@ usePage(load);
           </button>
         </div>
       </div>
-      <div v-if="chartError" class="notice warn">走势暂时无法更新。</div>
+      <div v-if="chartError" class="notice warn">
+        {{
+          history
+            ? "走势更新失败，显示上次记录。"
+            : "暂时无法读取走势，请稍后刷新。"
+        }}
+      </div>
       <div v-if="!history && !chartError" class="empty chart-empty">
         正在读取走势…
       </div>
       <PriceChart v-else :points="history?.points || []" />
-      <p class="muted small">
-        京东报价本地采样 · 元/克 · 非官方完整K线，休市时段不补点。
-      </p>
+      <p class="muted small">京东报价记录 · 元/克 · 仅展示有报价的时段。</p>
     </section>
     <div class="session-note" v-if="quote">
       {{ quote.session.rule

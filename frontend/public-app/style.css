@@ -4,6 +4,7 @@
   background: var(--bg);
   font-synthesis: none;
   font-weight: 400;
+  font-size: 14px;
   line-height: 1.65;
   --gold: var(--brand);
   --muted: var(--text-3);
@@ -47,14 +48,14 @@ p {
   margin: 0;
 }
 h1 {
-  font-size: clamp(24px, 4vw, 32px);
+  font-size: clamp(22px, 3vw, 26px);
   letter-spacing: -0.04em;
   font-weight: 650;
   line-height: 1.4;
 }
 h2 {
-  font-size: 18px;
-  letter-spacing: -0.025em;
+  font-size: 16px;
+  letter-spacing: -0.02em;
   font-weight: 650;
 }
 p {
@@ -68,9 +69,13 @@ small {
   font-size: 12px;
 }
 .topbar {
-  height: 86px;
+  height: 64px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
 }
 .top-inner {
   max-width: 1056px;
@@ -78,26 +83,26 @@ small {
   display: flex;
   align-items: center;
   height: 100%;
-  gap: 22px;
+  gap: 16px;
   padding: 0 28px;
 }
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.015em;
 }
 .brand-mark {
   display: grid;
   place-items: center;
   background: linear-gradient(135deg, #f3c768, #b7861f);
   color: var(--on-brand);
-  width: 40px;
-  height: 44px;
-  border-radius: 12px 12px 4px 12px;
-  font-size: 22px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 20px;
   font-family: serif;
 }
 .brand small {
@@ -110,16 +115,18 @@ small {
 .edition {
   font-size: 12px;
   color: var(--muted);
-  border-left: 1px solid var(--border);
-  padding-left: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
 }
 .refresh {
   margin-left: auto;
   border: 1px solid var(--border);
   background: none;
-  border-radius: 30px;
+  border-radius: 9px;
   color: var(--text-2);
-  padding: 6px 15px;
+  padding: 7px 12px;
   font-size: 15px;
 }
 .refresh span {
@@ -128,7 +135,7 @@ small {
 }
 .shell {
   max-width: 1056px;
-  padding: 34px 28px 110px;
+  padding: 24px 28px 100px;
   margin: auto;
 }
 .page-heading {
@@ -136,7 +143,7 @@ small {
   align-items: center;
   justify-content: space-between;
   gap: 15px;
-  margin-bottom: 25px;
+  margin-bottom: 20px;
 }
 .eyebrow {
   font-size: 10px;
@@ -158,13 +165,14 @@ small {
 }
 .view-stack {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 26px;
+  border-radius: var(--radius);
+  padding: 22px;
+  box-shadow: var(--shadow);
   min-width: 0;
 }
 .card-kicker {
@@ -193,7 +201,7 @@ small {
   color: var(--brand);
 }
 .main-price {
-  font-size: clamp(50px, 9vw, 76px);
+  font-size: clamp(44px, 8vw, 64px);
   letter-spacing: -0.055em;
   line-height: 1.3;
   font-weight: 550;
@@ -388,9 +396,9 @@ small {
   background: var(--surface);
 }
 .lead-text {
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 1.85;
+  font-size: 18px;
+  font-weight: 550;
+  line-height: 1.8;
   letter-spacing: -0.015em;
   margin-top: 20px;
 }
@@ -500,7 +508,7 @@ small {
   place-items: center;
 }
 .position-current {
-  font-size: 58px;
+  font-size: 40px;
   font-weight: 500;
   letter-spacing: -0.04em;
   line-height: 1.5;
@@ -545,14 +553,14 @@ small {
   color: var(--text-3);
 }
 .action-title {
-  font-size: 25px;
-  margin-top: 22px;
+  font-size: 24px;
+  margin-top: 16px;
   font-weight: 500;
 }
 .target-flow {
   display: flex;
   align-items: center;
-  gap: 42px;
+  gap: 32px;
   margin: 20px 0;
 }
 .target-flow > div > span {
@@ -561,7 +569,7 @@ small {
   color: var(--text-3);
 }
 .target-flow strong {
-  font-size: 44px;
+  font-size: 36px;
   letter-spacing: -0.03em;
   font-weight: 400;
 }
@@ -643,7 +651,7 @@ small {
     margin: auto;
   }
   .price-card {
-    min-height: 370px;
+    min-height: 340px;
   }
   .chart-wrap {
     margin-top: 25px;
@@ -655,12 +663,12 @@ small {
     margin-bottom: 30px;
   }
   .footnote {
-    margin-top: 45px;
+    margin-top: 28px;
   }
 }
 @media (max-width: 600px) {
   .topbar {
-    height: 72px;
+    height: 60px;
   }
   .top-inner {
     padding: 0 20px;
@@ -668,16 +676,16 @@ small {
   }
   .edition {
     font-size: 10px;
-    padding-left: 12px;
+    padding-left: 7px;
   }
   .brand {
     font-size: 18px;
   }
   .brand-mark {
-    height: 37px;
-    width: 34px;
+    height: 30px;
+    width: 30px;
     font-size: 19px;
-    border-radius: 10px 10px 3px 10px;
+    border-radius: 8px;
   }
   .brand small {
     font-size: 7px;
@@ -689,11 +697,11 @@ small {
     display: none;
   }
   .shell {
-    padding: 26px 16px 105px;
+    padding: 20px 16px 96px;
   }
   .card {
-    padding: 21px;
-    border-radius: 15px;
+    padding: 18px;
+    border-radius: var(--radius);
   }
   .view-stack {
     gap: 14px;
@@ -753,7 +761,7 @@ small {
 .public-subnav {
   display: flex;
   gap: 6px;
-  margin: -6px 0 24px;
+  margin: 0 0 20px;
   padding: 5px;
   background: var(--surface-2);
   border-radius: 12px;
@@ -1029,7 +1037,7 @@ small {
     gap: 7px;
   }
   .assessment-grid span {
-    font-size: 9px;
+    font-size: 11px;
   }
   .assessment-grid strong {
     font-size: 17px;
@@ -1049,6 +1057,112 @@ small {
   cursor: pointer;
   color: var(--brand);
 }
-.card {
-  box-shadow: var(--shadow);
+
+.page-subtitle {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.market-metrics > div {
+  min-width: 0;
+}
+.market-metrics > div > small {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.position-selector {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 16px;
+  align-items: center;
+}
+.position-selector .card-kicker {
+  display: block;
+}
+.position-selector .card-kicker > span {
+  display: block;
+}
+.position-selector .risk-label {
+  margin-top: 4px;
+}
+.position-selector .positions,
+.position-selector > p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.recommendation-review p {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.recommendation-review .text-link {
+  padding: 8px 0 0;
+  color: var(--brand);
+}
+.analysis-update .review-list {
+  gap: 9px;
+}
+.reference-rules {
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.reference-rules p {
+  font-size: 12px;
+}
+.condition-item {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.scenario-grid strong {
+  font-variant-numeric: tabular-nums;
+}
+.overview-details summary {
+  color: var(--text-2);
+}
+.refresh:hover,
+.more-button:hover {
+  background: var(--surface-2);
+}
+.empty-symbol {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  background: var(--brand-soft);
+  border-radius: 14px;
+  margin-bottom: 12px;
+}
+@media (min-width: 800px) {
+  .view-stack[data-public-view="analysis"] {
+    max-width: none;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+  .view-stack[data-public-view="analysis"] > .report-meta,
+  .view-stack[data-public-view="analysis"] > .notice,
+  .view-stack[data-public-view="analysis"] > .analysis-lead,
+  .view-stack[data-public-view="analysis"] > .analysis-levels,
+  .view-stack[data-public-view="analysis"] > .analysis-update,
+  .view-stack[data-public-view="analysis"] > .text-link,
+  .view-stack[data-public-view="analysis"] > .empty {
+    grid-column: 1 / -1;
+  }
+  .analysis-levels .key-levels {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .analysis-levels .key-levels > p {
+    grid-column: 1 / -1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  button,
+  a,
+  summary {
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
+  }
 }

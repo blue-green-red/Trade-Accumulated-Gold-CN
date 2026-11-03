@@ -5,10 +5,12 @@ import {
   loadReport,
   reportLoading,
   reportStatus,
+  clock,
   fmt,
   time,
   actions,
 } from "../state.js";
+import { referenceDeadline } from "../presentation.js";
 import { usePage } from "../usePage.js";
 import FeedState from "../components/FeedState.vue";
 import UpdatePolicy from "../components/UpdatePolicy.vue";
@@ -71,49 +73,6 @@ usePage(loadReport);
       </p>
     </div>
     <FeedState />
-    <details
-      v-if="report?.recommendations.length"
-      class="card overview-details"
-    >
-      <summary>11档仓位推荐总览</summary>
-      <p class="muted small">
-        当前、目标以%计；调整以百分点计。同一轮参考，点击仓位切换详情。
-      </p>
-      <div class="overview-scroll">
-        <table class="position-overview">
-          <thead>
-            <tr>
-              <th>当前</th>
-              <th>操作</th>
-              <th>目标</th>
-              <th>调整</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in report.recommendations"
-              :key="row.position_pct"
-              :class="{ selected: position === row.position_pct }"
-            >
-              <td>
-                <button
-                  @click="choose(row.position_pct)"
-                  :aria-label="`查看${row.position_pct}%仓位推荐`"
-                >
-                  {{ row.position_pct }}%
-                </button>
-              </td>
-              <td>{{ actions[row.action] }}</td>
-              <td>{{ row.target_position_pct }}%</td>
-              <td>
-                {{ row.target_position_pct - row.position_pct > 0 ? "+" : ""
-                }}{{ row.target_position_pct - row.position_pct }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </details>
     <template v-if="recommendation">
       <section
         class="card recommendation"
@@ -152,12 +111,61 @@ usePage(loadReport);
         <div v-if="reportStatus !== 'current'" class="muted small">
           方案待复核，请先查看最新报价及AI分析页的关注点。
         </div>
+        <details class="details recommendation-review">
+          <summary>本档方案何时需要复核</summary>
+          <p>{{ recommendation.invalidation }}</p>
+          <a class="text-link" href="#analysis">查看本轮风险与关注点 →</a>
+        </details>
       </section>
+      <details
+        v-if="report?.recommendations.length"
+        class="card overview-details"
+      >
+        <summary>11档仓位推荐总览</summary>
+        <p class="muted small">
+          当前、目标以%计；调整以百分点计。同一轮参考，点击仓位切换详情。
+        </p>
+        <div class="overview-scroll">
+          <table class="position-overview">
+            <thead>
+              <tr>
+                <th>当前</th>
+                <th>操作</th>
+                <th>目标</th>
+                <th>调整</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in report.recommendations"
+                :key="row.position_pct"
+                :class="{ selected: position === row.position_pct }"
+              >
+                <td>
+                  <button
+                    @click="choose(row.position_pct)"
+                    :aria-label="`查看${row.position_pct}%仓位推荐`"
+                  >
+                    {{ row.position_pct }}%
+                  </button>
+                </td>
+                <td>{{ actions[row.action] }}</td>
+                <td>{{ row.target_position_pct }}%</td>
+                <td>
+                  {{ row.target_position_pct - row.position_pct > 0 ? "+" : ""
+                  }}{{ row.target_position_pct - row.position_pct }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
       <section v-if="basis" class="card">
         <h2>为什么这样安排</h2>
         <p>{{ basis.position_rationale }}</p>
         <details v-if="basis.entry_scenario" class="details">
-          <summary>假设入场情景与扣费比较</summary>
+          <summary>查看假设情景与费用测算</summary>
+          <p class="muted small">以下为京东参考价，单位：元/克。</p>
           <div class="scenario-grid">
             <div>
               <span>假设入场</span
@@ -175,18 +183,24 @@ usePage(loadReport);
           <p class="muted small">{{ basis.entry_scenario.basis }}</p>
           <div v-if="metrics" class="notice">
             <div>
-              扣费目标收益 {{ fmt(metrics.net_upside_pct) }}% · 退出收益
-              {{ fmt(metrics.net_downside_pct) }}%
+              目标价情景收益率 {{ fmt(metrics.net_upside_pct) }}% ·
+              退出情景收益率 {{ fmt(metrics.net_downside_pct) }}%
             </div>
-            <div>按目标仓位配置的退出情景影响约 {{ fmt(weightedRisk) }}%</div>
+            <div>
+              按目标仓位折算，黄金投资资金的退出情景变动约
+              {{ fmt(weightedRisk) }}%
+            </div>
             <div v-if="metrics.reward_risk_ratio != null">
-              收益风险比 {{ fmt(metrics.reward_risk_ratio) }}
+              情景收益风险比 {{ fmt(metrics.reward_risk_ratio) }}
             </div>
             <div class="muted small">
               卖费参考
               {{
                 fmt(metrics.sell_fee_rate * 100)
-              }}%。假设新建仓测算，不代表已有持仓盈亏，也不代表建议买入。
+              }}%。从假设新建仓到目标/退出价测算，不包含已有持仓成本。
+            </div>
+            <div v-if="metrics.spread_cny > 0" class="muted small">
+              测算价差 {{ fmt(metrics.spread_cny) }} 元/克。
             </div>
           </div>
         </details>
@@ -195,7 +209,10 @@ usePage(loadReport);
         </div>
       </section>
       <section class="card">
-        <h2>条件方案</h2>
+        <h2>条件参考方案</h2>
+        <p class="muted small">
+          以下为触价后的仓位参考，本页不会提交挂单或自动执行；参考截止时间不代表交易平台的挂单期限。
+        </p>
         <template v-if="recommendation.conditions.length"
           ><div
             v-for="(condition, i) in recommendation.conditions"
@@ -207,7 +224,7 @@ usePage(loadReport);
               京东参考价 {{ condition.condition === "at_or_above" ? "≥" : "≤" }}
               <strong>{{ fmt(condition.price_cny) }} 元/克</strong>
               <p>
-                {{ actions[condition.action] }}至
+                {{ actions[condition.action] }}，目标仓位
                 {{ condition.target_position_pct }}%
               </p>
             </div>
@@ -219,16 +236,13 @@ usePage(loadReport);
       </section>
       <section class="card">
         <h2>分析更新方式</h2>
-        <UpdatePolicy :policy="report.update_policy" />
-        <p
-          v-if="!basis || !recommendation.invalidation.includes('共用')"
-          class="muted"
-        >
-          本档方案失效条件：
-          {{ recommendation.invalidation }}
-        </p>
+        <UpdatePolicy
+          :policy="report.update_policy"
+          :validity="report.reference_validity"
+        />
         <div class="muted small">
-          本轮生成 {{ time(report.created_at) }} · 参考有效至
+          本轮生成 {{ time(report.created_at) }} ·
+          {{ referenceDeadline(report.expires_at, clock) }}
           {{ time(report.expires_at) }}
         </div>
       </section>

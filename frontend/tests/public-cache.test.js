@@ -58,3 +58,24 @@ test("failed refresh retains the last public response and chart ranges cache ind
   await cache.read(url);
   assert.equal(count, 3);
 });
+
+test("disabled model invalidation removes its latest and history caches while retaining public market data", async () => {
+  const cache = createFeedCache(async (url) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => ({ url }),
+  }));
+  const latest = "/api/public/ai?model=primary";
+  const history = "/api/public/ai/history?model=primary&days=14";
+  const secondary = "/api/public/ai?model=secondary";
+  const market = "/api/public/market?view=quote";
+  await Promise.all(
+    [latest, history, secondary, market].map((url) => cache.read(url)),
+  );
+  cache.forgetModel("primary");
+  assert.equal(cache.peek(latest), undefined);
+  assert.equal(cache.peek(history), undefined);
+  assert.ok(cache.peek(secondary));
+  assert.ok(cache.peek(market));
+});

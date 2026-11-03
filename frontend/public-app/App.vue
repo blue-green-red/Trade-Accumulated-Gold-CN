@@ -23,9 +23,9 @@ const views = {
   ),
 };
 const choices = [
-  ["market", "行情", "黄金市场全景"],
-  ["analysis", "AI分析", "理解当前市场"],
-  ["recommendations", "仓位推荐", "找到适合的下一步"],
+  ["market", "行情", "黄金行情"],
+  ["analysis", "AI分析", "AI市场分析"],
+  ["recommendations", "仓位推荐", "仓位操作参考"],
 ];
 const route = () =>
   Object.hasOwn(views, location.hash.slice(1))
@@ -86,26 +86,32 @@ onUnmounted(() => {
   <header class="topbar">
     <div class="top-inner">
       <a class="brand" href="#market" aria-label="金析AI首页"
-        ><span class="brand-mark">金</span
-        ><span>金析AI<small>GOLD INSIGHTS</small></span></a
+        ><span class="brand-mark">金</span><span>金析AI</span></a
       >
-      <span class="edition">市场公开观察</span>
-      <button class="refresh" aria-label="刷新当前页面" @click="refresh">
-        ↻ <span>更新</span>
+      <span class="edition">公众版</span>
+      <button
+        class="refresh"
+        aria-label="刷新当前页面"
+        title="读取已保存的最新数据"
+        @click="refresh"
+      >
+        ↻ <span>刷新</span>
       </button>
     </div>
   </header>
   <main class="shell">
     <div class="page-heading">
       <div>
-        <span class="eyebrow">{{
-          parent === "market"
-            ? "MARKET"
-            : parent === "analysis"
-              ? "AI INSIGHTS"
-              : "POSITION GUIDE"
-        }}</span>
         <h1>{{ description }}</h1>
+        <p class="page-subtitle">
+          {{
+            parent === "market"
+              ? "价格、资讯与市场背景"
+              : parent === "analysis"
+                ? "市场判断、关键因素与风险"
+                : "同一轮观点下的11档仓位情景"
+          }}
+        </p>
       </div>
       <select
         v-if="parent !== 'market' && models.length > 1"

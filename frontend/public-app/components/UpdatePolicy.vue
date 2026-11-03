@@ -1,5 +1,5 @@
 <script setup>
-defineProps({ policy: Object });
+defineProps({ policy: Object, validity: Object });
 </script>
 <template>
   <div v-if="policy" class="update-policy">
@@ -28,8 +28,18 @@ defineProps({ policy: Object });
       </li>
     </ul>
     <p class="muted small">{{ policy.note }}</p>
-    <p class="muted small">
-      AI分析页的京东关注价位用于复核本轮观点，与上述自动更新阈值分别计算；触及关注价位不代表已启动新分析。点击更新仅读取已保存结果。
-    </p>
+    <details class="details reference-rules">
+      <summary>参考方案何时需要复核</summary>
+      <p v-if="validity" class="muted small">
+        从行情快照起最多{{ validity.max_age_minutes / 60 }}小时；{{
+          validity.price_basis
+        }}涨跌达到{{
+          validity.move_threshold_pct
+        }}%、报价不可用、休市或触及本轮观察条件时，方案会标为待复核。
+      </p>
+      <p class="muted small">
+        上述方案状态检查与自动分析分别计算；触及关注价位不代表已启动新分析。右上角“刷新”仅读取已保存结果。
+      </p>
+    </details>
   </div>
 </template>

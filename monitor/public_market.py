@@ -6,6 +6,7 @@ import json
 import math
 import threading
 import time
+from email.utils import parsedate_to_datetime
 
 from .public_ai import public_quote, stamp
 from .trading_hours import trading_session
@@ -48,16 +49,28 @@ def quote_data(conn, now):
         snapshot_status = 'fresh' if -30 <= age <= 180 else 'stale'
     except (ValueError, TypeError):
         snapshot_at, snapshot_status = None, 'unavailable'
+    international_price = number(snap.get('xauusd'), True)
+    if international_price is None: snapshot_status = 'unavailable'
+    fx = snap.get('fx') or {}
+    try:
+        fx_fetched = stamp(fx.get('fetched_at')).isoformat()
+    except (ValueError, TypeError): fx_fetched = None
+    try:
+        raw_date = fx.get('rate_date')
+        try: fx_date = datetime.fromisoformat(raw_date).date().isoformat()
+        except ValueError: fx_date = parsedate_to_datetime(raw_date).date().isoformat()
+    except (ValueError, TypeError, AttributeError, OverflowError): fx_date = None
     # Explicit fields only; never forward web_snapshot, bank estimates or errors.
     return {'schema_version': 1,
             'quote': {'price_cny': price, 'quoted_at': quoted_at, 'status': status,
                       'source': '京东积存金通用参考报价',
                       'valid_until': (min(stamp(value[k]) for k in ('quote_at', 'fetched_at')) + timedelta(seconds=120)).isoformat() if fresh else None},
             'session': {k: session[k] for k in ('is_open', 'status', 'next_open', 'close_at', 'rule')},
-            'international': {'price_usd_oz': number(snap.get('xauusd'), True),
-                              'change_pct': number(snap.get('change_pct')),
+            'international': {'price_usd_oz': international_price,
+                              'change_pct': number(snap.get('change_pct')) if international_price is not None else None,
                               'as_of': snapshot_at, 'status': snapshot_status},
-            'fx': {'usd_cny': number((snap.get('fx') or {}).get('rate'), True)},
+            'fx': {'usd_cny': number(fx.get('rate'), True),
+                   'rate_date': fx_date, 'fetched_at': fx_fetched, 'frequency': 'daily'},
             'sampled_at': snapshot_at}
 
 
@@ -97,7 +110,7 @@ def news_data(conn, now):
         items.append({'id': hashlib.sha256((at.isoformat()+text).encode()).hexdigest()[:20],
                       'at': at.isoformat(), 'important': row.get('important') is True, 'text': text})
         if len(items) >= 80: break
-    return {'schema_version': 1, 'source': '金十数据 · 黄金相关快讯', 'items': items,
+    return {'schema_version': 1, 'source': '金十数据', 'items': items,
             'latest_at': items[0]['at'] if items else None, 'window_hours': 24}
 
 
@@ -143,7 +156,10 @@ def indicators_data(conn, now):
         technical['status'] = 'unavailable'
     elif technical['status'] == 'fresh' and any(technical[k] is None for k in ('rsi', 'ma20_usd', 'ma50_usd')):
         technical['status'] = 'partial'
-    return {'schema_version': 1, 'quotes': quotes, 'fetched_at': fetched, 'status': freshness(fetched, now, 420),
+    macro_status = freshness(fetched, now, 420)
+    if all(q['value'] is None for q in quotes): macro_status = 'unavailable'
+    elif macro_status == 'fresh' and any(q['value'] is None for q in quotes): macro_status = 'partial'
+    return {'schema_version': 1, 'quotes': quotes, 'fetched_at': fetched, 'status': macro_status,
             'technical': technical, 'note': '均线单位为美元/盎司；日线指标盘中会变化，不能直接当作京东人民币价位。'}
 
 

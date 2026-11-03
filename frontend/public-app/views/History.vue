@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from "vue";
-import { analyst, models, time } from "../state.js";
+import { analyst, models, syncModels, time } from "../state.js";
 import { feeds } from "../cache.js";
 import { usePage } from "../usePage.js";
 import Assessment from "../components/Assessment.vue";
@@ -20,12 +20,13 @@ let version = 0,
 const snapshots = new Map();
 const key = () => analyst.value + ":" + days.value;
 function available(data, owner) {
-  models.value = data.available_models || [owner];
+  syncModels(data.available_models, owner);
   if (!models.value.includes(owner)) {
     rows.value = [];
     cursor.value = null;
     detail.value = null;
     openId.value = null;
+    detailVersion++;
     if (models.value.length) analyst.value = models.value[0];
     return false;
   }
@@ -119,7 +120,9 @@ watch([analyst, days], (next, old) => {
       ready: ready.value,
       hasNew: hasNew.value,
     });
-  const saved = snapshots.get(key());
+  const saved = models.value.includes(analyst.value)
+    ? snapshots.get(key())
+    : null;
   rows.value = saved?.rows || [];
   cursor.value = saved?.cursor || null;
   ready.value = saved?.ready || false;
@@ -128,6 +131,14 @@ watch([analyst, days], (next, old) => {
   detail.value = null;
   detailVersion++;
   load();
+});
+watch(models, (available) => {
+  if (available.includes(analyst.value)) return;
+  rows.value = [];
+  cursor.value = null;
+  detail.value = null;
+  openId.value = null;
+  detailVersion++;
 });
 usePage(load, 60000);
 </script>
@@ -168,7 +179,7 @@ usePage(load, 60000);
       </button>
       <div v-if="openId === row.id" class="history-detail">
         <div v-if="detailError" class="notice warn">
-          详情暂时加载失败，请收起后重试。
+          该轮详情暂不可用，请收起后重试。
         </div>
         <template v-else-if="detail"
           ><h3>当时的市场依据</h3>
@@ -177,8 +188,8 @@ usePage(load, 60000);
               {{ driver }}
             </li>
           </ul>
-          <h3>当时的关键价位</h3>
-          <KeyLevels :levels="detail.key_levels" />
+          <h3>当时的关注价位</h3>
+          <KeyLevels :levels="detail.key_levels" historical />
           <p class="muted small">当时风险：{{ detail.analysis.risk }}</p>
           <div class="muted small">
             行情快照 {{ time(detail.snapshot_at) }} ·

@@ -7,7 +7,9 @@ import {
   names,
   analyst,
   time,
+  clock,
 } from "../state.js";
+import { referenceDeadline } from "../presentation.js";
 import { usePage } from "../usePage.js";
 import FeedState from "../components/FeedState.vue";
 import Review from "../components/Review.vue";
@@ -41,14 +43,13 @@ usePage(loadReport);
           <span>本轮变化</span>{{ report.analysis.change_summary }}
         </div>
       </section>
-      <section class="card">
+      <section class="card analysis-levels">
         <h2>关注价位</h2>
         <KeyLevels :levels="report.key_levels || []" />
       </section>
-      <section class="card">
+      <section class="card analysis-drivers">
         <div class="section-heading">
           <div>
-            <span class="eyebrow">WHAT MATTERS</span>
             <h2>影响市场的因素</h2>
           </div>
         </div>
@@ -59,7 +60,7 @@ usePage(loadReport);
           </li>
         </ol>
       </section>
-      <section class="card">
+      <section class="card analysis-risk">
         <h2>本轮风险</h2>
         <p>{{ report.analysis.risk }}</p>
         <details
@@ -81,7 +82,8 @@ usePage(loadReport);
           </ul>
         </details>
         <div class="muted small">
-          行情快照 {{ time(report.snapshot_at) }} · 参考有效至
+          行情快照 {{ time(report.snapshot_at) }} ·
+          {{ referenceDeadline(report.expires_at, clock) }}
           {{ time(report.expires_at) }}
         </div>
         <details v-if="report.data_sources?.length" class="details">
@@ -93,9 +95,12 @@ usePage(loadReport);
           </ul>
         </details>
       </section>
-      <section class="card">
+      <section class="card analysis-update">
         <h2>分析更新方式</h2>
-        <UpdatePolicy :policy="report.update_policy" />
+        <UpdatePolicy
+          :policy="report.update_policy"
+          :validity="report.reference_validity"
+        />
       </section>
       <a class="text-link" href="#recommendations"
         >根据当前仓位查看操作参考 <span>→</span></a

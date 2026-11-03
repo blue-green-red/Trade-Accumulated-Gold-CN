@@ -1,0 +1,1 @@
+import{L as e,y as t}from"./index-C1qzvP8Z.js";import{t as n}from"./usePage-BcyqQ-8L.js";function r(r,i=3e4){let a=e(t.peek(r)||null),o=e(!1),s=e(!1);async function c(e=!1){s.value=!0,o.value=!1;try{a.value=await t.read(r,{ttl:i,force:e})}catch{o.value=!0}finally{s.value=!1}}return n(c,i),{data:a,error:o,loading:s,load:c}}export{r as t};
