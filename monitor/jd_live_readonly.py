@@ -114,7 +114,7 @@ def account_identity(data):
     return identity
 
 
-def accounts(conn,now=None,include_advice=True):
+def accounts(conn,now=None,include_advice=True,selected_bank=None):
     now=now or datetime.now(timezone.utc)
     tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     records={r[0]:{'checked_at':r[1],'public_status':r[2]} for r in conn.execute('SELECT bank,checked_at,public_status FROM jd_live_readonly')} if 'jd_live_readonly' in tables else {}
@@ -122,6 +122,7 @@ def accounts(conn,now=None,include_advice=True):
     declarations={r[0]:r for r in conn.execute('SELECT bank,cash_cny,declared_at,anchor,invalidated_at FROM jd_live_cash_declarations')} if 'jd_live_cash_declarations' in tables else {}
     out=[]
     for bank,info in BANKS.items():
+        if selected_bank is not None and bank != selected_bank:continue
         meta=records.get(bank,{'checked_at':None,'public_status':'not_checked'});snap=snapshots.get(bank,{})
         fresh=bool(snap) and meta['public_status']=='fresh' and 0<=age(snap.get('fetched_at'),now)<=STALE_SECONDS
         status='fresh' if fresh else 'stale' if meta['public_status']=='fresh' and snap else meta['public_status']

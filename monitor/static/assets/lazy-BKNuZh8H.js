@@ -1,0 +1,1 @@
+import{O as e,k as t,pt as n}from"./index-DLxhrUzf.js";var r=r=>n({loader:r,loadingComponent:t,errorComponent:e,delay:100,timeout:15e3});export{r as t};

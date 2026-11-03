@@ -149,3 +149,72 @@ class PageDataTests(unittest.TestCase):
                 self.assertEqual(get('/api/pages/unknown',auth)[0],404)
                 self.assertEqual(get('/api/pages/strategies?view=invalid',auth)[0],400)
             finally:server.shutdown();server.server_close();thread.join()
+
+    def test_mobile_lists_and_detail_sections_do_not_send_unrelated_data(self):
+        f=self.f
+        from test_jd_live import payload,parse_account,record_success
+        from monitor.jd_live_readonly import accounts
+        for bank in ('zheshang','minsheng'):record_success(f.m.store.conn,bank,parse_account(bank,payload(bank)))
+        set_enabled(f.m.store.conn,'claude',False);f.m.store.conn.commit()
+        with patch('monitor.page_data.equity_curves',side_effect=AssertionError('no curves')),patch('monitor.page_data.ai_section',side_effect=AssertionError('no full research')):
+            live=page_data(f.settings,'strategies','live-list')
+            simulation=page_data(f.settings,'strategies','simulation-list')
+            home=page_data(f.settings,'overview','summary')
+            control=page_data(f.settings,'ai','control')
+        self.assertEqual(len(live['live_readonly']),2)
+        self.assertNotIn('advice_history',live['live_readonly'][0]);self.assertNotIn('pending_orders',live['live_readonly'][0])
+        self.assertEqual(len(simulation['leaderboard']),6)
+        self.assertNotIn('plan',simulation['leaderboard'][0]);self.assertNotIn('comparison',simulation)
+        self.assertNotIn('autonomous',home);self.assertNotIn('fills',home);self.assertNotIn('ai',control)
+        for section in ('holdings','advice','orders','records'):
+            detail=page_data(f.settings,'strategies','live/zheshang/'+section)
+            self.assertEqual(detail['live_account']['bank'],'zheshang');self.assertNotIn('live_readonly',detail)
+            self.assertNotIn('minsheng',json.dumps(detail))
+            if section=='holdings':self.assertNotIn('advice',detail['live_account'])
+            if section=='advice':self.assertNotIn('holding_details',detail['live_account'])
+        self.assertEqual([a['bank'] for a in accounts(f.m.store.conn,selected_bank='minsheng')],['minsheng'])
+        portfolio=page_data(f.settings,'strategies','simulation/codex:low_empty')
+        self.assertEqual(portfolio['portfolio']['key'],'codex:low_empty');self.assertNotIn('leaderboard',portfolio)
+        self.assertIsNone(page_data(f.settings,'strategies','simulation/claude:low_empty')['portfolio'])
+        with self.assertRaises(ValueError):page_data(f.settings,'strategies','simulation/codex:bad')
+
+    def test_ai_views_and_notification_settings_are_scoped(self):
+        f=self.f
+        with patch('monitor.mobile_data.message_history',side_effect=AssertionError('no delivery history on settings')):
+            value=page_data(f.settings,'notifications','settings')
+        self.assertIn('subscriptions',value['notifications']);self.assertNotIn('messages',value['notifications'])
+        research=page_data(f.settings,'ai','research');evaluation=page_data(f.settings,'ai','evaluation')
+        self.assertNotIn('autonomous',research);self.assertNotIn('ai_inputs',research)
+        self.assertIn('ai_inputs',evaluation);self.assertNotIn('autonomous',evaluation)
+        self.assertNotIn('ai',page_data(f.settings,'ai','control'))
+        self.assertIn('preferences',page_data(f.settings,'me'))
+
+    def test_notification_message_history_groups_attempts_and_hides_disabled_events(self):
+        c=self.f.m.store.conn
+        now='2026-11-03T01:00:00+00:00'
+        for key,title in [('ai:codex:one','Codex摘要'),('live-advice:codex:one','浙商真实建议'),('ai:claude:one','Claude摘要')]:
+            c.execute('INSERT INTO alerts(ts,key,title,body,delivered) VALUES(?,?,?,?,?)',(now,key,title,'not returned',1))
+        def delivery(title,keys,status):
+            c.execute('INSERT INTO notification_deliveries(ts,category,title,channel,status,event_keys_json) VALUES(?,?,?,?,?,?)',(now,'other',title,'test',status,json.dumps(keys)))
+        delivery('合并消息',['ai:codex:one','live-advice:codex:one'],'failed')
+        delivery('合并消息',['live-advice:codex:one','ai:codex:one'],'accepted')
+        delivery('混合旧消息',['ai:codex:one','ai:claude:one'],'accepted')
+        c.commit();set_enabled(c,'claude',False)
+        value=page_data(self.f.settings,'notifications','history')['notifications']
+        self.assertNotIn('subscriptions',value)
+        self.assertEqual(len(value['messages']),1)
+        message=value['messages'][0];self.assertEqual(message['status'],'accepted')
+        self.assertEqual(len(message['attempts']),2);self.assertEqual(len(message['events']),2)
+        self.assertNotIn('not returned',json.dumps(message))
+
+    def test_order_section_preserves_structured_reviews_without_new_order_drafts(self):
+        account={'bank':'zheshang','advice':[{'id':1,'analyst':'codex','schema_version':3,'action':'hold',
+                 'order_management':[{'action':'keep','order_key':'safe-hash'}],
+                 'review_conditions':[{'condition':'at_or_below','price_cny':830,'reason':'review'}],
+                 'suggested_orders':[{'kind':'limit_sell','price_cny':900}]}]}
+        with patch('monitor.mobile_data.live_accounts',return_value=[account]) as query:
+            value=page_data(self.f.settings,'strategies','live/zheshang/orders')['live_account']
+        query.assert_called_once_with(unittest.mock.ANY,include_advice=True,selected_bank='zheshang')
+        self.assertEqual(value['advice'][0]['review_conditions'][0]['price_cny'],830)
+        self.assertEqual(value['advice'][0]['order_management'][0]['action'],'keep')
+        self.assertNotIn('suggested_orders',value['advice'][0])

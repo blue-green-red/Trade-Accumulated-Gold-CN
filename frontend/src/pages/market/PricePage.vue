@@ -5,7 +5,7 @@ import { num, signed, fmtTs } from "../../format";
 const props = defineProps({ data: Object });
 
 import Chart from "../../components/Chart.vue";
-import { navigate, accountView } from "../../composables/dashboard";
+import { navigate, selectView } from "../../composables/dashboard";
 const range = ref("daily");
 const quote = computed(
   () =>
@@ -20,8 +20,7 @@ const points = computed(() =>
     : props.data.prices?.[range.value] || [],
 );
 function live() {
-  accountView.value = "live";
-  navigate("strategies");
+  selectView("strategies", "live");
 }
 
 const emit = defineEmits(["ready"]);

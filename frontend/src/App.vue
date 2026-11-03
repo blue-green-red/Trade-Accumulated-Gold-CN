@@ -4,6 +4,7 @@ import {
   defineAsyncComponent,
   onMounted,
   onUnmounted,
+  nextTick,
   watch,
 } from "vue";
 import {
@@ -11,12 +12,18 @@ import {
   currentPage,
   accountView,
   marketView,
+  aiView,
+  notificationView,
+  navPage,
+  pageNames,
+  refreshCurrent,
   header,
   activeEntry,
   loadPage,
   navigate,
   theme,
   setTheme,
+  restoreScroll,
 } from "./composables/dashboard";
 import Icon from "./components/Icon.vue";
 import LoadingPage from "./components/LoadingPage.vue";
@@ -39,6 +46,8 @@ const pages = {
   market: lazy(() => import("./pages/MarketPage.vue")),
   records: lazy(() => import("./pages/RecordsPage.vue")),
   notifications: lazy(() => import("./pages/NotificationsPage.vue")),
+  me: lazy(() => import("./pages/MePage.vue")),
+  diagnostics: lazy(() => import("./pages/DiagnosticsPage.vue")),
 };
 const entry = activeEntry;
 const darkMedia = matchMedia("(prefers-color-scheme: dark)");
@@ -50,8 +59,22 @@ function applyTheme() {
     document.documentElement.dataset.theme === "dark" ? "#101010" : "#f6f5f2";
 }
 watch(theme, applyTheme, { immediate: true });
-watch([currentPage, accountView, marketView], () => loadPage(), {
-  immediate: true,
+watch(
+  [currentPage, accountView, marketView, aiView, notificationView],
+  () => loadPage(),
+  {
+    immediate: true,
+  },
+);
+watch(currentPage, async () => {
+  await nextTick();
+  if (
+    entry.value.data &&
+    !["market", "strategies", "ai", "notifications", "records"].includes(
+      currentPage.value,
+    )
+  )
+    restoreScroll(currentPage.value);
 });
 const updated = computed(() =>
   entry.value.error
@@ -91,7 +114,7 @@ onUnmounted(() => {
           :key="key"
           class="tab"
           role="tab"
-          :aria-selected="currentPage === key"
+          :aria-selected="navPage === key"
           :aria-controls="'panel-' + key"
           @click="navigate(key)"
         >
@@ -120,7 +143,7 @@ onUnmounted(() => {
           id="updated"
           type="button"
           aria-label="刷新数据"
-          @click="loadPage(currentPage, { force: true })"
+          @click="refreshCurrent()"
         >
           {{ updated }}</button
         ><button
@@ -139,28 +162,30 @@ onUnmounted(() => {
   <main>
     <div v-if="entry.error" class="notice warn page-error" role="status">
       {{ entry.error }}<span v-if="entry.data"> · 暂时保留上次数据</span
-      ><button class="link-btn" @click="loadPage(currentPage, { force: true })">
-        重新获取 →
-      </button>
+      ><button class="link-btn" @click="refreshCurrent()">重新获取 →</button>
     </div>
     <KeepAlive
       ><component
-        v-if="entry.data || currentPage === 'market'"
+        v-if="
+          entry.data ||
+          ['market', 'strategies', 'ai', 'notifications'].includes(currentPage)
+        "
         :is="pages[currentPage]"
         :key="currentPage"
         :data="entry.data || {}"
     /></KeepAlive>
     <div
-      v-if="!entry.data && currentPage !== 'market'"
+      v-if="
+        !entry.data &&
+        !['market', 'strategies', 'ai', 'notifications'].includes(currentPage)
+      "
       class="card page-loading"
       aria-busy="true"
     >
       {{
         entry.error
           ? "暂未取得数据，请重试"
-          : "正在加载" +
-            (tabs.find((t) => t[0] === currentPage)?.[1] || "页面") +
-            "…"
+          : "正在加载" + (pageNames[currentPage] || "页面") + "…"
       }}
     </div>
     <div class="foot">模拟盘为虚拟交易 · 真实建议需自行确认 · 每分钟更新</div>
@@ -171,7 +196,7 @@ onUnmounted(() => {
       :key="key"
       class="tab"
       role="tab"
-      :aria-selected="currentPage === key"
+      :aria-selected="navPage === key"
       @click="navigate(key)"
     >
       <Icon :name="key" /><span>{{ label }}</span>

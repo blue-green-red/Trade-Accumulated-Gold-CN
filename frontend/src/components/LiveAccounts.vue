@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from "vue";
+import { computed, defineAsyncComponent } from "vue";
 import Card from "./Card.vue";
-import BankAdvice from "./BankAdvice.vue";
+const BankAdvice = defineAsyncComponent(() => import("./BankAdvice.vue"));
 import { pending, actionErrors, refreshLive } from "../composables/dashboard";
 import {
   num,
@@ -12,7 +12,11 @@ import {
   actions,
   safeUrl,
 } from "../format";
-const props = defineProps({ data: Object });
+import { clock } from "../clock";
+const props = defineProps({
+  data: Object,
+  section: { type: String, default: "holdings" },
+});
 const rows = computed(() => props.data.live_readonly || []);
 const states = {
   fresh: "已同步",
@@ -47,8 +51,8 @@ const quoteCurrent = (a) =>
   a.connected &&
   a.quote?.status !== "historical" &&
   a.quote?.quoted_at &&
-  Date.now() - new Date(a.quote.quoted_at).getTime() >= -30000 &&
-  Date.now() - new Date(a.quote.quoted_at).getTime() <= 180000;
+  clock.value - new Date(a.quote.quoted_at).getTime() >= -30000 &&
+  clock.value - new Date(a.quote.quoted_at).getTime() <= 180000;
 const needsLogin = computed(
   () =>
     rows.value.some((a) => a.status === "login_required") ||
@@ -71,56 +75,8 @@ const cashSource = (a) =>
     title="京东真实账户 · 只读接入"
     :subtitle="`${fresh}/${rows.length} 户已同步 · 人工执行`"
     class="live-panel"
-    ><div class="live-toolbar">
-      <div>
-        <div class="sub">
-          两家资金独立 · 与模拟账户分开 · 建议由你在官方页面确认
-        </div>
-        <div class="sub" role="status">
-          {{
-            busy
-              ? "正在更新账户数据…"
-              : data.live_readonly_sync?.status === "waiting_for_resources"
-                ? "等待模型分析结束后恢复采集"
-                : "报价约1分钟 · 账户/委托约5分钟 · 手动交易后可立即刷新"
-          }}
-        </div>
-        <div
-          v-if="data.live_readonly_refresh?.status === 'completed'"
-          class="sub"
-        >
-          上次手动刷新已完成
-        </div>
-      </div>
-      <button
-        class="live-refresh"
-        :disabled="busy"
-        :aria-label="busy ? '更新中…' : '刷新真实账户'"
-        @click="refreshLive"
-      >
-        {{ busy ? "更新中…" : "刷新真实账户" }}
-      </button>
-    </div>
-    <div v-if="actionErrors['live-refresh']" class="notice warn" role="alert">
-      {{ actionErrors["live-refresh"] }}
-    </div>
-    <div class="live-policy">
-      <span class="live-policy-title"
-        >{{ profile?.name || "高风险" }}建议参考</span
-      ><span class="live-policy-item"
-        >单次计划风险<strong
-          >{{ num(profile?.trade_risk_pct ?? 4, 0) }}%</strong
-        ></span
-      ><span class="live-policy-item"
-        >回撤参考线<strong
-          >{{ num(profile?.drawdown_limit_pct ?? 20, 0) }}%</strong
-        ></span
-      >
-      <div class="live-policy-note">
-        真实建议由你确认执行；缺少完整净值峰值时，不把成本亏损当作历史回撤。程序不提交真实买卖、撤单或改单。
-      </div>
-    </div>
-    <div class="live-bank-grid">
+  >
+    <div class="live-bank-grid bank-detail-grid">
       <article
         v-for="a in rows"
         :key="a.bank"
@@ -153,165 +109,195 @@ const cashSource = (a) =>
                 : "账户尚未接通，持仓与资金保持未知。"
             }}
           </div>
-          <div class="live-gold-label">黄金持仓</div>
-          <div class="live-gold-value">{{ quantity(a.total_grams) }}</div>
-          <div class="live-holding-meta">
-            <span>可卖 {{ quantity(a.sellable_grams) }}</span
-            ><span>冻结 {{ quantity(a.frozen_grams) }}</span>
-          </div>
-          <div class="live-holding-meta">
-            成本均价
-            {{
-              a.average_cost_cny == null
-                ? "未知"
-                : num(a.average_cost_cny) + " 元/克"
-            }}
-          </div>
-          <div class="live-balances">
-            <div class="live-metric">
-              <div class="live-metric-label">
-                {{
-                  a.cash_source === "user_declared_full_position"
-                    ? "可用现金 · 用户声明"
-                    : "电子户可用现金"
-                }}
-              </div>
-              <div class="live-metric-value">
-                {{ a.cash_cny == null ? "未知" : money(a.cash_cny) }}
-              </div>
-              <div class="live-metric-note">{{ cashSource(a) }}</div>
+          <template v-if="section === 'holdings'">
+            <div class="live-gold-label">黄金持仓</div>
+            <div class="live-gold-value">{{ quantity(a.total_grams) }}</div>
+            <div class="live-holding-meta">
+              <span>可卖 {{ quantity(a.sellable_grams) }}</span
+              ><span>冻结 {{ quantity(a.frozen_grams) }}</span>
             </div>
-            <div class="live-metric">
-              <div class="live-metric-label">浮动盈亏估算</div>
-              <div
-                class="live-metric-value"
-                :class="
-                  a.holding_pnl_cny > 0
-                    ? 'live-pnl-positive'
-                    : a.holding_pnl_cny < 0
-                      ? 'live-pnl-negative'
-                      : ''
-                "
-              >
-                {{ money(a.holding_pnl_cny, true) }}
-              </div>
-              <div class="live-metric-note">
-                未扣卖费 ·
-                {{ quoteCurrent(a) ? "按银行金价" : "按历史金价估算或缺报价" }}
-              </div>
-            </div>
-          </div>
-          <div class="live-quote">
-            <div class="live-section-heading">
-              <span>银行金价 · 元/克</span
-              ><span
-                class="live-state"
-                :class="quoteCurrent(a) ? 'fresh' : 'warn'"
-                >{{
-                  quoteCurrent(a)
-                    ? "3分钟内报价"
-                    : a.quote
-                      ? "历史报价"
-                      : "报价未知"
-                }}</span
-              >
-            </div>
-            <div class="live-quote-price">
-              <strong>{{
-                num(a.quote?.sell_price_cny ?? a.quote?.buy_price_cny)
-              }}</strong>
-              <span class="sub">买卖同价</span>
-            </div>
-            <div class="live-quote-time">
+            <div class="live-holding-meta">
+              成本均价
               {{
-                a.quote
-                  ? "报价时刻 " + fmtTs(a.quote.quoted_at) + " · 北京时间"
-                  : "未取得该银行报价，不使用其他银行价格替代"
+                a.average_cost_cny == null
+                  ? "未知"
+                  : num(a.average_cost_cny) + " 元/克"
               }}
             </div>
-          </div>
-          <div class="live-orders">
-            <span
-              >待处理条件单
-              {{
-                a.pending_order_count == null
-                  ? "未知"
-                  : a.pending_order_count + " 笔"
-              }}</span
-            ><span class="sub">{{
-              a.pending_orders?.complete
-                ? "已取得待成交明细"
-                : "待成交明细尚不完整"
-            }}</span>
-          </div>
-          <details v-if="a.pending_orders?.records?.length" class="more" open>
-            <summary>
-              京东条件单明细 · {{ a.pending_orders.records.length }} 笔
-            </summary>
-            <ul class="list">
-              <li v-for="o in a.pending_orders.records" :key="o.order_key">
-                <strong
-                  >{{ actions[o.action] || "方向待核对" }}
-                  {{ quantity(o.grams) }} ·
-                  {{ orderStates[o.status] || "状态待核对" }}</strong
-                >
-                <div class="sub">
+            <div class="live-balances">
+              <div class="live-metric">
+                <div class="live-metric-label">
                   {{
-                    o.price_condition === "at_or_above"
-                      ? "≥"
-                      : o.price_condition === "at_or_below"
-                        ? "≤"
-                        : "参考"
+                    a.cash_source === "user_declared_full_position"
+                      ? "可用现金 · 用户声明"
+                      : "电子户可用现金"
                   }}
-                  {{ num(o.price_cny) }} 元/克<span v-if="o.loss_price_cny">
-                    · 止损 ≤ {{ num(o.loss_price_cny) }}</span
-                  >
                 </div>
-                <div class="sub">
-                  条件单有效至 {{ fmtTs(o.expires_at) }} · 同步
-                  {{ fmtTs(a.component_times?.pending_orders) }}
+                <div class="live-metric-value">
+                  {{ a.cash_cny == null ? "未知" : money(a.cash_cny) }}
                 </div>
-              </li>
-            </ul>
-          </details>
-          <div
-            v-for="r in a.review_status || []"
-            :key="r.analyst"
-            class="live-advice-check"
-          >
-            {{ modelNames[r.analyst] }} ·
-            {{ r.status === "running" ? "正在重新分析" : "待重新评估" }}：{{
-              r.reasons.join("；")
-            }}
-          </div>
-          <section
-            class="live-advice-section"
-            :aria-label="a.name + ' 人工执行建议'"
-          >
-            <div class="live-section-heading">
-              <h4 class="live-section-title">AI 账户建议</h4>
-              <span class="sub">由你确认执行</span>
-            </div>
-            <div v-if="!a.advice?.length" class="live-advice-empty">
-              <strong>尚未生成真实账户建议</strong>
-              <div class="sub">
-                {{
-                  a.connected
-                    ? "等待下一轮已开启模型的分析。未生成建议不代表持有或观望。"
-                    : "先恢复账户数据，再等待已开启模型分析。"
-                }}
+                <div class="live-metric-note">{{ cashSource(a) }}</div>
+              </div>
+              <div class="live-metric">
+                <div class="live-metric-label">浮动盈亏估算</div>
+                <div
+                  class="live-metric-value"
+                  :class="
+                    a.holding_pnl_cny > 0
+                      ? 'live-pnl-positive'
+                      : a.holding_pnl_cny < 0
+                        ? 'live-pnl-negative'
+                        : ''
+                  "
+                >
+                  {{ money(a.holding_pnl_cny, true) }}
+                </div>
+                <div class="live-metric-note">
+                  未扣卖费 ·
+                  {{
+                    quoteCurrent(a) ? "按银行金价" : "按历史金价估算或缺报价"
+                  }}
+                </div>
               </div>
             </div>
-            <BankAdvice
-              v-for="v in a.advice || []"
-              :key="v.id"
-              :account="a"
-              :advice="v"
-              :quote-fresh="!!quoteCurrent(a)"
-            />
-          </section>
-          <div class="live-history">
-            <details v-if="a.advice_history?.length" class="more">
+            <div class="live-quote">
+              <div class="live-section-heading">
+                <span>银行金价 · 元/克</span
+                ><span
+                  class="live-state"
+                  :class="quoteCurrent(a) ? 'fresh' : 'warn'"
+                  >{{
+                    quoteCurrent(a)
+                      ? "3分钟内报价"
+                      : a.quote
+                        ? "历史报价"
+                        : "报价未知"
+                  }}</span
+                >
+              </div>
+              <div class="live-quote-price">
+                <strong>{{
+                  num(a.quote?.sell_price_cny ?? a.quote?.buy_price_cny)
+                }}</strong>
+                <span class="sub">买卖同价</span>
+              </div>
+              <div class="live-quote-time">
+                {{
+                  a.quote
+                    ? "报价时刻 " + fmtTs(a.quote.quoted_at) + " · 北京时间"
+                    : "未取得该银行报价，不使用其他银行价格替代"
+                }}
+              </div>
+            </div> </template
+          ><template v-if="section === 'orders'">
+            <div class="live-orders">
+              <span
+                >待处理条件单
+                {{
+                  a.pending_order_count == null
+                    ? "未知"
+                    : a.pending_order_count + " 笔"
+                }}</span
+              ><span class="sub">{{
+                a.pending_orders?.complete
+                  ? "已取得待成交明细"
+                  : "待成交明细尚不完整"
+              }}</span>
+            </div>
+            <div v-if="!a.pending_orders?.records?.length" class="sub">
+              {{
+                a.pending_orders?.complete
+                  ? "当前没有待成交条件单。"
+                  : "尚未取得完整待成交明细，数量保持未知；请更新账户后核对。"
+              }}
+            </div>
+            <details v-if="a.pending_orders?.records?.length" class="more" open>
+              <summary>
+                京东条件单明细 · {{ a.pending_orders.records.length }} 笔
+              </summary>
+              <ul class="list">
+                <li v-for="o in a.pending_orders.records" :key="o.order_key">
+                  <strong
+                    >{{ actions[o.action] || "方向待核对" }}
+                    {{ quantity(o.grams) }} ·
+                    {{
+                      o.status === "pending" &&
+                      o.expires_at &&
+                      new Date(o.expires_at).getTime() <= clock
+                        ? "有效期已过 · 状态待同步"
+                        : orderStates[o.status] || "状态待核对"
+                    }}</strong
+                  >
+                  <div class="sub">
+                    {{
+                      o.price_condition === "at_or_above"
+                        ? "≥"
+                        : o.price_condition === "at_or_below"
+                          ? "≤"
+                          : "参考"
+                    }}
+                    {{ num(o.price_cny) }} 元/克<span v-if="o.loss_price_cny">
+                      · 止损 ≤ {{ num(o.loss_price_cny) }}</span
+                    >
+                  </div>
+                  <div class="sub">
+                    条件单有效至 {{ fmtTs(o.expires_at) }} · 同步
+                    {{ fmtTs(a.component_times?.pending_orders) }}
+                  </div>
+                </li>
+              </ul>
+            </details> </template
+          ><template v-if="['advice', 'orders'].includes(section)">
+            <div
+              v-for="r in a.review_status || []"
+              :key="r.analyst"
+              class="live-advice-check"
+            >
+              {{ modelNames[r.analyst] }} ·
+              {{ r.status === "running" ? "正在重新分析" : "待重新评估" }}：{{
+                r.reasons.join("；")
+              }}
+            </div>
+            <section
+              class="live-advice-section"
+              :aria-label="a.name + ' 人工执行建议'"
+            >
+              <div class="live-section-heading">
+                <h4 class="live-section-title">
+                  {{
+                    section === "orders" ? "挂单处理与价格复评" : "AI 账户建议"
+                  }}
+                </h4>
+                <span class="sub">由你确认执行</span>
+              </div>
+              <div v-if="!a.advice?.length" class="live-advice-empty">
+                <strong>尚未生成真实账户建议</strong>
+                <div class="sub">
+                  {{
+                    a.connected
+                      ? "等待下一轮已开启模型的分析。未生成建议不代表持有或观望。"
+                      : "先恢复账户数据，再等待已开启模型分析。"
+                  }}
+                </div>
+              </div>
+              <BankAdvice
+                v-for="v in a.advice || []"
+                :key="v.id"
+                :account="a"
+                :advice="v"
+                :quote-fresh="!!quoteCurrent(a)"
+                :section="section"
+              />
+            </section>
+          </template>
+          <div
+            v-if="section === 'records' || section === 'holdings'"
+            class="live-history"
+          >
+            <details
+              v-if="section === 'records' && a.advice_history?.length"
+              class="more"
+            >
               <summary>最近建议与执行进度</summary>
               <ul class="list">
                 <li v-for="v in a.advice_history" :key="v.id">
@@ -361,7 +347,10 @@ const cashSource = (a) =>
               </ul>
             </details>
             <details
-              v-if="a.order_history?.some((o) => o.status !== 'pending')"
+              v-if="
+                section === 'records' &&
+                a.order_history?.some((o) => o.status !== 'pending')
+              "
               class="more"
             >
               <summary>条件单状态记录</summary>
@@ -373,8 +362,14 @@ const cashSource = (a) =>
                   :key="o.order_key"
                 >
                   <strong
-                    >{{ orderStates[o.status] || "状态待核对" }} ·
-                    {{ quantity(o.grams) }}</strong
+                    >{{
+                      o.status === "pending" &&
+                      o.expires_at &&
+                      new Date(o.expires_at).getTime() <= clock
+                        ? "有效期已过 · 状态待同步"
+                        : orderStates[o.status] || "状态待核对"
+                    }}
+                    · {{ quantity(o.grams) }}</strong
                   >
                   <div class="sub">
                     {{ num(o.price_cny) }} 元/克 · 创建
@@ -386,7 +381,9 @@ const cashSource = (a) =>
             <details
               v-for="[kind, title, limit] in [
                 ['holding_details', '持仓批次', 3],
-                ['closed_positions', '已清仓记录', 5],
+                ...(section === 'records'
+                  ? [['closed_positions', '已清仓记录', 5]]
+                  : []),
               ]"
               :key="kind"
               class="more"

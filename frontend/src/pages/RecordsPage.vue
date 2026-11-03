@@ -1,13 +1,16 @@
 <script setup>
-import { computed, ref, watch, onUnmounted } from "vue";
+import { computed, ref, watch, onActivated, nextTick } from "vue";
 import Card from "../components/Card.vue";
 import TradeRecord from "../components/TradeRecord.vue";
 import {
   historyFilters as filter,
   currentPage,
-  requestJSON,
   navigate,
-  accountView,
+  entryFor,
+  selectView,
+  restoreScroll,
+  refreshSignal,
+  dataEpoch,
 } from "../composables/dashboard";
 import {
   modelChoices,
@@ -18,11 +21,22 @@ import {
   bias,
   displayTitle,
 } from "../format";
+import { historyEntry, loadHistory } from "../composables/history";
 const props = defineProps({ data: Object });
-const rows = ref([]),
-  more = ref(false),
-  busy = ref(false),
-  error = ref("");
+const feed = computed(() => historyEntry(filter));
+const rows = computed(() => feed.value.rows),
+  more = computed(() => feed.value.more),
+  busy = computed(() => feed.value.busy),
+  error = computed(() => feed.value.error);
+const moreKinds = ref(!["fills", "plans"].includes(filter.kind)),
+  showFilters = ref(false);
+async function load(append = false, force = false) {
+  await loadHistory(feed.value, { more: append, force });
+}
+onActivated(async () => {
+  await load();
+  nextTick(() => restoreScroll("records"));
+});
 const visibleRows = computed(() => {
   const hidden = (props.data.model_controls || [])
     .filter((c) => !c.enabled)
@@ -52,39 +66,12 @@ const descriptions = {
   alerts:
     "系统事件与内部复评触发记录，不代表 AI 已下单；旧规则提醒仅保留历史记录，不再生成或推送。",
 };
-let generation = 0,
-  controller;
-async function load(reset = true) {
-  if (!reset && busy.value) return;
-  const run = ++generation;
-  controller?.abort();
-  controller = new AbortController();
-  busy.value = true;
-  error.value = "";
-  const timer = setTimeout(() => controller?.abort(), 15000);
-  try {
-    const query = new URLSearchParams({
-      ...filter,
-      compact: "1",
-      limit: "20",
-      offset: String(reset ? 0 : rows.value.length),
-    });
-    const { value } = await requestJSON("/api/history?" + query, {
-      signal: controller.signal,
-    });
-    if (run === generation) {
-      rows.value = reset ? value.items : [...rows.value, ...value.items];
-      more.value = value.has_more;
-    }
-  } catch (e) {
-    if (run === generation)
-      error.value =
-        e.name === "AbortError" ? "历史加载超时，请重试" : e.message;
-  } finally {
-    clearTimeout(timer);
-    if (run === generation) busy.value = false;
-  }
-}
+watch(
+  () => filter.kind,
+  (k) => {
+    if (!["fills", "plans"].includes(k)) moreKinds.value = true;
+  },
+);
 function changeKind(kind) {
   filter.kind = kind;
   filter.account = "all";
@@ -92,8 +79,7 @@ function changeKind(kind) {
 watch(
   () => JSON.stringify(filter),
   () => {
-    rows.value = [];
-    load(true);
+    if (currentPage.value === "records") load();
   },
 );
 watch(
@@ -108,14 +94,24 @@ watch(
       filter.model = "all";
     if (filter.account !== "all" && !props.data.strategy_names[filter.account])
       filter.account = "all";
-    if (currentPage.value === "records") load(true);
+    if (currentPage.value === "records") load();
   },
   { immediate: true },
 );
-onUnmounted(() => controller?.abort());
+watch(
+  () => entryFor("records").at,
+  () => {
+    if (currentPage.value === "records") load();
+  },
+);
+watch(refreshSignal, () => {
+  if (currentPage.value === "records") load(false, true);
+});
+watch(dataEpoch, () => {
+  if (currentPage.value === "records") nextTick(() => load(false, true));
+});
 function live() {
-  accountView.value = "live";
-  navigate("strategies");
+  selectView("strategies", "live");
 }
 </script>
 <template>
@@ -128,7 +124,7 @@ function live() {
       >
       <div class="chips">
         <button
-          v-for="[key, label] in kinds"
+          v-for="[key, label] in moreKinds ? kinds : kinds.slice(0, 2)"
           :key="key"
           class="filter-btn"
           type="button"
@@ -137,8 +133,28 @@ function live() {
         >
           {{ label }}
         </button>
+        <button
+          class="filter-btn"
+          :aria-expanded="moreKinds"
+          @click="moreKinds = !moreKinds"
+        >
+          {{ moreKinds ? "收起类别" : "更多类别" }}
+        </button>
       </div>
-      <div class="filters" style="margin-top: 12px">
+      <button
+        class="link-btn filter-toggle"
+        :aria-expanded="showFilters"
+        @click="showFilters = !showFilters"
+      >
+        筛选模型 / 时间 / 账户{{
+          filter.model !== "all" ||
+          filter.account !== "all" ||
+          filter.days !== "all"
+            ? " · 已筛选"
+            : ""
+        }}
+      </button>
+      <div v-show="showFilters" class="filters" style="margin-top: 12px">
         <label
           >筛选模型<select
             v-model="filter.model"
@@ -259,7 +275,7 @@ function live() {
         v-if="more || error"
         class="link-btn"
         :disabled="busy"
-        @click="load(!more)"
+        @click="load(!error && more, !!error)"
       >
         {{ busy ? "加载中…" : error ? "重试" : "加载更多" }}
       </button></Card

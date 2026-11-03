@@ -6,7 +6,7 @@ const props = defineProps({ data: Object });
 
 import Chart from "../../components/Chart.vue";
 import SourceMeta from "../../components/SourceMeta.vue";
-import { navigate, diagnosticsOpen } from "../../composables/dashboard";
+import { navigate } from "../../composables/dashboard";
 const macro = computed(() => props.data.macro || {});
 const reference = computed(
   () => props.data.wave_evidence?.daily_reference || {},
@@ -22,8 +22,7 @@ const points = computed(() =>
     .map((r) => [r.date, r.close_usd]),
 );
 function diagnostics() {
-  diagnosticsOpen.value = true;
-  navigate("ai");
+  navigate("diagnostics");
 }
 const statusLabels = {
   running: "结果待记录",

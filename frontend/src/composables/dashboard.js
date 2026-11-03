@@ -8,13 +8,18 @@ import {
 } from "vue";
 export const tabs = [
   ["overview", "总览"],
-  ["strategies", "账户"],
-  ["compare", "操盘对比"],
-  ["ai", "AI"],
   ["market", "行情"],
-  ["records", "操盘记录"],
-  ["notifications", "通知"],
+  ["strategies", "账户"],
+  ["ai", "AI"],
+  ["me", "我的"],
 ];
+export const pageNames = Object.fromEntries([
+  ...tabs,
+  ["compare", "成绩对比"],
+  ["records", "操作记录"],
+  ["notifications", "通知"],
+  ["diagnostics", "系统状态"],
+]);
 const preference = {
   get(k) {
     try {
@@ -29,47 +34,145 @@ const preference = {
     } catch {}
   },
 };
-const validPage = (v) => (tabs.some(([k]) => k === v) ? v : "overview");
+const validPage = (v) => (Object.hasOwn(pageNames, v) ? v : "overview");
 export const marketViews = [
   ["prices", "金价走势"],
   ["news", "黄金快讯"],
   ["calendar", "经济日历"],
   ["reference", "市场参考"],
 ];
-const validMarketView = (v) =>
-  marketViews.some(([key]) => key === v) ? v : "prices";
-const route = location.hash.replace(/^#\/?/, "").split("/");
+export const accountViews = [
+  ["live", "真实账户"],
+  ["simulation", "模拟账户"],
+];
+export const aiViews = [
+  ["research", "最新研究"],
+  ["control", "模型控制"],
+  ["evaluation", "评估与运行"],
+];
+export const notificationViews = [
+  ["settings", "订阅设置"],
+  ["history", "发送记录"],
+];
+const pick = (choices, value, fallback) =>
+  choices.some(([key]) => key === value) ? value : fallback;
+const validAccountView = (v) =>
+  ["auto", "live", "simulation"].includes(v) ||
+  /^live\/(zheshang|minsheng)\/(holdings|advice|orders|records)$/.test(
+    v || "",
+  ) ||
+  /^simulation\/(codex|claude):[a-z_]+$/.test(v || "")
+    ? v
+    : "auto";
+const parseHash = () => {
+  try {
+    return location.hash
+      .replace(/^#\/?/, "")
+      .split("/")
+      .map(decodeURIComponent);
+  } catch {
+    return [];
+  }
+};
+const initial = parseHash();
 export const currentPage = ref(
-  validPage(route[0] || preference.get("gold-tab")),
+  validPage(initial[0] || preference.get("gold-tab")),
 );
-export const accountView = ref("auto");
+export const accountView = ref(
+  validAccountView(
+    initial[0] === "strategies" ? initial.slice(1).join("/") || "auto" : "auto",
+  ),
+);
 export const marketView = ref(
-  validMarketView(route[0] === "market" ? route[1] : null),
+  pick(marketViews, initial[0] === "market" ? initial[1] : null, "prices"),
+);
+export const aiView = ref(
+  pick(aiViews, initial[0] === "ai" ? initial[1] : null, "research"),
+);
+export const notificationView = ref(
+  pick(
+    notificationViews,
+    initial[0] === "notifications" ? initial[1] : null,
+    "settings",
+  ),
+);
+export const navPage = computed(() =>
+  ["compare", "records"].includes(currentPage.value)
+    ? "strategies"
+    : ["notifications", "diagnostics"].includes(currentPage.value)
+      ? "me"
+      : currentPage.value,
 );
 export const marketScroll = new Map();
+const scrolls = new Map();
 export const diagnosticsOpen = ref(false);
-const pageView = (page) =>
-  page === "strategies"
-    ? accountView.value
-    : page === "market"
-      ? marketView.value
-      : "auto";
-function saveMarketScroll() {
-  if (currentPage.value === "market")
-    marketScroll.set(marketView.value, window.scrollY || 0);
+export const dataEpoch = ref(0),
+  refreshSignal = ref(0);
+export const pageView = (page) =>
+  page === "overview"
+    ? "summary"
+    : page === "strategies"
+      ? accountView.value
+      : page === "market"
+        ? marketView.value
+        : page === "ai"
+          ? aiView.value
+          : page === "notifications"
+            ? notificationView.value
+            : "auto";
+const apiView = (page, view) =>
+  page === "strategies" && ["auto", "live", "simulation"].includes(view)
+    ? view + "-list"
+    : view;
+export function scrollPosition(page, view = pageView(page)) {
+  return page === "market"
+    ? marketScroll.get(view) || 0
+    : scrolls.get(page + ":" + view) || 0;
+}
+function saveScroll() {
+  const page = currentPage.value,
+    view = pageView(page),
+    top = window.scrollY || 0;
+  if (page === "market") marketScroll.set(view, top);
+  else scrolls.set(page + ":" + view, top);
+}
+export function restoreScroll(page, view = pageView(page)) {
+  if (currentPage.value === page && pageView(page) === view)
+    window.scrollTo({ top: scrollPosition(page, view) });
 }
 function routeHash() {
+  const page = currentPage.value,
+    view = pageView(page);
   return (
     "#" +
-    currentPage.value +
-    (currentPage.value === "market" ? "/" + marketView.value : "")
+    page +
+    (["market", "strategies", "ai", "notifications"].includes(page) &&
+    view !== "auto"
+      ? "/" + view.split("/").map(encodeURIComponent).join("/")
+      : "")
   );
 }
-export function selectMarketView(view) {
-  saveMarketScroll();
-  marketView.value = validMarketView(view);
+function rememberRoute() {
+  preference.set("gold-tab", currentPage.value);
   history.replaceState(null, "", routeHash());
 }
+export function selectView(page, view) {
+  saveScroll();
+  if (page === "market") marketView.value = pick(marketViews, view, "prices");
+  else if (page === "strategies") accountView.value = validAccountView(view);
+  else if (page === "ai") aiView.value = pick(aiViews, view, "research");
+  else if (page === "notifications")
+    notificationView.value = pick(notificationViews, view, "settings");
+  const changed = currentPage.value !== page;
+  currentPage.value = validPage(page);
+  rememberRoute();
+  if (changed) window.scrollTo({ top: 0 });
+}
+export const selectMarketView = (view) => selectView("market", view);
+export const openBank = (bank, section = "holdings") =>
+  selectView("strategies", "live/" + bank + "/" + section);
+export const openPortfolio = (key) =>
+  selectView("strategies", "simulation/" + key);
 export const header = shallowRef(null);
 export const historyFilters = reactive({
   kind: "fills",
@@ -93,6 +196,8 @@ export function entryFor(page = currentPage.value, view = pageView(page)) {
       key,
       shallowReactive({
         key,
+        page,
+        view,
         data: null,
         etag: "",
         at: 0,
@@ -107,20 +212,30 @@ export function entryFor(page = currentPage.value, view = pageView(page)) {
 }
 export const activeEntry = computed(() => entryFor());
 export function navigate(page, filters) {
-  saveMarketScroll();
+  saveScroll();
   if (filters) Object.assign(historyFilters, filters);
   currentPage.value = validPage(page);
-  preference.set("gold-tab", currentPage.value);
-  history.replaceState(null, "", routeHash());
+  rememberRoute();
   window.scrollTo({ top: 0 });
 }
 window.addEventListener("hashchange", () => {
-  saveMarketScroll();
-  const route = location.hash.replace(/^#\/?/, "").split("/");
-  currentPage.value = validPage(route[0]);
-  if (route[0] === "market") marketView.value = validMarketView(route[1]);
+  saveScroll();
+  const route = parseHash(),
+    page = validPage(route[0]);
+  currentPage.value = page;
+  if (page === "market")
+    marketView.value = pick(marketViews, route[1], "prices");
+  if (page === "strategies")
+    accountView.value = validAccountView(route.slice(1).join("/") || "auto");
+  if (page === "ai") aiView.value = pick(aiViews, route[1], "research");
+  if (page === "notifications")
+    notificationView.value = pick(notificationViews, route[1], "settings");
   window.scrollTo({ top: 0 });
 });
+export function refreshCurrent() {
+  refreshSignal.value++;
+  return loadPage(currentPage.value, { force: true });
+}
 export function setTheme(value) {
   theme.value = value;
   preference.set("gold-theme", value);
@@ -165,7 +280,10 @@ export async function loadPage(
     }
     return entry.request;
   }
-  if (!force && entry.data && Date.now() - entry.at < 10000) return entry.data;
+  if (!force && entry.data && Date.now() - entry.at < 10000) {
+    if (entry === entryFor()) header.value = entry.data;
+    return entry.data;
+  }
   const version = entry.version,
     requestEpoch = epoch,
     controller = new AbortController();
@@ -177,8 +295,8 @@ export async function loadPage(
     try {
       const result = await requestJSON(
         `/api/pages/${page}` +
-          (["strategies", "market"].includes(page)
-            ? "?view=" + encodeURIComponent(view)
+          (apiView(page, view) !== "auto"
+            ? "?view=" + encodeURIComponent(apiView(page, view))
             : ""),
         {
           signal: controller.signal,
@@ -224,7 +342,7 @@ export async function runAction(key, action) {
   }
 }
 export async function toggleNotification(topic, enabled) {
-  const entry = entryFor("notifications");
+  const entry = entryFor("notifications", "settings");
   entry.version++;
   return runAction("notify:" + topic, async () => {
     const { value } = await requestJSON("/api/notifications", {
@@ -249,6 +367,7 @@ export async function toggleNotification(topic, enabled) {
 }
 function clearPages() {
   epoch++;
+  dataEpoch.value++;
   for (const entry of entries.values()) {
     entry.version++;
     entry.data = null;
@@ -273,7 +392,12 @@ export async function manualAnalysis(model) {
       method: "POST",
       body: {},
     });
-    entryFor("ai").version++;
+    for (const entry of entries.values())
+      if (entry.page === "ai") {
+        entry.version++;
+        entry.at = 0;
+        entry.etag = "";
+      }
     await loadPage("ai", { force: true });
   });
 }
@@ -283,7 +407,12 @@ export async function refreshLive() {
       method: "POST",
       body: {},
     });
-    entryFor("strategies", accountView.value).version++;
+    for (const entry of entries.values())
+      if (entry.page === "strategies") {
+        entry.version++;
+        entry.at = 0;
+        entry.etag = "";
+      }
     await loadPage("strategies", { force: true });
   });
 }

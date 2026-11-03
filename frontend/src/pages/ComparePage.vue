@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import Card from "../components/Card.vue";
 import Chart from "../components/Chart.vue";
 import {
@@ -11,13 +11,19 @@ import {
   difference,
   riskMode,
 } from "../format";
+import { navigate, selectView } from "../composables/dashboard";
+const risk = ref("all");
 const props = defineProps({ data: Object });
 const models = computed(() => props.data.comparison?.models || []);
 const rows = computed(() =>
   Object.keys(accountLabels).flatMap((key) =>
     models.value.flatMap((m) =>
       m.accounts
-        .filter((a) => a.strategy === key)
+        .filter(
+          (a) =>
+            a.strategy === key &&
+            (risk.value === "all" || key.startsWith(risk.value + "_")),
+        )
         .map((a) => ({ ...a, modelName: m.name })),
     ),
   ),
@@ -38,36 +44,45 @@ const mismatched = computed(
 </script>
 <template>
   <section id="panel-compare" class="page-stack" data-page-ready="true">
-    <Card
-      :title="
-        data.trading_mode === 'four_account'
-          ? '四账户怎样比较'
-          : '六账户怎样比较'
-      "
-      subtitle="按同模型、同风险及相同起点比较"
-      ><div class="grid-2 benchmark-guide">
-        <div class="mini-stat">
-          <strong>初始满仓 → 满仓持有不动</strong>
-          <div class="sub">
-            假设开账时买入后一直不交易，按当前金价扣除卖出费用估值。用来判断 AI
-            买卖是否优于一直持有。
-          </div>
-        </div>
-        <div class="mini-stat">
-          <strong>初始空仓 → 空仓持币不动</strong>
-          <div class="sub">
-            假设一直保留初始本金，基准收益为 0%。用来判断 AI
-            入场交易是否创造收益。
-          </div>
-        </div>
-      </div>
-      <p class="sub">
-        {{
-          riskMode(data) ? "低、标准、高风险各有以上两个账户。" : ""
-        }}基准按每户相同起点计算，不额外开户。AI 增益 = AI 收益率 −
-        基准收益率，例如 AI +3%、基准 +2%，领先 1 个百分点。
-      </p></Card
+    <button
+      class="link-btn back-link"
+      @click="selectView('strategies', 'simulation')"
     >
+      ‹ 返回模拟账户
+    </button>
+    <details class="more card">
+      <summary>六账户怎样比较</summary>
+      <Card
+        :title="
+          data.trading_mode === 'four_account'
+            ? '四账户怎样比较'
+            : '六账户怎样比较'
+        "
+        subtitle="按同模型、同风险及相同起点比较"
+        ><div class="grid-2 benchmark-guide">
+          <div class="mini-stat">
+            <strong>初始满仓 → 满仓持有不动</strong>
+            <div class="sub">
+              假设开账时买入后一直不交易，按当前金价扣除卖出费用估值。用来判断
+              AI 买卖是否优于一直持有。
+            </div>
+          </div>
+          <div class="mini-stat">
+            <strong>初始空仓 → 空仓持币不动</strong>
+            <div class="sub">
+              假设一直保留初始本金，基准收益为 0%。用来判断 AI
+              入场交易是否创造收益。
+            </div>
+          </div>
+        </div>
+        <p class="sub">
+          {{
+            riskMode(data) ? "低、标准、高风险各有以上两个账户。" : ""
+          }}基准按每户相同起点计算，不额外开户。AI 增益 = AI 收益率 −
+          基准收益率，例如 AI +3%、基准 +2%，领先 1 个百分点。
+        </p></Card
+      >
+    </details>
     <div v-if="mismatched" class="notice warn">
       实验起点不同或有模型尚未开始，请结合运行时间、同起点基准与平仓样本比较，不按收益直接排名。
     </div>
@@ -76,7 +91,7 @@ const mismatched = computed(
         v-for="m in models"
         :key="m.key"
         :title="m.name"
-        :subtitle="`起始 ${fmtTs(m.started_at)}`"
+        :subtitle="`六户合计 · 起始 ${fmtTs(m.started_at)}`"
         ><div class="mini-stats">
           <div class="mini-stat">
             <div class="l">总收益率</div>
@@ -106,7 +121,26 @@ const mismatched = computed(
     <Card v-if="!models.length" title="模型成绩"
       ><div class="empty">暂无已开启模型，请在 AI 页开启模型后查看。</div></Card
     ><Card :title="riskMode(data) ? '六账户收益与基准' : '同类策略对比'"
-      ><div class="table-wrap compare-desktop">
+      ><div class="chips">
+        <button
+          v-for="[key, label] in [
+            ['all', '全部风险'],
+            ['low', '低风险'],
+            ['standard', '标准风险'],
+            ['high', '高风险'],
+          ]"
+          :key="key"
+          class="filter-btn"
+          :aria-pressed="risk === key"
+          @click="risk = key"
+        >
+          {{ label }}
+        </button>
+      </div>
+      <p class="sub">
+        风险筛选仅影响下方账户明细；上方模型成绩与组合曲线始终包含六户。
+      </p>
+      <div class="table-wrap compare-desktop">
         <table>
           <thead>
             <tr>

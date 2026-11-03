@@ -35,12 +35,15 @@ def benchmark_in_browser(browser,url,rounds=5,latency_ms=0,kbps=0,switches=False
             sample['visit']='cold' if not i else 'warm'
             samples.append(sample)
         if switches:
-            for label,key in (('账户','strategies'),('操盘对比','compare'),('AI','ai'),('行情','market'),('操盘记录','records'),('通知','notifications'),('总览','overview')):
+            for label,key in (('账户','strategies'),('成绩对比','compare'),('AI','ai'),('行情','market'),('操作记录','records'),('我的','me'),('通知','notifications'),('总览','overview')):
                 before=page.evaluate("performance.getEntriesByType('resource').length")
-                started=time.perf_counter();page.get_by_role('tab',name=label,exact=True).click()
+                started=time.perf_counter()
+                if key in ('compare','records','notifications'):
+                    page.evaluate('(key)=>{location.hash=key}',key)
+                else:page.get_by_role('tab',name=label,exact=True).click()
                 page.locator('#panel-'+key+'[data-page-ready="true"]').wait_for()
-                if key=='strategies':page.locator('#panel-strategies .live-bank,#panel-strategies .asset-account').first.wait_for()
-                if key=='records':page.locator('#panel-records .trade-record').first.wait_for()
+                if key=='strategies':page.locator('#panel-strategies .account-preview,#panel-strategies .live-bank,#panel-strategies .asset-account,#panel-strategies .detail-actions').first.wait_for()
+                if key=='records':page.locator('#panel-records .trade-record,#panel-records .empty').first.wait_for()
                 transitions.append({'page':key,'ready_ms':round((time.perf_counter()-started)*1000),'requests':page.evaluate("performance.getEntriesByType('resource').length")-before})
     finally:context.close()
     return {'latency_ms':latency_ms,'kbps':kbps,'samples':samples,'transitions':transitions}

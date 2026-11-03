@@ -1743,3 +1743,113 @@ button:disabled {
     flex-basis: 100%;
   }
 }
+
+/* Task-based mobile screens share navigation, spacious touch targets and bounded grids. */
+.menu-list {
+  display: grid;
+}
+.menu-list > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.menu-list > button:last-child {
+  border-bottom: 0;
+}
+.menu-list .sub {
+  display: block;
+  margin-top: 4px;
+}
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.back-link {
+  justify-self: start;
+  min-height: 36px;
+}
+.account-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.account-preview {
+  text-align: left;
+  cursor: pointer;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+}
+.account-preview:hover {
+  border-color: var(--brand);
+}
+.account-preview .row {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.account-preview .link-btn {
+  display: block;
+  margin-top: 14px;
+}
+.preview-value {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.bank-detail-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.overview-price {
+  font-size: 36px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0;
+}
+.overview-price > span {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.filter-toggle {
+  margin-top: 14px;
+  min-height: 36px;
+}
+@media (max-width: 480px) {
+  .account-preview {
+    padding: 12px;
+  }
+  .preview-value {
+    font-size: 18px;
+  }
+  .account-pair {
+    gap: 8px;
+  }
+  .account-preview .sub {
+    font-size: 11px;
+  }
+  .account-preview .tag {
+    font-size: 10px;
+  }
+  .market-subnav button {
+    min-height: 42px;
+  }
+}

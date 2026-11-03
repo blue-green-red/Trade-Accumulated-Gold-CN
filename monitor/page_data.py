@@ -14,12 +14,19 @@ from .performance import autonomous_comparison, comparison, pnl_stats
 from .execution import EXECUTION_NAME, execution_quote
 from .web import connect, get_state, table_exists, equity_curves, leaderboard, short_paper, ai_section, jd_reference, price_history, history_page
 
-PAGES = frozenset(('overview','strategies','compare','ai','market','records','notifications','scorecard','diagnostics'))
+PAGES = frozenset(('overview','strategies','compare','ai','market','records','notifications','scorecard','diagnostics','me'))
 MARKET_VIEWS = ('auto','prices','news','calendar','reference')
+AI_VIEWS = ('auto','research','control','evaluation')
+LIVE_VIEWS = frozenset(f'live/{bank}/{section}' for bank in ('zheshang','minsheng') for section in ('holdings','advice','orders','records'))
 
 
-def validate_page(page,view):
-    allowed = MARKET_VIEWS if page == 'market' else ('auto','live','simulation') if page == 'strategies' else ('auto',)
+def validate_page(page,view,settings=None):
+    if page == 'strategies' and settings is not None and view.startswith('simulation/'):
+        if view.removeprefix('simulation/') in portfolio_keys(settings):return
+    allowed = (MARKET_VIEWS if page == 'market' else AI_VIEWS if page == 'ai'
+               else ('auto','settings','history') if page == 'notifications'
+               else ('auto','summary') if page == 'overview'
+               else ('auto','live','simulation','auto-list','live-list','simulation-list',*LIVE_VIEWS) if page == 'strategies' else ('auto',))
     if page not in PAGES or view not in allowed:
         raise ValueError('invalid page or view')
 _cache = {}
@@ -42,7 +49,7 @@ _epochs = {}
 
 
 def cached_page(settings, page, view='auto'):
-    validate_page(page,view)
+    validate_page(page,view,settings)
     prefix = str(settings.db_path.resolve())
     key = (prefix, page, view)
     with _guard:
@@ -63,8 +70,8 @@ def cached_page(settings, page, view='auto'):
         tag = 'W/"'+hashlib.sha256(json.dumps(semantic,ensure_ascii=False,sort_keys=True,default=str).encode()).hexdigest()[:24]+'"'
         with _guard:
             if epoch == _epochs.get(prefix, 0):
-                if len(_cache) >= 32:
-                    _cache.clear()
+                if len(_cache) >= 64:
+                    _cache.pop(min(_cache,key=lambda k:_cache[k][0]))
                 _cache[key] = (time.monotonic(), body, tag)
         return body, tag
 
@@ -171,7 +178,7 @@ def _notifications(conn, settings):
 
 
 def page_data(settings: Settings, page, view='auto'):
-    validate_page(page,view)
+    validate_page(page,view,settings)
     with closing(connect(settings.db_path)) as conn:
         snap = get_state(conn,'web_snapshot') or {}
         quote = execution_quote(snap)
@@ -181,6 +188,9 @@ def page_data(settings: Settings, page, view='auto'):
             'trading_mode':settings.ai_trading_mode,'model_controls':_controls(conn,settings),
             'snapshot':{k:snap.get(k) for k in ('ts','market_open','jd_session')},
             'bank':settings.paper_bank,'bank_name':EXECUTION_NAME,'sell_fee_rate':settings.sell_fee_rate}
+        from .mobile_data import scoped_data
+        if scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
+            return dashboard_visible(conn,result)
         if page == 'overview' or (page == 'market' and view in ('auto','prices')):
             result['snapshot'] = {k:snap.get(k) for k in ('ts','market_open','jd_session','xauusd','change_pct','day_high','day_low','fx')}
             result['execution'] = {'quote':quote,'valuation_quote':valuation,'ready':quote is not None}

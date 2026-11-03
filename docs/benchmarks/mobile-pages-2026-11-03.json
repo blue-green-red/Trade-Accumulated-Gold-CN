@@ -1,0 +1,102 @@
+{
+  "scope": "same ECS, current SQLite read-only queries; no HTTP or browser rendering",
+  "rounds": 3,
+  "cases": [
+    {
+      "name": "overview",
+      "legacy_view": "auto",
+      "scoped_view": "summary",
+      "before": {
+        "query_ms_median": 12.64,
+        "json_bytes": 16620,
+        "gzip_bytes": 4530
+      },
+      "after": {
+        "query_ms_median": 9.31,
+        "json_bytes": 6245,
+        "gzip_bytes": 2069
+      },
+      "json_reduction_pct": 62.4
+    },
+    {
+      "name": "simulation_list",
+      "legacy_view": "simulation",
+      "scoped_view": "simulation-list",
+      "before": {
+        "query_ms_median": 53.06,
+        "json_bytes": 85235,
+        "gzip_bytes": 15614
+      },
+      "after": {
+        "query_ms_median": 4.14,
+        "json_bytes": 3808,
+        "gzip_bytes": 1445
+      },
+      "json_reduction_pct": 95.5
+    },
+    {
+      "name": "real_account_list",
+      "legacy_view": "live",
+      "scoped_view": "live-list",
+      "before": {
+        "query_ms_median": 7.07,
+        "json_bytes": 40522,
+        "gzip_bytes": 8550
+      },
+      "after": {
+        "query_ms_median": 4.46,
+        "json_bytes": 5740,
+        "gzip_bytes": 1885
+      },
+      "json_reduction_pct": 85.8
+    },
+    {
+      "name": "ai_research",
+      "legacy_view": "auto",
+      "scoped_view": "research",
+      "before": {
+        "query_ms_median": 12.23,
+        "json_bytes": 32659,
+        "gzip_bytes": 8102
+      },
+      "after": {
+        "query_ms_median": 4.77,
+        "json_bytes": 4398,
+        "gzip_bytes": 2395
+      },
+      "json_reduction_pct": 86.5
+    },
+    {
+      "name": "ai_controls",
+      "legacy_view": "auto",
+      "scoped_view": "control",
+      "before": {
+        "query_ms_median": 9.49,
+        "json_bytes": 32659,
+        "gzip_bytes": 8102
+      },
+      "after": {
+        "query_ms_median": 1.64,
+        "json_bytes": 1306,
+        "gzip_bytes": 829
+      },
+      "json_reduction_pct": 96.0
+    },
+    {
+      "name": "notification_settings",
+      "legacy_view": "auto",
+      "scoped_view": "settings",
+      "before": {
+        "query_ms_median": 3.41,
+        "json_bytes": 7277,
+        "gzip_bytes": 1900
+      },
+      "after": {
+        "query_ms_median": 2.29,
+        "json_bytes": 1789,
+        "gzip_bytes": 966
+      },
+      "json_reduction_pct": 75.4
+    }
+  ]
+}
