@@ -6,7 +6,7 @@ from .notification_control import selected_events, event_topic, topics_for_mode
 
 
 def visible_tasks(conn, mode, limit=10):
-    allowed = topics_for_mode(mode)
+    allowed = topics_for_mode(mode,conn)
     result = []
     for row in conn.execute("SELECT event_key,event_json,status,attempts,next_attempt_at FROM notification_outbox "
                             "WHERE status!='accepted' ORDER BY updated_at DESC"):

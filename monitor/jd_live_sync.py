@@ -13,7 +13,7 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 import requests
-from .jd_live_readonly import PRODUCTS,ensure_schema,parse_account,record_success,record_failure,number
+from .jd_live_readonly import PRODUCTS,enabled_banks,ensure_schema,parse_account,record_success,record_failure,number
 from .store import Store
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -173,7 +173,8 @@ def parse_cash(payload,bank):
 def refresh(store,client,groups=None,now=None):
     groups=set(groups or ('core','quote','orders','history'))
     observed_now=lambda:now or datetime.now(timezone.utc)
-    for bank,(_,_,endpoint) in PRODUCTS.items():
+    for bank in enabled_banks(store.conn):
+        endpoint=PRODUCTS[bank][2]
         try:
             before=store.conn.execute('SELECT data_json,fetched_at FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()
             previous=json.loads(before[0]) if before else {}
@@ -192,6 +193,7 @@ def refresh(store,client,groups=None,now=None):
             if 'orders' in current:operations.extend(('pending_orders','order_records'))
             if 'history' in current:operations.extend(('holding_details','closed_positions'))
             for operation in operations:
+                if bank not in enabled_banks(store.conn):break
                 try:
                     raw=client.query(operation,bank)
                     at=observed_now().isoformat()
@@ -249,6 +251,7 @@ def refresh(store,client,groups=None,now=None):
                 data['pending_order_count']=data['pending_orders']['total_count']
             data.update(coverage=coverage,component_times=times,component_errors=errors)
             meta=store.conn.execute('SELECT public_status,checked_at FROM jd_live_readonly WHERE bank=?',(bank,)).fetchone()
+            if bank not in enabled_banks(store.conn):continue
             record_success(store.conn,bank,data,times['account'] if 'core' in current else before[1])
             if 'core' not in current and meta and meta[0]!='fresh':record_failure(store.conn,bank,meta[0],meta[1])
         except PermissionError:record_failure(store.conn,bank,'login_required')
@@ -281,6 +284,8 @@ def request_refresh(conn,components=None,source='manual'):
 
 
 def sync_once(store,client,groups=None):
+    banks=enabled_banks(store.conn)
+    if not banks:return 'completed'
     if client.session is None:
         if browser_busy(store.conn):raise BrowserBusy('Model is running')
         from .runtime_resources import slot
@@ -290,9 +295,12 @@ def sync_once(store,client,groups=None):
             client.recover()
     refresh(store,client,groups)
     # An expired session is recovered at the next scheduled/manual refresh, never by sending SMS.
-    if store.conn.execute("SELECT COUNT(*) FROM jd_live_readonly WHERE public_status='login_required'").fetchone()[0]:
+    banks=enabled_banks(store.conn)
+    if not banks:return 'completed'
+    placeholders=','.join('?' for _ in banks)
+    if store.conn.execute(f"SELECT COUNT(*) FROM jd_live_readonly WHERE bank IN ({placeholders}) AND public_status='login_required'",banks).fetchone()[0]:
         client.close();return 'login_required'
-    if store.conn.execute("SELECT COUNT(*) FROM jd_live_readonly WHERE public_status='unavailable'").fetchone()[0]:return 'unavailable'
+    if store.conn.execute(f"SELECT COUNT(*) FROM jd_live_readonly WHERE bank IN ({placeholders}) AND public_status='unavailable'",banks).fetchone()[0]:return 'unavailable'
     return 'completed'
 
 
@@ -326,10 +334,10 @@ def run(once=False):
                 except BrowserBusy:status='waiting_for_resources'
                 except PermissionError:
                     status='login_required'
-                    for bank in PRODUCTS:record_failure(store.conn,bank,'login_required')
+                    for bank in enabled_banks(store.conn):record_failure(store.conn,bank,'login_required')
                 except Exception:
                     status='unavailable'
-                    for bank in PRODUCTS:record_failure(store.conn,bank,'unavailable')
+                    for bank in enabled_banks(store.conn):record_failure(store.conn,bank,'unavailable')
                 last_request=wanted
                 failures=failures+1 if status in ('login_required','unavailable') else 0
                 store.set_state('jd_live_sync_status',{'status':status,'at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval,'intervals':intervals,'components':sorted(groups)})

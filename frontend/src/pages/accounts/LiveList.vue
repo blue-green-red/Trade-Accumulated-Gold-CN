@@ -37,7 +37,9 @@ const adviceStatus = (a, v) =>
 <template>
   <div class="page-stack">
     <LiveSync :data="data" />
-    <div class="grid-2">
+    <div
+      :class="(data.live_readonly || []).length > 1 ? 'grid-2' : 'page-stack'"
+    >
       <Card
         v-for="a in data.live_readonly || []"
         :key="a.bank"

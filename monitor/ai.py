@@ -75,7 +75,7 @@ class UpcomingEvent(BaseModel):
 
 class MarketView(BaseModel):
     public_content: Optional[PublicContent] = Field(default=None, description="同轮公众市场分析及11档仓位建议；必须生成，不含任何私人账户信息")
-    live_account_advice: LiveAdviceSet = Field(default_factory=LiveAdviceSet,description="真实账户的人工执行参考建议，完全独立于模拟账户决策；无输入则两项null")
+    live_account_advice: LiveAdviceSet = Field(default_factory=LiveAdviceSet,description="真实账户的人工执行参考建议，完全独立于模拟账户决策；只分析输入中启用的账户，其余填null")
     bias_short: Literal["bullish", "bearish", "neutral"] = Field(description="未来 1-3 个交易日的消息面方向")
     bias_long: Literal["bullish", "bearish", "neutral"] = Field(description="未来 1-3 个月的宏观方向")
     confidence: Literal["low", "medium", "high"]

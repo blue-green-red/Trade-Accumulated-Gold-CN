@@ -67,7 +67,7 @@ onActivated(() => emit("ready"));
         </div>
       </div>
       <button class="link-btn" style="margin-top: 12px" @click="live">
-        查看浙商、民生真实账户报价 →
+        查看已启用真实账户报价 →
       </button>
     </Card>
     <Card title="价格走势">

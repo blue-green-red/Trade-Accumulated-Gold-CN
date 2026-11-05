@@ -49,7 +49,7 @@ class LiveAdviceSet(BaseModel):
 
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
-- 分别给浙商、民生人工建议，与模拟执行隔离；按risk_profile判断，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
+- 仅给输入中启用的真实账户人工建议，与模拟执行隔离；按risk_profile判断，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
 - reassessment结合previous_advice.strategy_review复核假设和旧价位；假设削弱/失效仍沿用时，price_basis给当前证据与目标可达依据，reason重算等待、现价部分减仓及退出的扣费收益/风险与仓位取舍；旧条件未触不能独立支持持有，情景目标不是涨幅上限。
 - 每轮评估适合无人盯盘时预挂的suggested_orders：限价买≤、限价卖≥或组合止盈止损卖出，不凑单；具体克数、价格、截止时间和依据见schema。与现有挂单及本轮买卖合计占用，不借用待卖出收入或别户资金，不重复推荐已有单；休市不保证触发成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
@@ -65,7 +65,10 @@ def prompt_for(context):
 def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
+    from .jd_live_readonly import enabled_banks
+    enabled=set(enabled_banks(conn))
     for bank,raw in advice.items():
+        if bank not in enabled:continue
         source=(inputs.get('accounts') or {}).get(bank)
         if raw is None or not source or not source.get('revision'):continue
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]

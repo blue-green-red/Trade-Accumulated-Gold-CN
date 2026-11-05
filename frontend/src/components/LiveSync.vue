@@ -25,11 +25,11 @@ const needsLogin = computed(
 );
 </script>
 <template>
-  <Card title="京东真实账户" subtitle="两家资金独立 · 只读查询 · 人工执行"
+  <Card title="京东真实账户" subtitle="账户资金独立 · 只读查询 · 人工执行"
     ><div class="live-toolbar">
       <div>
         <div class="sub">
-          两家资金独立 · 与模拟账户分开 · 建议由你在官方页面确认
+          账户资金独立 · 与模拟账户分开 · 建议由你在官方页面确认
         </div>
         <div class="sub" role="status">
           {{
@@ -71,7 +71,7 @@ const needsLogin = computed(
     >
       <strong>需要重新登录京东</strong>
       <div class="sub">
-        京东会话已失效或尚未建立。需要登录时再开启ECS临时远程浏览器，由你完成登录；两家银行共用会话，登录后自动恢复采集。本看板不接收京东密码或验证码。
+        京东会话已失效或尚未建立。需要登录时再开启ECS临时远程浏览器，由你完成登录；登录后自动恢复已启用账户的采集。本看板不接收京东密码或验证码。
       </div>
     </div></Card
   >

@@ -69,6 +69,9 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
         if view.startswith('live/'):
             _,bank,section=view.split('/')
             rows=live_accounts(conn,include_advice=section!='holdings',selected_bank=bank)
+            if not rows:
+                result.update(account_view='live',bank_view=section,live_account=None)
+                return True
             account=rows[0];value={k:account.get(k) for k in LIVE_FIELDS}
             if section=='holdings':
                 value.update({k:account.get(k) for k in ('cash_balance_cny','cash_scope','holding_details')})

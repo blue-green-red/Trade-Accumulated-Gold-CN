@@ -28,6 +28,7 @@ const views = [
       ‹ 返回真实账户
     </button>
     <nav
+      v-if="data.live_account"
       class="market-subnav"
       role="tablist"
       :aria-label="(data.live_account?.name || '') + '详情'"
@@ -42,12 +43,19 @@ const views = [
         {{ label }}
       </button>
     </nav>
+    <div v-if="!data.live_account" class="empty">
+      此真实账户已停用或暂不可用，请返回真实账户列表。
+    </div>
     <p v-if="data.live_account?.risk_profile" class="sub">
       {{ data.live_account.risk_profile.name || "高风险" }}建议参考 ·
       单次计划风险 {{ data.live_account.risk_profile.trade_risk_pct }}% ·
       回撤参考线 {{ data.live_account.risk_profile.drawdown_limit_pct }}% ·
       需你确认执行
     </p>
-    <LiveAccounts :data="wrapped" :section="data.bank_view" />
+    <LiveAccounts
+      v-if="data.live_account"
+      :data="wrapped"
+      :section="data.bank_view"
+    />
   </div>
 </template>

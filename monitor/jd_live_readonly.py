@@ -8,6 +8,45 @@ from .jd_readonly_probe import BANKS
 
 PRODUCTS={'zheshang':('1961543816','浙商积存金','indexDataStd'),'minsheng':('21001001000001','民生积存金','indexData')}
 STALE_SECONDS=1800
+CONTROL_KEY='jd_live_banks'
+
+
+def enabled_banks(conn):
+    """Only explicitly enabled real accounts enter collection, advice and presentation."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone():return tuple(PRODUCTS)
+    row=conn.execute('SELECT value FROM state WHERE key=?',(CONTROL_KEY,)).fetchone()
+    if not row:return tuple(PRODUCTS)
+    try:
+        banks=json.loads(row[0])['banks']
+        if not isinstance(banks,list) or any(not isinstance(bank,str) or bank not in PRODUCTS for bank in banks):return ()
+        return tuple(bank for bank in PRODUCTS if bank in banks)
+    except (ValueError,TypeError,KeyError):return ()
+
+
+def set_enabled_banks(conn,banks,at=None):
+    """Retire polling and unsent events while keeping financial and delivery history."""
+    if not isinstance(banks,(list,tuple)) or any(not isinstance(bank,str) or bank not in PRODUCTS for bank in banks):raise ValueError('Invalid real banks')
+    selected=[bank for bank in PRODUCTS if bank in banks]
+    at=at or datetime.now(timezone.utc).isoformat()
+    disabled=set(PRODUCTS)-set(selected)
+    tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    with conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('INSERT INTO state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
+                     (CONTROL_KEY,json.dumps({'banks':selected,'changed_at':at}),at))
+        for bank in disabled:
+            for model in ('codex','claude'):
+                conn.execute('DELETE FROM state WHERE key=?',('notify:'+model+':live_'+bank,))
+        for key,raw in conn.execute("SELECT key,value FROM state WHERE key LIKE 'ai_events:%'").fetchall():
+            value=json.loads(raw)
+            value['pending']=[e for e in value.get('pending',[]) if (e.get('data') or {}).get('bank') not in disabled]
+            conn.execute('UPDATE state SET value=?,updated_at=? WHERE key=?',(json.dumps(value,ensure_ascii=False),at,key))
+        if 'notification_outbox' in tables:
+            for key,raw in conn.execute("SELECT event_key,event_json FROM notification_outbox WHERE status IN ('pending','retry')").fetchall():
+                topic=json.loads(raw).get('notification_topic','').partition(':')[2]
+                if topic in {'live_'+bank for bank in disabled}:
+                    conn.execute("UPDATE notification_outbox SET status='cancelled',updated_at=? WHERE event_key=?",(at,key))
+    return selected
 
 def risk_profile():
     from .risk_profiles import PROFILES
@@ -116,13 +155,16 @@ def account_identity(data):
 
 def accounts(conn,now=None,include_advice=True,selected_bank=None):
     now=now or datetime.now(timezone.utc)
+    banks=tuple(bank for bank in enabled_banks(conn) if selected_bank is None or bank==selected_bank)
+    if not banks:return []
+    placeholders=','.join('?' for _ in banks)
     tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    records={r[0]:{'checked_at':r[1],'public_status':r[2]} for r in conn.execute('SELECT bank,checked_at,public_status FROM jd_live_readonly')} if 'jd_live_readonly' in tables else {}
-    snapshots={r[0]:{'fetched_at':r[1],'revision':r[2],**json.loads(r[3])} for r in conn.execute('SELECT * FROM jd_live_snapshots')} if 'jd_live_snapshots' in tables else {}
-    declarations={r[0]:r for r in conn.execute('SELECT bank,cash_cny,declared_at,anchor,invalidated_at FROM jd_live_cash_declarations')} if 'jd_live_cash_declarations' in tables else {}
+    records={r[0]:{'checked_at':r[1],'public_status':r[2]} for r in conn.execute(f'SELECT bank,checked_at,public_status FROM jd_live_readonly WHERE bank IN ({placeholders})',banks)} if 'jd_live_readonly' in tables else {}
+    snapshots={r[0]:{'fetched_at':r[1],'revision':r[2],**json.loads(r[3])} for r in conn.execute(f'SELECT * FROM jd_live_snapshots WHERE bank IN ({placeholders})',banks)} if 'jd_live_snapshots' in tables else {}
+    declarations={r[0]:r for r in conn.execute(f'SELECT bank,cash_cny,declared_at,anchor,invalidated_at FROM jd_live_cash_declarations WHERE bank IN ({placeholders})',banks)} if 'jd_live_cash_declarations' in tables else {}
     out=[]
-    for bank,info in BANKS.items():
-        if selected_bank is not None and bank != selected_bank:continue
+    for bank in banks:
+        info=BANKS[bank]
         meta=records.get(bank,{'checked_at':None,'public_status':'not_checked'});snap=snapshots.get(bank,{})
         fresh=bool(snap) and meta['public_status']=='fresh' and 0<=age(snap.get('fetched_at'),now)<=STALE_SECONDS
         status='fresh' if fresh else 'stale' if meta['public_status']=='fresh' and snap else meta['public_status']
@@ -232,7 +274,7 @@ def model_input(conn,now=None):
             if part:values[row['bank']][kind]={**part,'records':part['records'][:limit],'limit':limit}
     return {'execution':'advice_only_user_submits','risk_profile':risk_profile(),'accounts':values,
             'unknown':(['可用资金'] if any(r['cash_cny'] is None for r in rows) else [])+(['完整待成交委托列表'] if any(not (r.get('pending_orders') or {}).get('complete') for r in rows) else [])+['完整成交历史'],
-            'note':'两家为同一用户的真实资产；现金来源为用户声明时不可冒充接口返回；不可借用模拟盘现金或执行任何真实交易。'}
+            'note':'仅包含启用的真实账户；现金来源为用户声明时不可冒充接口返回；不可借用模拟盘现金或执行任何真实交易。'}
 
 
 def _review_status(conn,bank):

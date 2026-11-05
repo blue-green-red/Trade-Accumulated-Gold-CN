@@ -273,7 +273,11 @@ def ai_section(conn: sqlite3.Connection, settings: Settings) -> Dict[str, Any]:
             run_id=row["run_id"] if "run_id" in row.keys() else None
             model_input=get_state(conn,f"ai_model_input:{run_id}:{name}") if run_id else None
             wave_input=input_summary(model_input or {})
-            analysts.append({**json.loads(row["view_json"]), "analyst": name, "name": ANALYST_NAMES.get(name, name),
+            value=json.loads(row["view_json"])
+            from .jd_live_readonly import enabled_banks
+            if isinstance(value.get('live_account_advice'),dict):
+                value['live_account_advice']={bank:advice for bank,advice in value['live_account_advice'].items() if bank in enabled_banks(conn)}
+            analysts.append({**value, "analyst": name, "name": ANALYST_NAMES.get(name, name),
                              "wave_input":wave_input,"ts": row["ts"], "model": row["model"], "sources": json.loads(row["sources_json"] or "[]")[:12]})
     history = conn.execute(f"SELECT ts, trigger, view_json, error{', analyst' if has_analyst else ''} FROM ai_views "
                            + ("WHERE analyst IN ("+','.join('?' for _ in names)+") " if has_analyst and names else "WHERE 0 " if not names else "") +

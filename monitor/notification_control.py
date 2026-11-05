@@ -11,16 +11,19 @@ TOPICS.update({f'{model}:live_{bank}':f'{model.title()} · {label}真实账户�
 DEFAULT_MODE = 'risk_six_account'
 
 
-def topics_for_mode(mode):
+def topics_for_mode(mode,conn=None):
     allowed = ('low','standard','high','analysis','live_zheshang','live_minsheng') if mode == DEFAULT_MODE else (
         'short','medium','analysis','live_zheshang','live_minsheng') if mode == 'four_account' else (
         'short','medium','long','analysis','live_zheshang','live_minsheng')
-    return {key: label for key, label in TOPICS.items() if key.split(':')[1] in allowed}
+    from .jd_live_readonly import enabled_banks
+    banks=enabled_banks(conn) if conn is not None else ('zheshang','minsheng')
+    return {key: label for key, label in TOPICS.items() if key.split(':')[1] in allowed
+            and (not key.split(':')[1].startswith('live_') or key.split(':')[1][5:] in banks)}
 
 
 def subscriptions(conn, mode=DEFAULT_MODE):
     result = []
-    for key, label in topics_for_mode(mode).items():
+    for key, label in topics_for_mode(mode,conn).items():
         row = conn.execute('SELECT value FROM state WHERE key=?', ('notify:'+key,)).fetchone()
         value = json.loads(row[0]) if row else {}
         result.append({'key': key, 'name': label, 'enabled': value.get('enabled') is True})
@@ -32,7 +35,7 @@ def visible_subscriptions(conn,mode):
 
 
 def set_subscription(conn, topic, enabled, mode=DEFAULT_MODE):
-    if topic not in topics_for_mode(mode) or type(enabled) is not bool:
+    if topic not in topics_for_mode(mode,conn) or type(enabled) is not bool:
         raise ValueError('通知类型或开关值无效')
     now = datetime.now(timezone.utc).isoformat()
     with conn:
@@ -67,7 +70,7 @@ def selected_events(conn, events, mode=DEFAULT_MODE):
 
 def retire_subscriptions(conn, mode):
     """Delete obsolete switches and cancel unsent tasks; keep delivery history as audit."""
-    allowed = topics_for_mode(mode)
+    allowed = topics_for_mode(mode,conn)
     stamp = datetime.now(timezone.utc).isoformat()
     with conn:
         conn.execute('BEGIN IMMEDIATE')
