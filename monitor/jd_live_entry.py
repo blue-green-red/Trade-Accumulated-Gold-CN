@@ -14,7 +14,7 @@ class LimitBuyReview(BaseModel):
     risk_exit_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False,description='新增买入的风险退出参考，不自动设置任何持仓止损')
     grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
     expires_at:Optional[str]=Field(default=None,max_length=40,description='候选方案带时区截止时间；未知null')
-    basis:str=Field(min_length=1,max_length=180,description='候选E/T/R的来源及新增退出依据；不把原仓保护或压力价默认当新入场/退出')
+    basis:str=Field(min_length=1,max_length=180,description='E/T来源及R的假设失效或自选损失限制依据，无需独立技术位确认；不默认沿用旧保护或压力价')
     reason:str=Field(min_length=1,max_length=180,description='为何适合提前挂出或不推荐：具体机会劣势、缺口或价格单无法表达的前提，不仅写有事件或等待确认')
 
 
