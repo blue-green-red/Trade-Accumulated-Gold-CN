@@ -25,8 +25,8 @@ def live_summary(account):
         pending=sum(1 for p in advice.get('suggested_orders',[]) if not p.get('checks')
                     and stamp(p.get('expires_at')) and stamp(p['expires_at'])>now
                     and (p.get('execution_progress') or {}).get('status','not_observed')=='not_observed')
-        result['advice_summary'].append({**{k:advice.get(k) for k in ('id','analyst','created_at','expires_at','status','action')},
-                                        'suggested_order_count':pending if advice.get('status')=='current' else 0})
+        result['advice_summary'].append({**{k:advice.get(k) for k in ('id','analyst','created_at','expires_at','status','action_status','action')},
+                                        'suggested_order_count':pending if advice.get('action_status',advice.get('status'))=='current' else 0})
     return result
 
 
@@ -79,7 +79,7 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
                 value.update({k:account.get(k) for k in ('advice','pending_orders','review_status')})
             elif section=='orders':
                 value.update(pending_orders=account.get('pending_orders'),order_history=account.get('order_history'),
-                             advice=[{k:a.get(k) for k in ('id','analyst','created_at','expires_at','status','schema_version','action','order_management','review_conditions','execution_progress')} for a in account.get('advice',[])])
+                             advice=[{k:a.get(k) for k in ('id','analyst','created_at','expires_at','status','action_status','schema_version','action','order_management','review_conditions','execution_progress')} for a in account.get('advice',[])])
             else:
                 value.update({k:account.get(k) for k in ('order_history','holding_details','closed_positions','recent_trade')})
                 value['advice_history']=sorted(account.get('advice',[])+account.get('advice_history',[]),key=lambda a:a['id'],reverse=True)

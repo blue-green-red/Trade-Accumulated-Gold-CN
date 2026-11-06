@@ -34,11 +34,11 @@ def validate_proposals(value,source,now):
     for order in part.get('records',[]):
         if order.get('status') not in ('pending','partially_filled'):continue
         item=management.get(order['order_key'],{})
-        if item.get('action')=='cancel':continue
-        effective=item.get('effective_replacement') if item.get('action')=='replace' else None
-        grams=effective.get('grams') if effective else max(0,(order.get('grams') or 0)-(order.get('filled_grams') or 0))
+        effective=item.get('effective_replacement') if item.get('action')=='replace' and not item.get('checks') else None
+        grams=max(0,(order.get('grams') or 0)-(order.get('filled_grams') or 0))
+        if effective and (item.get('replacement') or {}).get('grams') is not None:grams=max(grams,effective.get('grams') or 0)
         if order.get('action')=='sell':reserved_sell+=grams or 0
-        elif order.get('action')=='buy':reserved_buy+=(grams or 0)*((effective or order).get('price_cny') or 0)
+        elif order.get('action')=='buy':reserved_buy+=max((grams or 0)*(order.get('price_cny') or 0),(grams or 0)*((effective or order).get('price_cny') or 0))
     quote=source.get('quote') or {};price=quote.get('sell_price_cny')
     for order in proposals:
         checks=[];expiry=stamp(order['expires_at'])

@@ -4,6 +4,7 @@ from datetime import datetime,timedelta,timezone
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature,format_proposals
+from .jd_live_semantics import immediate_signature,management_signature,notification_parts
 
 class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
@@ -97,6 +98,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         warnings.extend(validate_structure(value,source,now))
         warnings.extend(validate_proposals(value,source,now))
         value['checks']=warnings
+        value['validation_version']=1
         conn.execute('INSERT OR IGNORE INTO jd_live_advice(bank,analyst,view_id,created_at,expires_at,snapshot_revision,advice_json) VALUES(?,?,?,?,?,?,?)',
             (bank,analyst,view_id,now.isoformat(),(now+timedelta(minutes=value['valid_for_minutes'])).isoformat(),source['revision'],json.dumps(value,ensure_ascii=False)))
 
@@ -112,25 +114,25 @@ def notification_events(conn,analyst,view_id):
                          (account['bank'],analyst,view_id)).fetchone()
         if not row:continue
         current=next((a for a in account['advice'] if a['id']==row[0]),None)
-        if not current or current['status']!='current':continue
-        value=json.loads(row[1])
+        if not current or current.get('action_status',current['status'])!='current':continue
+        raw_value=json.loads(row[1]);value=notification_parts(raw_value)
+        if value is None:continue
+        if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
         previous=conn.execute('SELECT advice_json,snapshot_revision,created_at FROM jd_live_advice WHERE bank=? AND analyst=? AND id<? ORDER BY id DESC LIMIT 1',
                               (account['bank'],analyst,row[0])).fetchone()
-        old=json.loads(previous[0]) if previous else None
-        fields=('action','grams','price_condition','price_cny')
-        def management_signature(v):
-            return sorted((o['order_key'],o['action'],json.dumps(o.get('replacement'),sort_keys=True)) for o in (v or {}).get('order_management',[]))
+        raw_old=json.loads(previous[0]) if previous else None
+        old=notification_parts(raw_old) if raw_old else None
+        validation_recovered=bool(raw_old and raw_old.get('checks') and not raw_old.get('validation_version') and raw_value.get('validation_version'))
         orders_changed=management_signature(old)!=management_signature(value)
         proposed_changed=proposal_signature(old)!=proposal_signature(value)
         from .jd_live_conditions import stamp
         from .jd_live_orders import proposal_progress
         old_drafts=[p for p in (old or {}).get('suggested_orders',[]) if proposal_progress(p,previous[2],account['order_history'],old.get('valid_for_minutes',240))['status']=='not_observed']
         renewed=bool(value.get('suggested_orders')) and any(stamp(p.get('expires_at')) and stamp(p['expires_at'])<=datetime.now(timezone.utc) for p in old_drafts)
-        recovered=bool(value.get('suggested_orders')) and bool((old or {}).get('checks'))
-        proposal_notice=(proposed_changed or renewed or recovered) and bool(old_drafts or value.get('suggested_orders'))
+        proposal_notice=(proposed_changed or renewed) and bool(old_drafts or value.get('suggested_orders'))
         manual_order_action=any(o['action'] in ('cancel','replace') for v in (old,value) if v for o in v.get('order_management',[]))
         order_notice=manual_order_action and (orders_changed or (previous and previous[1]!=row[2]))
-        if old and all(old.get(k)==value.get(k) for k in fields) and not orders_changed and not proposal_notice and previous[1]==row[2]:continue
+        if old and immediate_signature(old)==immediate_signature(value) and not orders_changed and not proposal_notice and not validation_recovered and previous[1]==row[2]:continue
         if not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
         key=f'live-advice:{row[0]}'
         if conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue
@@ -140,8 +142,11 @@ def notification_events(conn,analyst,view_id):
             action=({'cancel':'撤单建议','replace':'改单建议'}[actionable[0]['action']] if len(actionable)==1 else '挂单处理建议' if actionable else '挂单处理建议更新')
         elif proposal_notice:
             action='条件单建议' if value.get('suggested_orders') else '条件单方案更新'
+        if value['action'] in ('buy','sell') and (order_notice or proposal_notice):
+            action={'buy':'买入建议','sell':'卖出建议'}[value['action']]+'＋'+action
         condition={'at_or_above':'价格≥','at_or_below':'价格≤','reference':'参考价','none':'未设价格条件'}[value['price_condition']]
         quantity=('本轮不立即买卖' if value['action'] in ('hold','wait') else '数量待确认') if value['grams'] is None else f"{value['grams']:g}克"
+        if value['action'] in ('buy','sell'):quantity='新增买卖建议：'+{'buy':'买入','sell':'卖出'}[value['action']]+' '+quantity
         price='' if value['price_cny'] is None else f"{value['price_cny']:g}元/克"
         expiry=datetime.fromisoformat(row[3]).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')
         orders=account.get('pending_orders') or {}
@@ -151,9 +156,11 @@ def notification_events(conn,analyst,view_id):
         structure=format_proposals(value)+format_structure(value)
         if proposal_notice and not value.get('suggested_orders'):
             structure='本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。\n\n'+structure
+        reason='仅推送已通过独立校验的部分；其余挂单或复评建议需核对，请查看前端明细。' if value.get('notification_partial') else value['reason']
+        risk='局部参数尚未通过校验，未包含在本次提醒；交易前请核对。' if value.get('notification_partial') else value['risk_note']
         body=(f"**真实账户建议，需本人手动确认；程序未自动下单。**\n\n{account['name']} · {action}\n\n"
               f"{quantity} · {condition}{price}\n\n有效至北京时间{expiry} · 建议 #{row[0]}\n\n"
-              f"{value['reason']}\n\n{structure}风险：{value['risk_note']}\n\n委托查询：{order_note}{'；'+progress_note if progress_note else ''}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
+              f"{reason}\n\n{structure}风险：{risk}\n\n委托查询：{order_note}{'；'+progress_note if progress_note else ''}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
         events.append({'key':key,'live_advice_id':row[0],'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
     return events
@@ -167,7 +174,11 @@ def format_structure(value):
         if grams is None or price is None:return '参数待核对'
         side={'sell':'卖出','buy':'买入'}.get(order.get('action'),'')
         filled=order.get('filled_grams')
-        return f"{side}{grams:g}克"+(f"（已成交{filled:g}克）" if filled else '')+f" · {symbol.get(order.get('price_condition'),'参考')} {price:g}元/克"
+        prices=f" · {symbol.get(order.get('price_condition'),'参考')} {price:g}元/克"
+        if order.get('kind')=='take_profit_stop_loss':
+            loss=order.get('loss_price_cny')
+            prices=f" · 止盈 ≥ {price:g}元/克 / 止损 ≤ "+(f'{loss:g}元/克' if loss is not None else '待核对')
+        return f"{side}{grams:g}克"+(f"（已成交{filled:g}克）" if filled else '')+prices
     for item in value.get('order_management',[]):
         original=item.get('input_order') or {}
         action={'keep':'保留原单','cancel':'建议撤单（需本人操作）','replace':'建议改单（需本人操作）'}[item['action']]

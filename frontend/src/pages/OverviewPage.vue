@@ -20,7 +20,10 @@ const quote = computed(
 const quoteState = computed(() => executionStatus(props.data));
 const current = (a) =>
   (a.advice_summary || []).filter(
-    (v) => v.status === "current" && !pastDeadline(v) && a.connected,
+    (v) =>
+      (v.action_status || v.status) === "current" &&
+      !pastDeadline(v) &&
+      a.connected,
   );
 </script>
 <template>
@@ -74,6 +77,9 @@ const current = (a) =>
           <div v-for="v in current(a)" :key="v.id" class="sub">
             {{ modelNames[v.analyst] }} · {{ actions[v.action] }}建议 ·
             待确认条件单方案 {{ v.suggested_order_count }} 笔
+            <div v-if="v.status === 'review_required'">
+              部分建议需核对，详见账户建议。
+            </div>
             <div>建议截止 {{ fmtTs(v.expires_at) }}</div>
           </div>
           <div v-if="!current(a).length" class="sub">

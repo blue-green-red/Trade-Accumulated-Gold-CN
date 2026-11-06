@@ -159,6 +159,36 @@ class BankMoveReviewTests(unittest.TestCase):
         feedback=model_input(self.s.conn,NOW+timedelta(seconds=1))['accounts']['zheshang']['previous_advice'][0]['strategy_review']
         self.assertEqual(feedback['same_plan_rounds'],2);self.assertTrue(feedback['revalidate_unchanged_plan'])
 
+    def test_reference_prices_do_not_reset_same_plan_but_hard_thresholds_and_size_do(self):
+        from monitor.jd_live_feedback import plan_signature
+        value=self.advice(action='sell',grams=2.,price_cny=850.,suggested_orders=[])
+        quote_update={**value,'price_cny':849.,'reason':'参考报价变化'}
+        self.assertEqual(plan_signature(value),plan_signature(quote_update))
+        self.assertNotEqual(plan_signature(value),plan_signature({**value,'grams':3.}))
+        limit={**value,'price_condition':'at_or_above'}
+        self.assertNotEqual(plan_signature(limit),plan_signature({**limit,'price_cny':849.}))
+        for i,price in enumerate((850.,849.5,849.),1):
+            self.saved(view=i,now=NOW+timedelta(seconds=i),action='sell',grams=2.,price_cny=price,suggested_orders=[])
+        account=accounts(self.s.conn,NOW+timedelta(seconds=3))[0]
+        feedback=strategy_review(self.s.conn,account,'codex',NOW+timedelta(seconds=3))
+        self.assertEqual(feedback['same_plan_rounds'],3);self.assertEqual(feedback['weakened_rounds'],3)
+
+    def test_requested_real_deadline_is_meaningful_unlike_advisory_expiry(self):
+        from monitor.jd_live_feedback import plan_signature
+        value=self.advice(order_management=[{'order_key':'a'*24,'action':'replace',
+            'replacement':{'expires_at':(NOW+timedelta(hours=8)).isoformat(),'grams':None},'reason':'缩短原单时间'}])
+        advisory={**value,'valid_for_minutes':15}
+        self.assertEqual(plan_signature(value),plan_signature(advisory))
+        changed=copy.deepcopy(value);changed['order_management'][0]['replacement']['expires_at']=(NOW+timedelta(hours=9)).isoformat()
+        self.assertNotEqual(plan_signature(value),plan_signature(changed))
+
+    def test_account_revision_change_breaks_consecutive_plan_feedback(self):
+        self.saved(view=1)
+        self.price(seconds=1,value=850.,cash_cny=101.)
+        self.saved(view=2,now=NOW+timedelta(seconds=1))
+        account=accounts(self.s.conn,NOW+timedelta(seconds=1))[0]
+        self.assertEqual(strategy_review(self.s.conn,account,'codex',NOW+timedelta(seconds=1))['same_plan_rounds'],1)
+
     def test_feedback_has_no_future_advice_or_other_models_and_retains_input_provenance(self):
         self.saved(view=1)
         self.s.set_state('model_control:claude',{'enabled':True,'generation':0,'changed_at':None})

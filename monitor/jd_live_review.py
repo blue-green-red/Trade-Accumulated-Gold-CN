@@ -1,5 +1,4 @@
-"""Coalesced account/order changes, data recovery and one expiry review per actionable advice."""
-import json
+"""Coalesced account/order changes, data recovery and expiry review per consecutive plan."""
 import math
 from datetime import datetime,timezone
 from .jd_live_readonly import accounts,PRODUCTS,age
@@ -52,12 +51,10 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
             elif ready and not old_ready and (advice['action']=='wait' or advice.get('input_quote_status') not in (None,'fresh')):
                 enqueue(store.conn,model,f'真实账户报价恢复：{PRODUCTS[bank][1]}',0,
                         event_id=f'live-recovered:{model}:{bank}:{advice["id"]}',payload=data)
-            elif ready and advice['status']=='expired' and (advice['action'] in ('buy','sell') or advice.get('review_conditions') or any(o['action'] in ('cancel','replace') for o in advice.get('order_management',[]))):
-                progress=advice.get('execution_progress') or {}
-                if advice.get('review_conditions') or advice.get('order_management') or progress.get('status') not in ('pending','partially_filled','filled','cancelled','expired'):
-                    enqueue(store.conn,model,f'真实建议到期复评：{PRODUCTS[bank][1]}',0,
-                            event_id=f'live-expired:{model}:{bank}:{advice["id"]}',payload={**data,'advice_id':advice['id']})
             if advice:
+                if ready:
+                    from .jd_live_expiry import request_expiry_review
+                    request_expiry_review(store,account,advice,now)
                 if ready and not (advice.get('input_strategy_review') or {}).get('revalidate_unchanged_plan'):
                     from .jd_live_feedback import strategy_review
                     feedback=strategy_review(store.conn,account,model,now)

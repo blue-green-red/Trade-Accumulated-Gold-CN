@@ -160,6 +160,142 @@ class StructuredAdviceTests(unittest.TestCase):
         value=self.value('cancel');value['order_management'][0]['order_key']='b'*24
         view=self.saved(value);self.assertEqual(notification_events(self.s.conn,'codex',view),[])
 
+    def test_combo_expiry_only_preserves_all_terms_without_reusing_frozen_quantity(self):
+        self.order.update(kind='take_profit_stop_loss',price_cny=880.,loss_price_cny=830.,
+                          status='partially_filled',filled_grams=None)
+        self.data['sellable_grams']=0.
+        record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        value=self.value('replace');value['order_management'][0]['replacement']={'expires_at':(NOW+timedelta(hours=8)).isoformat()}
+        view=self.saved(value);entry=self.latest();item=entry['order_management'][0]
+        self.assertEqual(entry['checks'],[])
+        for field in ('kind','action','grams','price_cny','loss_price_cny'):
+            self.assertEqual(item['effective_replacement'][field],self.order[field])
+        events=notification_events(self.s.conn,'codex',view)
+        self.assertEqual(len(events),1);self.assertIn('止盈 ≥ 880',events[0]['body']);self.assertIn('止损 ≤ 830',events[0]['body'])
+        value['order_management'][0]['replacement']['price_cny']=879.
+        self.saved(value);self.assertEqual(self.latest()['order_management'][0]['state'],'review_required')
+
+    def test_partial_validation_notifies_only_safe_parts_and_dispatches_once(self):
+        from monitor.notification_control import selected_events
+        set_subscription(self.s.conn,'codex:live_zheshang',True)
+        value=self.value('replace',grams=2.,price_condition='reference',price_cny=855.,
+                         reason='UNSAFE_MIXED_REASON',risk_note='UNSAFE_MIXED_RISK',review_conditions=[self.condition()])
+        value['action']='sell'
+        value['order_management'][0]['replacement']={'grams':100.,'price_cny':848.}
+        view=self.saved(value);entry=self.latest()
+        self.assertEqual(entry['status'],'review_required');self.assertEqual(entry['action_status'],'current')
+        self.assertEqual(entry['order_management'][0]['state'],'review_required')
+        self.assertEqual(entry['review_conditions'][0]['monitoring']['status'],'monitoring')
+        events=notification_events(self.s.conn,'codex',view);self.assertEqual(len(events),1)
+        body=events[0]['body'];self.assertIn('2克',body);self.assertIn('已通过独立校验',body)
+        for unsafe in ('100克','UNSAFE_MIXED_REASON','UNSAFE_MIXED_RISK','建议改单'):self.assertNotIn(unsafe,body)
+        self.assertEqual(selected_events(self.s.conn,events),events)
+        m=object.__new__(Monitor);m.settings=Settings();m.store=self.s;m.notifier=Mock();m.notifier.send.return_value=True
+        m.dispatch(events);m.dispatch(notification_events(self.s.conn,'codex',view));self.assertEqual(m.notifier.send.call_count,1)
+        value['price_cny']=854.5
+        view=self.saved(value);self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+        # Account-level overcommit cannot be bypassed by removing a bad local item.
+        value['grams']=10.
+        view=self.saved(value);self.assertEqual(self.latest()['action_status'],'review_required')
+        self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+        value['grams']=2.;value['order_management'][0]['replacement']={'grams':3.,'price_cny':848.}
+        view=self.saved(value);events=notification_events(self.s.conn,'codex',view)
+        self.assertEqual(len(events),1);self.assertIn('卖出建议＋改单建议',events[0]['title'])
+        self.assertIn('新增买卖建议：卖出 2克',events[0]['body'])
+
+    def test_unrecognized_global_checks_keep_notifications_blocked_and_history_intact(self):
+        value=self.value(grams=2.,price_condition='reference',price_cny=855.);value['action']='sell'
+        view=self.saved(value);row=self.s.conn.execute('SELECT id,advice_json FROM jd_live_advice WHERE view_id=?',(view,)).fetchone()
+        raw=json.loads(row[1]);raw['checks']=['未知校验失败'];raw['order_management'][0]['checks']=[]
+        with self.s.conn:self.s.conn.execute('UPDATE jd_live_advice SET advice_json=? WHERE id=?',(json.dumps(raw),row[0]))
+        self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+        self.assertEqual(self.latest()['checks'],['未知校验失败'])
+
+    def test_cancel_recommendation_does_not_release_actual_reserved_holdings(self):
+        value=self.value('cancel',grams=10.,price_condition='reference',price_cny=855.);value['action']='sell'
+        view=self.saved(value);self.assertEqual(self.latest()['action_status'],'review_required')
+        self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+
+    def test_partial_valid_proposal_survives_mobile_summary_and_invalid_management(self):
+        from monitor.mobile_data import live_summary,scoped_data
+        from monitor.notification_control import selected_events
+        set_subscription(self.s.conn,'codex:live_zheshang',True)
+        draft={'kind':'limit_sell','grams':2.,'price_cny':880.,'expires_at':(NOW+timedelta(hours=8)).isoformat(),'reason':'分批减仓'}
+        value=self.value('replace',suggested_orders=[draft]);value['order_management'][0]['replacement']={'grams':100.}
+        view=self.saved(value);entry=self.latest()
+        summary=live_summary(accounts(self.s.conn,NOW)[0])['advice_summary'][0]
+        self.assertEqual(summary['action_status'],'current');self.assertEqual(summary['suggested_order_count'],1)
+        scoped={};scoped_data(self.s.conn,Settings(),scoped,'strategies','live/zheshang/orders',{},None,None,None)
+        self.assertEqual(scoped['live_account']['advice'][0]['action_status'],'current')
+        events=notification_events(self.s.conn,'codex',view);self.assertEqual(len(events),1)
+        self.assertIn('条件单建议',events[0]['title'])
+        # A retry must still stop when the source account changes.
+        self.data['cash_cny']=102.;record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        self.assertEqual(selected_events(self.s.conn,events),[])
+
+    def test_all_conflicting_management_items_are_excluded(self):
+        value=self.value('cancel');value['order_management'].append({**value['order_management'][0],'action':'keep'})
+        self.saved(value);self.assertTrue(all(i['checks'] for i in self.latest()['order_management']))
+
+    def fresh_at(self,now):
+        self.price(855,(now-NOW).total_seconds())
+        self.data['component_times']['pending_orders']=now.isoformat()
+        record_success(self.s.conn,'zheshang',self.data,now.isoformat())
+
+    def expiry_events(self):return [e for e in read(self.s.conn,'codex')['pending'] if e['id'].startswith('live-expired:')]
+
+    def test_expiry_review_persists_across_rounds_restart_and_does_not_extend_validity(self):
+        value=self.value(review_conditions=[self.condition()],valid_for_minutes=15)
+        self.saved(value)
+        for minutes in (16,32,48):
+            now=NOW+timedelta(minutes=minutes);self.fresh_at(now);request_reviews(self.s,now)
+            if minutes==16:self.assertEqual(len(self.expiry_events()),1)
+            else:self.assertEqual(self.expiry_events(),[])
+            self.assertEqual(self.latest(now)['status'],'expired')
+            self.assertEqual(self.latest(now)['review_conditions'][0]['monitoring']['status'],'expired')
+            self.cover();value['price_cny']=855+minutes/100;value['reason']='解释更新'
+            self.saved(value,now)
+            self.s.conn.close();self.s=Store(self.path)
+        # A different review threshold is a real plan transition and gets its own expiry.
+        now=NOW+timedelta(minutes=49);self.fresh_at(now)
+        changed=self.value(review_conditions=[self.condition(price_cny=840.)],valid_for_minutes=15)
+        self.saved(changed,now);request_reviews(self.s,now)
+        now+=timedelta(minutes=16);self.fresh_at(now);request_reviews(self.s,now)
+        self.assertEqual(len(self.expiry_events()),1);self.cover()
+        # Returning to a previous plan is a new consecutive phase, not suppressed forever.
+        self.saved(value,now);request_reviews(self.s,now)
+        now+=timedelta(minutes=16);self.fresh_at(now);request_reviews(self.s,now)
+        self.assertEqual(len(self.expiry_events()),1)
+
+    def test_expiry_review_account_and_generation_changes_start_new_phase(self):
+        value=self.value(review_conditions=[self.condition()],valid_for_minutes=15);self.saved(value)
+        now=NOW+timedelta(minutes=16);self.fresh_at(now);request_reviews(self.s,now);self.cover()
+        self.data['cash_cny']=101.;record_success(self.s.conn,'zheshang',self.data,now.isoformat())
+        request_reviews(self.s,now);self.assertEqual(self.expiry_events(),[]);self.cover()
+        self.saved(value,now)
+        now+=timedelta(minutes=16);self.fresh_at(now);request_reviews(self.s,now)
+        self.assertEqual(len(self.expiry_events()),1);self.cover()
+        self.s.set_state('model_control:codex',{'enabled':True,'generation':2,'changed_at':None})
+        request_reviews(self.s,now);self.assertEqual(len(self.expiry_events()),1)
+
+    def test_expiry_collector_monitor_race_keeps_one_event_and_persistent_marker(self):
+        import threading
+        from monitor.jd_live_expiry import request_expiry_review
+        self.saved(self.value(review_conditions=[self.condition()],valid_for_minutes=15))
+        now=NOW+timedelta(minutes=16);self.fresh_at(now)
+        account=accounts(self.s.conn,now)[0];entry=account['advice'][0]
+        barrier=threading.Barrier(2);errors=[]
+        def run():
+            store=Store(self.path)
+            try:barrier.wait(timeout=5);request_expiry_review(store,account,entry,now)
+            except Exception as error:errors.append(error)
+            finally:store.conn.close()
+        threads=[threading.Thread(target=run) for _ in range(2)]
+        for t in threads:t.start()
+        for t in threads:t.join(timeout=10)
+        self.assertEqual(errors,[]);self.assertFalse(any(t.is_alive() for t in threads))
+        self.assertEqual(len(self.expiry_events()),1)
+
     def test_model_input_keeps_compact_structured_previous_advice(self):
         self.saved(self.value(review_conditions=[self.condition()]))
         previous=model_input(self.s.conn,NOW)['accounts']['zheshang']['previous_advice'][0]

@@ -224,10 +224,14 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 if changed and r[2]<=changed:continue
                 if seen.get(r[1],0)>=3 and r[0] not in pinned:continue
                 value=json.loads(r[5])
-                state='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'review_required' if value.get('checks') else 'current'
+                lifecycle='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'current'
+                state='review_required' if lifecycle=='current' and value.get('checks') else lifecycle
+                from .jd_live_semantics import blocking_checks
+                action_state='review_required' if lifecycle=='current' and blocking_checks(value) else lifecycle
                 execution=progress(value,r[2],row['order_history'])
                 target=row['advice'] if not seen.get(r[1]) else row['advice_history']
-                entry={'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,'execution_progress':execution,**value}
+                entry={'id':r[0],'analyst':r[1],'created_at':r[2],'expires_at':r[3],'snapshot_revision':r[4],'status':state,
+                       'lifecycle_status':lifecycle,'action_status':action_state,'execution_progress':execution,**value}
                 from .jd_live_orders import proposal_progress
                 for proposal in entry.get('suggested_orders',[]):
                     proposal['execution_progress']=proposal_progress(proposal,r[2],row['order_history'],value.get('valid_for_minutes',240))

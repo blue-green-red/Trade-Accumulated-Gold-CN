@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from .jd_live_conditions import stamp
 from .jd_live_proposals import proposal_signature
+from .jd_live_semantics import immediate_signature,management_signature
 
 
 def price(value):
@@ -36,16 +37,7 @@ def input_quote(conn,advice):
 
 def plan_signature(value):
     # Reference quote and prose change each round; actual trade terms determine whether the plan changed.
-    immediate=({k:value.get(k) for k in ('action','grams','price_condition','price_cny')}
-               if value.get('action') in ('buy','sell') else {'action':value.get('action')})
-    management=[]
-    for order in value.get('order_management',[]):
-        terms=order.get('effective_replacement') if order.get('action')=='replace' else order.get('input_order')
-        terms=terms or order.get('replacement') or {}
-        management.append(json.dumps({'order_key':order.get('order_key'),'action':order.get('action'),
-            'terms':{k:terms.get(k) for k in ('action','kind','grams','price_condition','price_cny','loss_price_cny')}},sort_keys=True))
-    management.sort()
-    return json.dumps([immediate,proposal_signature(value),management],sort_keys=True)
+    return json.dumps([immediate_signature(value),proposal_signature(value),management_signature(value)],sort_keys=True)
 
 
 def strategy_review(conn,account,model,now=None):
@@ -60,7 +52,7 @@ def strategy_review(conn,account,model,now=None):
     if current_at is None or (anchor and current_at<stamp(anchor['quoted_at'])):current=None
     unchanged=[]
     for item in history:
-        if plan_signature(item)!=plan_signature(latest):break
+        if item.get('snapshot_revision')!=latest.get('snapshot_revision') or plan_signature(item)!=plan_signature(latest):break
         unchanged.append(item)
     states=[(v.get('reassessment') or {}).get('thesis_status') for v in unchanged]
     weakened=sum(s in ('weakened','invalidated') for s in states)

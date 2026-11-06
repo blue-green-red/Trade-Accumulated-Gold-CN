@@ -29,7 +29,8 @@ const adviceStatus = (a, v) =>
       ? "账户数据待更新"
       : {
           current: "人工执行参考",
-          review_required: "建议需核对",
+          review_required:
+            v.action_status === "current" ? "部分建议需核对" : "建议需核对",
           account_changed: "账户变化，待复评",
           expired: "建议已到期",
         }[v.status] || "待更新";

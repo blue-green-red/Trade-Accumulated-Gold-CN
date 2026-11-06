@@ -45,9 +45,20 @@ const monitorStates = {
 const state = computed(() =>
   pastDeadline(props.advice)
     ? "expired"
-    : props.advice.status === "current" && !props.account.connected
+    : ["current", "review_required"].includes(props.advice.status) &&
+        !props.account.connected
       ? "data_unavailable"
       : props.advice.status,
+);
+const partState = computed(() =>
+  state.value === "review_required"
+    ? props.advice.action_status || state.value
+    : state.value,
+);
+const stateLabel = computed(() =>
+  state.value === "review_required" && partState.value === "current"
+    ? "部分建议需核对"
+    : states[state.value] || "状态待核对",
 );
 const symbol = {
   at_or_above: "≥",
@@ -61,13 +72,20 @@ const original = (item) =>
     (o) => o.order_key === item.order_key,
   ) ||
   {};
-const terms = (o) =>
-  `${actions[o.action] || ""}${quantity(o.grams)} · ${symbol[o.price_condition] || "参考"} ${o.price_cny == null ? "价格待确认" : num(o.price_cny) + " 元/克"}`;
+const terms = (o) => {
+  const prices =
+    o.kind === "take_profit_stop_loss"
+      ? `止盈 ≥ ${o.price_cny == null ? "待确认" : num(o.price_cny)} / 止损 ≤ ${o.loss_price_cny == null ? "待确认" : num(o.loss_price_cny)} 元/克`
+      : `${symbol[o.price_condition] || "参考"} ${o.price_cny == null ? "价格待确认" : num(o.price_cny) + " 元/克"}`;
+  return `${actions[o.action] || ""}${quantity(o.grams)} · ${prices}`;
+};
 const itemState = (item) =>
-  state.value !== "current" ? state.value : item.state || "review_required";
+  partState.value !== "current"
+    ? partState.value
+    : item.state || "review_required";
 const conditionState = (c) =>
-  state.value !== "current"
-    ? state.value
+  partState.value !== "current"
+    ? partState.value
     : !props.quoteFresh
       ? "data_unavailable"
       : c.monitoring?.status;
@@ -91,7 +109,7 @@ const proposalState = (order) => {
   if (progress?.orders?.length)
     return `${orderStates[progress.status] || "存在相近挂单"} · 关联推断`;
   if (pastDeadline(order)) return "条件单方案已到期";
-  if (state.value !== "current") return states[state.value] || "待更新";
+  if (partState.value !== "current") return states[partState.value] || "待更新";
   if (order.checks?.length) return "参数需核对";
   return "待你确认挂单";
 };
@@ -114,9 +132,7 @@ const proposalState = (order) => {
             ? "挂单复评"
             : (actions[advice.action] || "待核对") + "建议"
         }}</strong
-      ><span class="live-advice-status">{{
-        states[state] || "状态待核对"
-      }}</span>
+      ><span class="live-advice-status">{{ stateLabel }}</span>
     </div>
     <template v-if="section !== 'orders'">
       <div class="live-advice-values">

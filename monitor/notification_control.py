@@ -64,7 +64,9 @@ def selected_events(conn, events, mode=DEFAULT_MODE):
     def current(e):
         if not e.get('live_advice_id'):return True
         from .jd_live_readonly import accounts
-        return any(v['id']==e['live_advice_id'] and v['status']=='current' for a in accounts(conn) for v in a['advice'])
+        from .jd_live_semantics import notification_parts
+        return any(v['id']==e['live_advice_id'] and v.get('action_status',v['status'])=='current' and notification_parts(v) is not None
+                   for a in accounts(conn) for v in a['advice'])
     return [e for e in events if event_topic(e) in enabled and current(e)]
 
 
