@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import Card from "../components/Card.vue";
 import Chart from "../components/Chart.vue";
+import PnlBreakdown from "../components/PnlBreakdown.vue";
 import {
   num,
   pct,
@@ -115,8 +116,11 @@ const mismatched = computed(
         </p>
         <div v-if="m.small_sample" class="sub">
           样本积累中 · 满 30 次平仓后再评价胜率
-        </div></Card
-      >
+        </div>
+        <details v-if="m.pnl_breakdown" class="more">
+          <summary>查看盈亏归因</summary>
+          <PnlBreakdown :value="m.pnl_breakdown" /></details
+      ></Card>
     </div>
     <Card v-if="!models.length" title="模型成绩"
       ><div class="empty">暂无已开启模型，请在 AI 页开启模型后查看。</div></Card

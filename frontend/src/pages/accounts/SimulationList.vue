@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, onMounted, onActivated } from "vue";
 import Card from "../../components/Card.vue";
+import PnlBreakdown from "../../components/PnlBreakdown.vue";
 import {
   openPortfolio,
   navigate,
@@ -125,8 +126,11 @@ const groups = computed(() =>
           <div class="l">可用现金</div>
           <div class="v">{{ money(summary.cash) }}</div>
         </div>
-      </div></Card
-    >
+      </div>
+      <details v-if="summary.started" class="more">
+        <summary>筛选账户的盈亏归因</summary>
+        <PnlBreakdown :value="summary.pnl_breakdown" /></details
+    ></Card>
     <Card
       v-for="g in groups"
       :key="g.key"

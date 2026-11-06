@@ -14,7 +14,7 @@ LIVE_FIELDS = ('bank','name','status','connected','fetched_at','checked_at','mes
                'average_cost_cny','holding_pnl_cny','holding_pnl_basis','quote','sell_fee_rate','pending_order_count',
                'risk_profile','component_times','coverage','order_submission_enabled')
 PORTFOLIO_FIELDS = ('key','model','analyst','name','start_mode','started','started_at','budget','value','return',
-                    'cash','grams','position_pct','paused','realized_pnl','unrealized_pnl')
+                    'cash','grams','position_pct','paused','realized_pnl','unrealized_pnl','pnl_breakdown')
 
 
 def live_summary(account):
@@ -91,6 +91,11 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
             key=view.removeprefix('simulation/')
             owned=[a for a in summaries(conn,settings,price) if a['key']==key] if enabled(settings) and exists(conn) else []
             result.update(account_view='simulation',portfolio=owned[0] if owned and active(conn,key.split(':')[0]) else None)
+            a=result['portfolio']
+            if a and a['grams']<=1e-9 and (settings.ai_trading_mode=='risk_six_account' or a['start_mode'].startswith('short_')):
+                from .short_review import wait_review
+                feedback=wait_review(conn,a.get('plan'),quote,datetime.now(timezone.utc).isoformat())
+                if feedback:a['short_wait_review']=feedback
             return True
         rows=live_accounts(conn) if view!='simulation-list' else []
         mode=('live' if any(a.get('fetched_at') for a in rows) else 'simulation') if view=='auto-list' else view.removesuffix('-list')

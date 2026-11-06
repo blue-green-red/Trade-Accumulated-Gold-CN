@@ -303,6 +303,18 @@ class StructuredAdviceTests(unittest.TestCase):
         self.assertEqual(previous['review_conditions'][0]['price_cny'],850)
         self.assertNotIn('input_order',previous['order_management'][0])
 
+    def test_bank_cost_comparison_requires_fresh_bank_quote_and_known_bank_fee(self):
+        self.data['sell_fee_rate']=.004;record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        account=model_input(self.s.conn,NOW)['accounts']['zheshang']
+        value=account['position_comparison']
+        self.assertEqual(value['net_sell_price_cny'],851.58)
+        self.assertAlmostEqual(value['position_liquidation_cny'],round(account['total_grams']*851.58,2))
+        self.data['sell_fee_rate']=None;record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        self.assertNotIn('position_comparison',model_input(self.s.conn,NOW)['accounts']['zheshang'])
+        self.data['sell_fee_rate']=.004;self.data['quote']['quoted_at']=(NOW-timedelta(minutes=10)).isoformat()
+        record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        self.assertNotIn('position_comparison',model_input(self.s.conn,NOW)['accounts']['zheshang'])
+
     def test_partial_fill_replacement_uses_remaining_quantity_and_overcommit_is_flagged(self):
         self.order.update(status='partially_filled',filled_grams=2.)
         record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())

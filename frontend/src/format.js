@@ -150,6 +150,23 @@ export function totals(rows) {
     pnl: value != null && budget != null ? value - budget : null,
     return: value != null && budget > 0 ? value / budget - 1 : null,
     held: started.filter((a) => a.grams > 1e-9).length,
+    pnl_breakdown: Object.fromEntries(
+      [
+        "price_pnl_cny",
+        "unrealized_price_pnl_cny",
+        "paid_fees_cny",
+        "paid_spread_cny",
+        "estimated_exit_fee_cny",
+        "estimated_exit_spread_cny",
+        "net_pnl_cny",
+      ].map((key) => [
+        key,
+        started.length &&
+        started.every((a) => Number.isFinite(a.pnl_breakdown?.[key]))
+          ? started.reduce((n, a) => n + a.pnl_breakdown[key], 0)
+          : null,
+      ]),
+    ),
   };
 }
 export const sourceState = (stamp, max = 180) =>

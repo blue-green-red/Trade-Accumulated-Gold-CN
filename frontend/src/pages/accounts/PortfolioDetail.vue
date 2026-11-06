@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onActivated } from "vue";
 import Card from "../../components/Card.vue";
+import PnlBreakdown from "../../components/PnlBreakdown.vue";
 import { selectView, navigate } from "../../composables/dashboard";
 import {
   accountLabels,
@@ -68,16 +69,18 @@ const records = (kind) =>
             </div>
           </div>
           <div>
-            <div class="l">持仓浮盈亏</div>
-            <div class="v">{{ money(a.unrealized_pnl, true) }}</div>
+            <div class="l">持仓价差浮盈亏 · 未扣费</div>
+            <div class="v">
+              {{ money(a.pnl_breakdown?.unrealized_price_pnl_cny, true) }}
+            </div>
           </div>
           <div>
-            <div class="l">已实现盈亏</div>
+            <div class="l">已实现盈亏 · 已扣费</div>
             <div class="v">{{ money(a.realized_pnl, true) }}</div>
           </div>
           <div>
-            <div class="l">累计手续费</div>
-            <div class="v">{{ money(a.fees) }}</div>
+            <div class="l">持仓清算浮盈亏 · 预计扣费</div>
+            <div class="v">{{ money(a.unrealized_pnl, true) }}</div>
           </div>
           <div>
             <div class="l">最大回撤</div>
@@ -92,6 +95,9 @@ const records = (kind) =>
           </button>
         </div></Card
       >
+      <Card v-if="a.pnl_breakdown" title="盈亏拆解"
+        ><PnlBreakdown :value="a.pnl_breakdown"
+      /></Card>
       <Card title="最新决策与持仓保护"
         ><div class="sub">
           当前保护：止损
@@ -157,6 +163,39 @@ const records = (kind) =>
             </div>
             <div class="sub">{{ validity(a.plan) }}</div>
             <div class="sub">{{ a.plan.reason }}</div>
+          </div>
+          <div
+            v-if="a.short_wait_review"
+            class="notice info"
+            style="margin-top: 10px"
+          >
+            <strong>{{
+              a.short_wait_review.entry_limit_cny == null
+                ? "观望复核"
+                : "限价买入等待复核"
+            }}</strong>
+            <div class="sub">
+              等待始于 {{ fmtTs(a.short_wait_review.waiting_since) }} ·
+              {{ num(a.short_wait_review.waiting_minutes, 0) }} 分钟<span
+                v-if="a.short_wait_review.same_entry_rounds"
+              >
+                · 同一入场条件连续
+                {{ a.short_wait_review.same_entry_rounds }} 轮</span
+              >
+            </div>
+            <div class="sub" v-if="a.short_wait_review.entry_limit_cny != null">
+              当前限价 ≤ {{ num(a.short_wait_review.entry_limit_cny) }} 元/克 ·
+              入场区间内采样
+              {{ a.short_wait_review.entry_condition_samples }} 次
+            </div>
+            <div class="sub">
+              期间有效采样 {{ a.short_wait_review.samples }} 笔 ·
+              {{ num(a.short_wait_review.sampled_low_cny) }}—{{
+                num(a.short_wait_review.sampled_high_cny)
+              }}
+              元/克
+            </div>
+            <div class="sub">{{ a.short_wait_review.note }}</div>
           </div>
           <details v-if="a.plan.decision.invalidation" class="more">
             <summary>

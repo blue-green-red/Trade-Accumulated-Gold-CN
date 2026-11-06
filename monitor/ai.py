@@ -353,7 +353,9 @@ class AIAnalyst:
             from .ai_inputs import market_context
             context=market_context(context)
         from .public_ai import previous_analysis
+        from .trade_costs import cost_reference
         context["public_reference"] = {"sell_fee_rate": self.settings.sell_fee_rate, "spread_cny": self.settings.spread_cny,
+            "cost_reference":cost_reference((context.get('jd_accumulation_quote') or {}).get('price'),self.settings.sell_fee_rate,self.settings.spread_cny),
             "scope": "公开产品费用参考，实际以用户所选产品为准"}
         previous_public = previous_analysis(store.conn, self.analyst, self._generation)
         if previous_public:
@@ -565,7 +567,8 @@ class AIAnalyst:
             policy = "本轮禁止联网搜索或抓取网页，仅允许结构化提交及只读账户历史查询工具；只根据共同上下文独立判断；缺失数据注明未知并降低置信度。"
         else:
             policy = f"本轮最多搜索 {self.settings.ai_max_searches} 次，仅补充上下文缺失的事实；数据缺失、过期或出现重大突发事件线索时优先核实。优先官方/一手来源，保留发布日期与网址；无新增可靠信息时停止搜索，不必用满次数。"
-        return (RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode=="risk_six_account" else RESEARCH_SYSTEM) + "\n" + policy + PUBLIC_PROMPT
+        from .trade_costs import PROMPT as COST_PROMPT
+        return (RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode=="risk_six_account" else RESEARCH_SYSTEM) + "\n" + policy + PUBLIC_PROMPT + COST_PROMPT
 
     def result_instructions(self):
         if self.settings.ai_trading_mode=="risk_six_account":

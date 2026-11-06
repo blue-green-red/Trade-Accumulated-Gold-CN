@@ -86,3 +86,50 @@ class ShortReviewTests(unittest.TestCase):
         self.assertEqual(value['short_strategy_profile']['primary_timeframes'],['1D'])
         self.assertIn('数日至一两周',value['short_strategy_profile']['holding_period'])
         self.assertEqual(value['short_strategy_profile']['ignored_timeframes'],['30m','1H','4H'])
+
+    def limit_plan(self,minutes,limit=990,status='pending',generation=0,**changes):
+        c=self.f.store.conn;at=self.since+timedelta(minutes=minutes)
+        d=fixtures.decisions()['short_empty'];d.update(action='buy',execution='limit',amount_cny=1000,
+            limit_price_cny=limit,min_execution_price_cny=980,max_execution_price_cny=limit,**changes)
+        view=c.execute('INSERT INTO ai_views(ts,analyst,snapshot_at,view_json) VALUES(?,?,?,?)',
+            (at.isoformat(),'codex',at.isoformat(),json.dumps({'_price_guard':{'jd':1000+minutes}}))).lastrowid
+        pid=c.execute('INSERT INTO ai_plans(account,view_id,generation,created_at,expires_at,decision_json,status) VALUES(?,?,?,?,?,?,?)',
+            ('codex:short_empty',view,generation,(at+timedelta(seconds=30)).isoformat(),
+             (at+timedelta(minutes=3)).isoformat(),json.dumps(d),status)).lastrowid;c.commit()
+        p=dict(c.execute('SELECT * FROM ai_plans WHERE id=?',(pid,)).fetchone());p['decision']=json.loads(p['decision_json'])
+        return p
+
+    def test_renewed_limit_buy_keeps_original_wait_and_counts_only_open_market_samples(self):
+        c=self.f.store.conn;self.limit_plan(1,status='cancelled')
+        latest=self.limit_plan(4,take_profit_cny=1100)
+        closed=fixtures.snapshot(960);closed.update(ts=self.since+timedelta(minutes=3),jd_price=960,market_open=False)
+        self.f.store.add_tick(closed)
+        before=c.execute('SELECT COUNT(*) FROM ai_portfolio_fills').fetchone()[0]
+        result=wait_review(c,latest,{'price':1010},self.now.isoformat())
+        self.assertEqual(result['same_entry_rounds'],2)
+        self.assertEqual(result['waiting_minutes'],8.5)
+        self.assertEqual(result['previous_quote_cny'],1001)
+        self.assertEqual((result['sampled_low_cny'],result['sampled_high_cny'],result['samples']),(990,1020,2))
+        self.assertEqual(result['entry_condition_samples'],1)
+        self.assertEqual(c.execute('SELECT COUNT(*) FROM ai_portfolio_fills').fetchone()[0],before)
+        value=self.f.m.portfolios.input('codex',{'price':1010},as_of=self.now.isoformat())
+        self.assertEqual(value['accounts']['short_empty']['short_wait_review'],result)
+        self.assertEqual(compact_context({'trading_accounts':value})['trading_accounts']['accounts']['short_empty']['short_wait_review'],result)
+
+    def test_entry_change_generation_and_fill_break_the_waiting_chain(self):
+        c=self.f.store.conn;self.limit_plan(1,status='expired');p=self.limit_plan(3)
+        self.assertEqual(wait_review(c,p,{'price':1010},self.now.isoformat())['same_entry_rounds'],2)
+        p=self.limit_plan(4,limit=985)
+        self.assertEqual(wait_review(c,p,{'price':1010},self.now.isoformat())['same_entry_rounds'],1)
+        p=self.limit_plan(5,limit=985,generation=2)
+        self.assertEqual(wait_review(c,p,{'price':1010},self.now.isoformat())['same_entry_rounds'],1)
+        p=self.limit_plan(7,limit=985,generation=2)
+        self.assertEqual(wait_review(c,p,{'price':1010},self.now.isoformat())['same_entry_rounds'],2)
+        c.execute('INSERT INTO ai_portfolio_fills(account,ts,side,grams,price,fee,pnl,reason,quote_json) VALUES(?,?,?,?,?,?,?,?,?)',
+            ('codex:short_empty',(self.since+timedelta(minutes=6)).isoformat(),'sell',1,1000,4,0,'历史成交','{}'));c.commit()
+        self.assertEqual(wait_review(c,p,{'price':1010},self.now.isoformat())['same_entry_rounds'],1)
+        p['status']='executed';self.assertIsNone(wait_review(c,p,{'price':1010},self.now.isoformat()))
+
+    def test_future_limit_decision_is_not_used(self):
+        p=self.limit_plan(11)
+        self.assertIsNone(wait_review(self.f.store.conn,p,{'price':1010},self.now.isoformat()))

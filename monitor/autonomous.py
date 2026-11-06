@@ -137,7 +137,7 @@ buy_paused=true时暂停新增买入，仍可持有、卖出或调整保护；�
 
 决策依据
 - 使用日线和数日至周级别结构、资金与事件，忽略30分钟/1小时/4小时信号。每周约两次买卖操作仅是节奏参考，买卖各计一次，不要求凑次数、日内平仓或三日退出；目标和期限适合波段，不无限延期。
-- 空仓每轮在reason比较买入与等待：自选金额/仓位、入场E、目标T和风险退出R，说明依据并按卖费f计算T*(1-f)/E-1、R*(1-f)/E-1（另计价差）。允许明确标注假设的人民币换算情景，无需证明一定盈利；估计与历史事实分开，不编造价位、形态或胜率。无法估计须说明关键缺口；有持仓则比较持有、加减仓和退出。
+- 空仓每轮在reason比较买入与等待：自选金额/仓位、入场E、目标T和风险退出R，按共用成本口径测算。允许明确标注假设的人民币换算情景，无需证明一定盈利；估计与历史事实分开，不编造价位、形态或胜率。无法估计须说明关键缺口；有持仓则比较持有、加减仓和退出。
 - 结合last_plan及short_wait_review复查上次条件、当轮变化和等待代价。更改门槛说明新增证据或原条件不可验证的原因；旧条件未出现也重估机会。wait的invalidation写现有数据可验证的观察条件与建议复查时点；语义条件不自动下单，复查由程序调度。
 - 有效京东执行报价和账户状态是交易必需信息；京东资金/挂单、ETF与央行配置流属于辅助证据，缺失不单独阻止交易。不能把未提供的完整京东日线或独立技术位设为前提。观望reason以“机会不合适：”（已知机会不值得参与）或“证据不足：”（关键判断或执行缺口）开头，并给依据。
 
@@ -207,12 +207,15 @@ def summaries(conn, settings, price):
         plan = conn.execute("SELECT * FROM ai_plans WHERE account=? ORDER BY id DESC LIMIT 1", (a["key"],)).fetchone()
         pnls = [r[0] for r in conn.execute("SELECT pnl FROM ai_portfolio_cycles WHERE account=? AND closed_at IS NOT NULL", (a["key"],))]
         from .performance import pnl_stats
-        fills = conn.execute("SELECT COUNT(*),COALESCE(SUM(fee),0) FROM ai_portfolio_fills WHERE account=?", (a["key"],)).fetchone()
+        fills = conn.execute("SELECT COUNT(*),COALESCE(SUM(fee),0),COALESCE(SUM(CASE WHEN side='buy' THEN grams*price ELSE 0 END),0),COALESCE(SUM(CASE WHEN side='sell' THEN grams*price ELSE 0 END),0) FROM ai_portfolio_fills WHERE account=?", (a["key"],)).fetchone()
+        from .trade_costs import pnl_breakdown
+        breakdown=pnl_breakdown(a,price,settings,fills[2],fills[3],fills[1])
         rows.append({**a, **pnl_stats(pnls), "name": keys(settings).get(a["key"], a["key"]), "analyst": a["model"],
             "strategy": a["start_mode"], "started": a["started_at"] is not None, "requires_ai": True,
             "horizon": (RISK_LABELS | LABELS)[a["start_mode"]], "risk_budget":risk_state(a,price,lambda p:net_price(settings,p)) if settings.ai_trading_mode==RISK_MODE else None, "description": "短线波段：数日至一两周，以日线和波段价格结构为主；每周约两次操作为参考" if (a["start_mode"].startswith("short_") or settings.ai_trading_mode==RISK_MODE) else "AI 自主决定交易，三周期满仓/空仓独立记账",
             "realized_pnl": a["realized_pnl"], "value": value, "return": value / a["budget"] - 1 if value is not None and a["started_at"] else None, "win_rate_applicable": True,
-            "avg_cost": avg, "unrealized_pnl": a["grams"] * net_price(settings, price) - a["cost"] if price else None,
+            "avg_cost": avg, "unrealized_pnl": breakdown['unrealized_price_pnl_cny']-breakdown['estimated_exit_fee_cny']-breakdown['estimated_exit_spread_cny'] if breakdown['unrealized_price_pnl_cny'] is not None else None,
+            "pnl_breakdown":breakdown,
             "position_pct": a["grams"] * price / (a["cash"] + a["grams"] * price) * 100 if price and a["cash"] + a["grams"] * price > 0 else 0,
             "paused": not active(conn, a["model"]), "fills": fills[0], "fees": fills[1],
             "plan": {**{k:plan[k] for k in plan.keys() if k!="decision_json"}, "decision": json.loads(plan["decision_json"])} if plan else None})
@@ -256,6 +259,10 @@ class AutonomousPortfolio:
             accounts[a["start_mode"]] = {k:a[k] for k in ("key", "revision", "budget", "cash", "grams", "avg_cost", "value", "unrealized_pnl", "realized_pnl", "position_pct", "stop_price", "target_price")}
             if self.settings.ai_trading_mode==RISK_MODE:accounts[a["start_mode"]]["risk_budget"]=a["risk_budget"]
             accounts[a["start_mode"]].update({"last_plan": {k:a["plan"][k] for k in ("status","reason","decision","expires_at")} if a["plan"] else None, "recent_fills": [dict(r) for r in recent]})
+            from .trade_costs import position_comparison
+            if a['grams']>1e-9:
+                comparison=position_comparison(a['grams'],quote.get('price') if quote else None,self.settings.sell_fee_rate,self.settings.spread_cny,a['target_price'],a['stop_price'])
+                if comparison:accounts[a['start_mode']]['position_comparison']=comparison
             if (a["start_mode"].startswith("short_") or self.settings.ai_trading_mode==RISK_MODE):
                 count=conn.execute("SELECT COUNT(*) FROM ai_portfolio_fills WHERE account=? "
                     "AND julianday(ts)>=julianday(?)-7 AND julianday(ts)<=julianday(?) "
@@ -267,7 +274,8 @@ class AutonomousPortfolio:
                 review=wait_review(conn,a["plan"],quote,as_of)
                 if review:accounts[a["start_mode"]]["short_wait_review"]=review
 
-        return {"policy_version":policy_version(self.settings), "short_strategy_profile":{"name":"短线波段","holding_period":"数日至一两周","primary_timeframes":["1D"],"ignored_timeframes":["30m","1H","4H"],"entry_exit_timing":"日线与数日至周级别价格结构，不要求小时确认","pace":"每周约两次买卖操作是参考，不是配额或硬上限；不要求日内平仓"}, "reference_quote":quote, "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,
+        from .trade_costs import cost_reference
+        return {"policy_version":policy_version(self.settings), "short_strategy_profile":{"name":"短线波段","holding_period":"数日至一两周","primary_timeframes":["1D"],"ignored_timeframes":["30m","1H","4H"],"entry_exit_timing":"日线与数日至周级别价格结构，不要求小时确认","pace":"每周约两次买卖操作是参考，不是配额或硬上限；不要求日内平仓"}, "reference_quote":quote, "cost_reference":cost_reference(quote.get('price') if quote else None,self.settings.sell_fee_rate,self.settings.spread_cny), "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,
             "spread_cny": self.settings.spread_cny, "max_position_pct": 100, "protection_policy": "model_discretion", "stop_loss_required": False, "can_clear_stop_loss": True,
             "inflight_max_move_pct":self.settings.ai_inflight_max_move_pct, "max_input_age_minutes": self.settings.ai_decision_max_age_minutes, "max_plan_minutes": 1440,
             "currency": "CNY", "quantity_unit": "gram", "shorting": False}}
@@ -376,6 +384,9 @@ class AutonomousPortfolio:
         c = self.store.conn
         d = data["account_decisions"][a["start_mode"]]
         snapshot = datetime.fromisoformat(data["_snapshot_at"])
+        if d['action'] in ('hold','wait','cancel') and (utc_now()-snapshot).total_seconds()>self.settings.ai_decision_max_age_minutes*60:
+            a['last_view_id']=row['rowid']
+            return '旧持有/观望参考已过期，请按新鲜开盘报价复评'
         expires = snapshot + timedelta(minutes=d["valid_for_minutes"])
         cur = c.execute("INSERT OR IGNORE INTO ai_plans(account,view_id,generation,created_at,expires_at,decision_json,status) VALUES(?,?,?,?,?,?,?)",
             (a["key"],row["rowid"],data["_control_generation"],utc_now().isoformat(),expires.isoformat(),json.dumps(d,ensure_ascii=False),"pending"))
@@ -460,7 +471,8 @@ class AutonomousPortfolio:
                 if latest and latest["rowid"] > a["last_view_id"] and can_trade:
                     data = json.loads(latest["view_json"])
                     if (data.get("_trading_version")==policy_version(self.settings) or self.settings.ai_trading_mode!=RISK_MODE) and data.get("account_decisions") and view_active(c,a["model"],data):
-                        self._accept(a,latest,data,quote)
+                        skipped=self._accept(a,latest,data,quote)
+                        if skipped:refreshes.append((a['model'],f'portfolio-stale:{a["model"]}:{latest["rowid"]}',skipped))
                         rejected = c.execute("SELECT id,reason FROM ai_plans WHERE account=? AND view_id=? AND status='rejected'",(a["key"],latest["rowid"])).fetchone()
                         if rejected:
                             guard=data.get("_price_guard") or {}
@@ -518,5 +530,5 @@ class AutonomousPortfolio:
                     c.execute("INSERT INTO ai_portfolio_model_stats VALUES(?,?,?) ON CONFLICT(model) DO UPDATE SET peak=excluded.peak,max_drawdown=excluded.max_drawdown",(model,peak,mdd))
         for model,event_id,reason in refreshes:
             if active(c,model):
-                enqueue(c,model,reason,0 if event_id.startswith("portfolio-init:") else 0 if event_id.startswith(("price-range:","price-guard:")) else 15,event_id,{"source":"账户风控"})
+                enqueue(c,model,reason,0 if event_id.startswith(("portfolio-init:","price-range:","price-guard:","portfolio-stale:")) else 15,event_id,{"source":"账户风控"})
         return emitted

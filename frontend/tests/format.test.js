@@ -39,6 +39,40 @@ test("unknown valuations stay unknown and benchmark differences use percentage p
   assert.equal(difference(0.01), "领先基准 1.00 个百分点");
 });
 
+test("filtered fee attribution sums known costs while missing marks remain unknown", () => {
+  const account = {
+    started: true,
+    budget: 100000,
+    value: 99960,
+    cash: 90000,
+    grams: 10,
+    pnl_breakdown: {
+      price_pnl_cny: 0,
+      unrealized_price_pnl_cny: 0,
+      paid_fees_cny: 0,
+      paid_spread_cny: 0,
+      estimated_exit_fee_cny: 40,
+      estimated_exit_spread_cny: 0,
+      net_pnl_cny: -40,
+    },
+  };
+  const combined = totals([account, account]).pnl_breakdown;
+  assert.equal(combined.estimated_exit_fee_cny, 80);
+  assert.equal(combined.paid_fees_cny, 0);
+  assert.equal(combined.net_pnl_cny, -80);
+  const missing = {
+    ...account,
+    pnl_breakdown: {
+      ...account.pnl_breakdown,
+      price_pnl_cny: null,
+      net_pnl_cny: null,
+    },
+  };
+  const partial = totals([account, missing]).pnl_breakdown;
+  assert.equal(partial.net_pnl_cny, null);
+  assert.equal(partial.estimated_exit_fee_cny, 80);
+});
+
 test("cached quotes expire on the local clock without extending either timestamp", async () => {
   const { executionStatus } = await import("../src/format.js");
   const at = Date.now();

@@ -108,7 +108,8 @@ def autonomous_comparison(conn, settings, board, short, curves, price, accounts=
         if stats and settings.ai_trading_mode not in ("four_account","risk_six_account"): mdd=stats[0]
         starts=[a["started_at"] for a in rows if a["started_at"]]
         baseline = sum(a["baseline_return"]*a["budget"] for a in rows)/budget if budget and all(a["baseline_return"] is not None for a in rows) else None
-        models.append({"key":model,"name":model.title(),"budget":budget,"value":value,
+        from .trade_costs import sum_breakdowns
+        models.append({"key":model,"name":model.title(),"budget":budget,"value":value,'pnl_breakdown':sum_breakdowns(rows),
             "return":value/budget-1 if value is not None and budget and starts else None,"max_drawdown":mdd,
             "baseline_return":baseline,"excess_return":value/budget-1-baseline if value is not None and budget and baseline is not None else None,
             "started_at":min(starts) if starts else None,"accounts":rows,"points":points,**pnl_stats(pnls)})

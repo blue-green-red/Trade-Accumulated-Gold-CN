@@ -357,6 +357,20 @@ class AutonomousTests(unittest.TestCase):
         self.assertEqual(self.plan()['status'],'expired')
         self.assertEqual(self.account()['cash'],100000)
 
+    def test_old_non_trade_reference_is_skipped_once_without_reject_noise_or_protection_changes(self):
+        from monitor.ai_events import read
+        self.publish(short_full=dict(stop_loss_cny=950))
+        self.m.portfolios.on_tick(snapshot())
+        context=self.context();context['snapshot_at']=(utc_now()-timedelta(minutes=30)).isoformat()
+        view=self.publish(context,short_full=dict(stop_loss_cny=900),short_empty=dict(action='wait'))
+        before=self.store.conn.execute('SELECT COUNT(*) FROM ai_plans').fetchone()[0]
+        self.m.portfolios.on_tick(snapshot());self.m.portfolios.on_tick(snapshot())
+        self.assertEqual(self.store.conn.execute('SELECT COUNT(*) FROM ai_plans').fetchone()[0],before)
+        self.assertEqual(self.account('short_full')['stop_price'],950)
+        self.assertEqual(self.account('short_full')['last_view_id'],view['_view_id'])
+        events=[e for e in read(self.store.conn,'codex')['pending'] if e['id'].startswith('portfolio-stale:')]
+        self.assertEqual(len(events),1)
+
     def test_monitor_expires_before_all_market_sources_fail(self):
         self.publish(short_empty=dict(action='buy',execution='limit',amount_cny=1000,limit_price_cny=990,valid_for_minutes=1))
         self.m.portfolios.on_tick(snapshot())

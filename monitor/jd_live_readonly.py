@@ -252,6 +252,11 @@ def model_input(conn,now=None):
             'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
     values={r['bank']:{k:r.get(k) for k in fields} for r in rows}
     for row in rows:
+        from .trade_costs import position_comparison
+        quote=row.get('quote') or {}
+        if row['connected'] and quote.get('status')=='fresh':
+            comparison=position_comparison(row.get('total_grams'),quote.get('sell_price_cny'),row.get('sell_fee_rate'))
+            if comparison:values[row['bank']]['position_comparison']=comparison
         active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
         previous=[];counts={}
         for value in row['advice']+row['advice_history']:
