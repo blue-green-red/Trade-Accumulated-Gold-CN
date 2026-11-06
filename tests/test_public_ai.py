@@ -114,6 +114,21 @@ class PublicTests(unittest.TestCase):
         d = content(); d["analysis"]["outlook"] = "公共京东参考价850元/克。"
         self.assertEqual(self.publish(d), "ready")
 
+    def test_only_verified_public_unit_examples_become_percentages(self):
+        self.context['public_reference']={'sell_fee_rate':.004,'spread_cny':0}
+        d=content();d['decision_basis']['entry_scenario']={'entry_price_cny':850,'target_price_cny':880,
+            'exit_price_cny':820,'basis':'公共假设情景'}
+        d['decision_basis']['no_entry_reason']='新增每万元假设净赚约312元、压力损失约392元；等待信息，但承担踏空。'
+        original=copy.deepcopy(d)
+        self.assertEqual(self.publish(d),'ready')
+        text=self.read()['decision_basis']['no_entry_reason']
+        self.assertIn('收益约3.12%',text);self.assertIn('损失约3.92%',text)
+        self.assertNotIn('万元',text);self.assertEqual(d,original)
+        for unsafe in ('每万元净赚约123456元、损失约392元；','余额123456.78元。',
+                       '每万元净赚约312元、损失约392元；真实账户应减仓。'):
+            d['decision_basis']['no_entry_reason']=unsafe
+            self.assertEqual(self.publish(d,view_id=100+len(unsafe)),'unavailable')
+
     def test_private_extra_fields_never_read_or_returned_and_no_legacy_fallback(self):
         self.store.conn.execute("CREATE TABLE ai_views(view_json TEXT)")
         self.store.conn.execute("INSERT INTO ai_views VALUES(?)", (json.dumps({"summary": "PRIVATE ACCOUNT SUMMARY"}),))

@@ -18,7 +18,7 @@ POLICY = {"risk": "high", "horizon": "数日至两周", "position_basis": POSITI
 
 PROMPT = """\n公众输出public_content仅用公共行情/资讯、public_reference，禁止引用私人账户、历史、账户事件及持仓/成本/余额/盈亏/挂单/标识。analysis写共用形势，驱动注明日期/来源。
 高风险、数日至两周；4%单次风险、20%回撤为参考，不保证损失。仓位=黄金市值/(黄金市值+黄金预留现金)。decision_basis共用解释仓位高低取舍、扣费与风险；所有公众价位从公共原值或本轮独立推导并列依据，public_reference.mapped_levels为可选换算参考，不是固定目标。不能为贴近私人旧价改写或凑值，“近似合理”不是公共来源；无法可靠量化则情景null并说明，不代表买入。复评可用人民币阈值、具名事件或带时区时点，不用“日线修复”；watch_conditions留空。
-recommendations覆盖0至100每10%的11档，只写动作、目标、差异，共用失效条件引用decision_basis。条件方案允许全空，共用说明原因及何时复评；不得为补字段强行买入或生成条件单。数量仅用仓位%，条件目标与即时目标分开；无有效公共京东价则入场情景null、条件单空，不以国际价代替元/克；休市不建议立即成交。"""
+recommendations覆盖0至100每10%的11档，只写动作、目标、差异，共用失效条件引用decision_basis。条件方案允许全空，共用说明原因及何时复评；不得为补字段强行买入或生成条件单。数量仅用仓位%，收益风险测算只用百分比，不写金额或克数（含每万元举例）；条件目标与即时目标分开。无有效公共京东价则入场情景null、条件单空，不以国际价代替元/克；休市不建议立即成交。"""
 
 
 class PublicModel(BaseModel):
@@ -267,9 +267,28 @@ def validate_content(value, context, require_basis=False):
     return data
 
 
+def normalize_unit_examples(data, context):
+    """Render provable public scenario arithmetic as percentages; keep all other checks strict."""
+    basis=data.get('decision_basis') or {};scenario=basis.get('entry_scenario')
+    if not scenario or not privacy_ok({'scenario':scenario},context):return
+    reference=context.get('public_reference') or {}
+    fee,spread=reference.get('sell_fee_rate'),reference.get('spread_cny')
+    if any(type(v) not in (int,float) or not math.isfinite(v) for v in (fee,spread)) or not 0<=fee<1 or spread<0:return
+    up=(scenario['target_price_cny']*(1-fee)-spread)/scenario['entry_price_cny']-1
+    loss=1-(scenario['exit_price_cny']*(1-fee)-spread)/scenario['entry_price_cny']
+    if up<=0 or loss<=0:return
+    pattern=r'(?:新增)?每万元(?:假设)?(?:净赚|盈利|收益)约?(\d+(?:\.\d+)?)元[、，](?:压力损失|亏损|损失)约?(\d+(?:\.\d+)?)元[；;。]'
+    def replace(match):
+        if abs(float(match[1])-up*10000)>1 or abs(float(match[2])-loss*10000)>1:return match[0]
+        return f'该公共情景新增扣费收益约{up*100:.2f}%、压力损失约{loss*100:.2f}%；'
+    for key in ('position_rationale','no_entry_reason','no_conditions_reason'):
+        if isinstance(basis.get(key),str):basis[key]=re.sub(pattern,replace,basis[key])
+
+
 def publication_content(value, context):
     """Omit an unsafe optional scenario, never relax checks on the remaining output."""
     data = PublicContent.model_validate(value).model_dump()
+    normalize_unit_examples(data,context)
     basis = data.get("decision_basis")
     if basis and basis["entry_scenario"] and not privacy_ok({"scenario": basis["entry_scenario"]}, context):
         basis["entry_scenario"] = None
