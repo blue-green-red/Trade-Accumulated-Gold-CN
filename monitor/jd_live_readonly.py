@@ -272,6 +272,8 @@ def model_input(conn,now=None):
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
                     if value.get('downside_scenarios'):
                         brief['downside_scenarios']=[{k:s.get(k) for k in ('price_cny','price_role','preferred_action','basis')} for s in value['downside_scenarios']]
+                    if value.get('limit_buy_reviews'):
+                        brief['limit_buy_reviews']=[{k:s.get(k) for k in ('decision','entry_price_cny','target_price_cny','risk_exit_cny','grams','expires_at','reason')} for s in value['limit_buy_reviews']]
                     from .jd_live_feedback import strategy_review
                     brief['strategy_review']=strategy_review(conn,row,name,now)
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]

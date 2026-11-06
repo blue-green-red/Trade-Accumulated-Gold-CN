@@ -236,7 +236,9 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertEqual(status,403)
                     page.unroute('**/api/pages/strategies*')
                     page.get_by_role('button',name='‹ 返回真实账户',exact=True).click()
-                    page.get_by_role('button',name='刷新真实账户',exact=True).click()
+                    with page.expect_response(lambda response: '/api/live-readonly/refresh' in response.url and response.request.method=='POST') as refresh_response:
+                        page.get_by_role('button',name='刷新真实账户',exact=True).click()
+                    self.assertEqual(refresh_response.value.status,202)
                     page.get_by_role('button',name='更新中…',exact=True).wait_for()
                     self.assertEqual(f.m.store.get_state('jd_live_refresh')['status'],'queued')
                     self.assertEqual(errors,[])

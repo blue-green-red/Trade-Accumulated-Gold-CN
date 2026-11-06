@@ -5,6 +5,7 @@ from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature,format_proposals
 from .jd_live_semantics import immediate_signature,management_signature,notification_parts
+from .jd_live_entry import LimitBuyReview
 
 class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
@@ -50,6 +51,7 @@ class LiveAdvice(BaseModel):
     risk_note:str=Field(max_length=800)
     reassessment:Optional[AdviceReassessment]=None
     downside_scenarios:list[DownsideScenario]=Field(default_factory=list,max_length=2,description='独立比较候选下跌价的加仓/持有/退出；无可支持价位填[]并在reason说明，禁止凑单')
+    limit_buy_reviews:list[LimitBuyReview]=Field(default_factory=list,max_length=2,description='新版独立评估低位提前买入方案；无可靠候选也说明具体缺口，未知参数null，不强制买入')
     suggested_orders:list[SuggestedOrder]=Field(default_factory=list,max_length=2,description='本轮适合提前设置的条件单建议；互相独立、同时预留资金和克数。无合适机会填[]，不表示已挂单')
     order_management:list[OrderManagement]=Field(default_factory=list,max_length=5,description='对输入可见的已有挂单逐单给keep/cancel/replace建议，绝不直接执行')
     review_conditions:list[PriceReviewCondition]=Field(default_factory=list,max_length=4,description='使用本银行元/克报价触发AI复评；有效期沿用本条建议，不是下单条件')
@@ -63,6 +65,7 @@ PROMPT="""
 - 仅给启用真实账户人工建议，与模拟执行隔离；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
 - reason按本户黄金/现金比例和共用比较规则选择规模与时机，补充持有、减仓/退出的扣费比较；情景标明假设，无法估计直说，不编造价位。reassessment结合previous_advice.strategy_review复核假设和旧价位；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有。
 - account_risk为本户黄金+现金的扣卖费估值及风险参考，非家庭资产或必须用满的配额。downside_scenarios独立比较候选下跌价的加仓、持有、退出：压力测试价不自动成为止损，低仓位不自动买也不默认继续减仓；拒绝现价加仓不能替代较低价比较，无法支持候选价则留空并说明。
+- limit_buy_reviews独立评估可提前挂出的较低价方案：入场、目标、新增退出依据、克数及期限；未知参数null并说明具体缺口或价格单无法表达的前提，不以有事件或待确认笼统拒绝。recommend才在suggested_orders给同参数买单，不编价凑单；reason不重复评估表。
 - suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
@@ -84,6 +87,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         source=(inputs.get('accounts') or {}).get(bank)
         if raw is None or not source or not source.get('revision'):continue
         strict_downside='downside_scenarios' in raw
+        strict_entry='limit_buy_reviews' in raw
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
         if invalidation_note:warnings.append(invalidation_note)
         value['risk_profile']={**(inputs.get('risk_profile') or {}),'risk_budget_cny':(source.get('account_risk') or {}).get('risk_budget_cny')}
@@ -99,7 +103,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
             'orders_at':(source.get('component_times') or {}).get('pending_orders')}
-        value['schema_version']=4 if strict_downside else 3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
+        value['schema_version']=5 if strict_entry else 4 if strict_downside else 3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
         value['input_state']={k:source.get(k) for k in ('total_grams','cash_cny','pending_order_count','recent_trade')}
         if source.get('status')!='fresh':warnings.append('输入账户数据不可用或过期')
         if value['action']=='sell' and (value['grams'] is None or value['grams']<=0 or value['grams']>(source.get('sellable_grams') or 0)+1e-8):warnings.append('卖出数量未填写或超过可卖克数')
@@ -113,6 +117,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         warnings.extend(validate_proposals(value,source,now))
         from .jd_live_risk import validate_downside,annotate
         warnings.extend(validate_downside(value,source,require=strict_downside))
+        from .jd_live_entry import validate as validate_entry
+        warnings.extend(validate_entry(value,source,now,require=strict_entry))
         annotate(value,source)
         value['checks']=warnings
         value['validation_version']=1
@@ -141,7 +147,8 @@ def notification_events(conn,analyst,view_id):
         old=notification_parts(raw_old) if raw_old else None
         validation_recovered=bool(raw_old and raw_old.get('checks') and not raw_old.get('validation_version') and raw_value.get('validation_version'))
         orders_changed=management_signature(old)!=management_signature(value)
-        proposed_changed=proposal_signature(old)!=proposal_signature(value)
+        from .jd_live_entry import signature as entry_signature
+        proposed_changed=proposal_signature(old)!=proposal_signature(value) or entry_signature(old)!=entry_signature(value)
         from .jd_live_conditions import stamp
         from .jd_live_orders import proposal_progress
         old_drafts=[p for p in (old or {}).get('suggested_orders',[]) if proposal_progress(p,previous[2],account['order_history'],old.get('valid_for_minutes',240))['status']=='not_observed']
@@ -171,7 +178,8 @@ def notification_events(conn,analyst,view_id):
         tracking=(current.get('execution_progress') or {}).get('status')
         progress_note={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
         from .jd_live_risk import format_downside
-        structure=format_downside(value)+format_proposals(value)+format_structure(value)
+        from .jd_live_entry import format_reviews
+        structure=format_reviews(value)+format_downside(value)+format_proposals(value)+format_structure(value)
         if proposal_notice and not value.get('suggested_orders'):
             structure='本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。\n\n'+structure
         reason='仅推送已通过独立校验的部分；其余挂单或复评建议需核对，请查看前端明细。' if value.get('notification_partial') else value['reason']

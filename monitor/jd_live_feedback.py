@@ -37,7 +37,8 @@ def input_quote(conn,advice):
 
 def plan_signature(value):
     # Reference quote and prose change each round; actual trade terms determine whether the plan changed.
-    return json.dumps([immediate_signature(value),proposal_signature(value),management_signature(value)],sort_keys=True)
+    from .jd_live_entry import signature as entry_signature
+    return json.dumps([immediate_signature(value),proposal_signature(value),management_signature(value),entry_signature(value)],sort_keys=True)
 
 
 def strategy_review(conn,account,model,now=None):

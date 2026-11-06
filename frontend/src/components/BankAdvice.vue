@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import LiveRiskSummary from "./LiveRiskSummary.vue";
 import DownsideReview from "./DownsideReview.vue";
+import LimitBuyReviews from "./LimitBuyReviews.vue";
 import OrderImpact from "./OrderImpact.vue";
 import {
   actions,
@@ -214,6 +215,10 @@ const proposalState = (order) => {
           <strong>价位依据：</strong>{{ advice.reassessment.price_basis }}
         </div>
       </section>
+      <LimitBuyReviews
+        :items="advice.limit_buy_reviews"
+        :active="partState === 'current' && quoteFresh"
+      />
       <DownsideReview :items="advice.downside_scenarios" />
       <section class="live-proposals">
         <div class="live-section-heading" style="margin-top: 14px">
