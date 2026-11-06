@@ -17,7 +17,7 @@ POLICY = {"risk": "high", "horizon": "数日至两周", "position_basis": POSITI
           "trade_risk_pct": 4.0, "drawdown_reference_pct": 20.0}
 
 PROMPT = """\n公众输出public_content仅用公共行情/资讯、public_reference，禁止引用私人账户、历史、账户事件及持仓/成本/余额/盈亏/挂单/标识。analysis写共用形势，驱动注明日期/来源。
-高风险、数日至两周；4%单次风险、20%回撤为参考，不保证损失。仓位=黄金市值/(黄金市值+黄金预留现金)。decision_basis共用解释仓位高低取舍、扣费与风险；假设入场/目标/退出须从公共数据取值或推导并列依据，不用私人独有价位；无法可靠量化则null并说明，不代表买入。复评须有人民币阈值、具名事件或带时区时点，不用“日线修复”；watch_conditions留空。
+高风险、数日至两周；4%单次风险、20%回撤为参考，不保证损失。仓位=黄金市值/(黄金市值+黄金预留现金)。decision_basis共用解释仓位高低取舍、扣费与风险；所有公众价位从公共原值或本轮独立推导并列依据，public_reference.mapped_levels为可选换算参考，不是固定目标。不能为贴近私人旧价改写或凑值，“近似合理”不是公共来源；无法可靠量化则情景null并说明，不代表买入。复评可用人民币阈值、具名事件或带时区时点，不用“日线修复”；watch_conditions留空。
 recommendations覆盖0至100每10%的11档，只写动作、目标、差异，共用失效条件引用decision_basis。条件方案允许全空，共用说明原因及何时复评；不得为补字段强行买入或生成条件单。数量仅用仓位%，条件目标与即时目标分开；无有效公共京东价则入场情景null、条件单空，不以国际价代替元/克；休市不建议立即成交。"""
 
 
@@ -113,6 +113,38 @@ def public_quote(value, at):
         return None
 
 
+def mapped_levels(context):
+    """Optional hypotheses from this public snapshot only; never inspect account levels."""
+    def positive(value):
+        try:
+            return type(value) in (int, float) and math.isfinite(value) and value > 0
+        except OverflowError:
+            return False
+    indicators = context.get("daily_indicators") or {}
+    if not isinstance(indicators, dict) or indicators.get("status") != "fresh":
+        return {}
+    try:
+        at = stamp(context.get("snapshot_at"))
+        fetched = stamp(indicators.get("fetched_at"))
+        if not -30 <= (at - fetched).total_seconds() <= 120:
+            return {}
+        quote = public_quote(context.get("jd_accumulation_quote"), at)
+    except (TypeError, ValueError):
+        return {}
+    spot = context.get("xauusd")
+    if not quote or not positive(spot):
+        return {}
+    levels = {}
+    for period in (20, 50):
+        value = indicators.get(f"ma{period}_usd")
+        if positive(value):
+            price = value / spot * quote["price_cny"]
+            if positive(price) and round(price, 2) > 0:
+                levels[f"ma{period}_cny"] = round(price, 2)
+    return {**levels, "as_of": fetched.isoformat(),
+            "basis": "公共京东价×国际MA/本轮XAU；固定当前产品比例的假设换算，非京东技术位，含汇率及溢价误差。"} if levels else {}
+
+
 def strings(value):
     if isinstance(value, dict):
         for v in value.values():
@@ -145,12 +177,18 @@ def privacy_ok(content, context):
                 yield from numbers(v)
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
             yield float(value)
-    public_numbers = set(numbers({k: v for k, v in context.items() if k not in
-                                 ("trading_accounts", "live_readonly_accounts", "trigger_events", "event_coverage")}))
+    public_context = {k: v for k, v in context.items() if k not in
+                      ("trading_accounts", "live_readonly_accounts", "trigger_events", "event_coverage")}
+    if isinstance(public_context.get("public_reference"), dict):
+        # Recompute these references instead of trusting supplied/archived derived numbers.
+        public_context["public_reference"] = {k: v for k, v in public_context["public_reference"].items() if k != "mapped_levels"}
+    public_context["mapped_levels"] = mapped_levels(context)
+    public_numbers = set(numbers(public_context))
     output_numbers = set(numbers(content))
     output_numbers.update(float(m.replace(",", "")) for m in re.findall(r"(?<![0-9.])\d[\d,]*(?:\.\d+)?", text))
-    sensitive = {"average_cost_cny", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
-                 "price_cny", "limit_price_cny", "limit_price", "stop_price", "target_price", "total_grams", "grams"}
+    sensitive = {"average_cost_cny", "avg_cost", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
+                 "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
+                 "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams"}
     def private_numbers(value):
         if isinstance(value, dict):
             for k, v in value.items():

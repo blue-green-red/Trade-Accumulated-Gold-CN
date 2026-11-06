@@ -28,6 +28,8 @@ def evidence_for(content, context):
     levels, sources = [], []
     quote = context.get('jd_accumulation_quote') or {}
     days = (context.get('jd_daily_samples') or {}).get('days') or []
+    from .public_ai import mapped_levels
+    mapped = mapped_levels(context)
     def add(label, price, fallback):
         if type(price) not in (int, float) or not math.isfinite(price) or price <= 0: return
         found = []
@@ -36,6 +38,9 @@ def evidence_for(content, context):
             for field, title in (('sampled_low_cny', '采样低值'), ('sampled_high_cny', '采样高值'), ('first_price_cny', '首笔采样'), ('last_price_cny', '末笔采样')):
                 if day.get(field) == price:
                     found.append(str(day.get('date_bj', ''))[:10] + ' 京东' + title)
+        for period in (20, 50):
+            if mapped.get(f'ma{period}_cny') == price:
+                found.append(f'本轮国际MA{period}按公共京东/XAU比例的假设换算，非京东技术位；含汇率及溢价误差。')
         levels.append({'label': label, 'price_cny': price, 'basis': '；'.join(dict.fromkeys(found))[:220] if found else fallback})
     scenario = basis.get('entry_scenario')
     if scenario:

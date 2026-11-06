@@ -352,11 +352,14 @@ class AIAnalyst:
         else:
             from .ai_inputs import market_context
             context=market_context(context)
-        from .public_ai import previous_analysis
+        from .public_ai import previous_analysis, mapped_levels
         from .trade_costs import cost_reference
         context["public_reference"] = {"sell_fee_rate": self.settings.sell_fee_rate, "spread_cny": self.settings.spread_cny,
             "cost_reference":cost_reference((context.get('jd_accumulation_quote') or {}).get('price'),self.settings.sell_fee_rate,self.settings.spread_cny),
             "scope": "公开产品费用参考，实际以用户所选产品为准"}
+        public_levels = mapped_levels(context)
+        if public_levels:
+            context["public_reference"]["mapped_levels"] = public_levels
         previous_public = previous_analysis(store.conn, self.analyst, self._generation)
         if previous_public:
             context["previous_public_analysis"] = previous_public

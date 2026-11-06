@@ -49,6 +49,19 @@ class AnalysisArchiveTests(unittest.TestCase):
         self.assertEqual(self.rows()[-1]['status'],'cancelled')
         self.assertIn('outcome',dict(self.artifacts(self.rows()[-1]['id'])))
 
+    def test_actual_request_receives_only_current_public_mapped_levels(self):
+        from test_public_prices import context
+        f=self.f;source=context()
+        # Preserve this fixture's six-account schema; only add the public market fields.
+        for key in ('snapshot_at','jd_accumulation_quote','xauusd','daily_indicators'):
+            f.ctx[key]=source[key]
+        f.ctx['trading_accounts']['accounts']['short_full']['target_price']=900.32
+        self.assertIsNotNone(f.a.analyze(f.ctx,'reference',run_id='public-reference'))
+        request=dict(self.artifacts(self.rows()[0]['id']))['request']['context']
+        self.assertEqual(request['public_reference']['mapped_levels']['ma50_cny'],900.41)
+        self.assertEqual(request['trading_accounts']['accounts']['short_full']['target_price'],900.32)
+        self.assertNotIn('public_reference',f.ctx)
+
     def test_secrets_are_redacted_export_streams_and_never_overwrites(self):
         f=self.f;secret='test-credential-do-not-persist-982756'
         context={**f.ctx,'diagnostic':{'password':secret,'note':'message '+secret}}
