@@ -1,7 +1,7 @@
 """Consistent sale cashflows and performance attribution; never decides whether to trade."""
 import math
 
-PROMPT = """\n成本与波段比较（模拟、真实及公众内容共用）：本产品卖出每克净回款N(P)=P*(1-f)-s，f为卖费、s为每克价差。新买入看N(T)/E-1；已有持仓继续持有相对现在卖出看N(T)/N(P)-1，不能只在持有路径扣费。卖后无费买回同克数的价格须≤N(P)；分批按金额计费，不按笔数倍增。position_comparison为程序净额情景，不重复扣费，不代表目标必达或可成交。调整波段目标或提前退出说明原日线/事件假设变化，近期采样极值不能单独作为缩短目标或退出的依据；目标不是涨幅上限，不强制持有到目标。"""
+PROMPT = """\n成本与波段比较（模拟、真实及公众内容共用）：本产品卖出每克净回款N(P)=P*(1-f)-s，f为卖费、s为每克价差。新买入看N(T)/E-1；已有持仓继续持有相对现在卖出看N(T)/N(P)-1，不能只在持有路径扣费。卖后无费买回同克数的价格须≤N(P)；分批按金额计费，不按笔数倍增。position_comparison仅为已有持仓净额，不重复扣费；新增/加仓独立评估入场、目标、失效价、期限及规模，可沿用旧价但说明当前依据，不强制买入或改价。调整波段目标或提前退出说明原日线/事件假设变化，近期采样极值不能单独作为缩短目标或退出的依据；目标不是涨幅上限，不强制持有到目标。"""
 
 
 def number(value):
@@ -31,8 +31,7 @@ def position_comparison(grams,price,fee,spread=0,target=None,stop=None):
             if cost_reference(level,fee,spread) is None:continue
             future=float(level)*(1-float(fee))-float(spread)
             scenarios[name]={'price_cny':float(level),'delta_vs_sell_now_cny':round(grams*(future-current),2),
-                             'holding_return_pct':round((future/current-1)*100,4),
-                             'new_buy_return_pct':round((future/float(price)-1)*100,4)}
+                             'holding_return_pct':round((future/current-1)*100,4)}
         if scenarios:result['scenarios']=scenarios
     return result
 

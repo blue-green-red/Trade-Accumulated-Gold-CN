@@ -9,17 +9,17 @@ import test_autonomous as fixtures
 
 
 class TradeCostTests(unittest.TestCase):
-    def test_holding_and_new_buy_have_different_fee_baselines(self):
+    def test_holding_comparison_does_not_define_a_new_entry_scenario(self):
         value=position_comparison(50,850.15,.004,target=851.96,stop=830.59)
         target=value['scenarios']['target']
         self.assertAlmostEqual(target['holding_return_pct'],.2129,places=4)
-        self.assertAlmostEqual(target['new_buy_return_pct'],-.1879,places=4)
+        self.assertTrue(all('new_buy_return_pct' not in scenario for scenario in value['scenarios'].values()))
         self.assertEqual(target['delta_vs_sell_now_cny'],90.14)
         self.assertEqual(value['position_liquidation_cny'],42337.47)
         # No price movement means no advantage to holding over selling now, not a second fee.
         same=position_comparison(1,1000,.004,target=1000)['scenarios']['target']
         self.assertEqual(same['holding_return_pct'],0.)
-        self.assertEqual(same['new_buy_return_pct'],-.4)
+        self.assertNotIn('new_buy_return_pct',same)
 
     def test_spread_zero_fee_and_unknown_inputs(self):
         v=position_comparison(2,1000,0,3,target=1010)['scenarios']['target']
@@ -77,6 +77,7 @@ class LedgerAttributionTests(unittest.TestCase):
         before=self.f.account()
         value=self.engine.input('codex',fixtures.snapshot(1000)['execution_quote'])['accounts']['short_empty']
         self.assertEqual(value['position_comparison']['scenarios']['target']['delta_vs_sell_now_cny'],99.6)
+        self.assertTrue(all('new_buy_return_pct' not in scenario for scenario in value['position_comparison']['scenarios'].values()))
         self.assertEqual(self.f.account(),before)
         self.assertNotIn('pnl_breakdown',value)  # Frontend attribution is not repeated in model input.
 
