@@ -8,6 +8,12 @@ def news_key(row):
     return hashlib.sha256(json.dumps({k:row.get(k) for k in ('time_bj','text')},ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:20]
 
 
+def fill_cause(reason):
+    """A fill is a ledger fact, not another copy of an old model's price thesis."""
+    if reason in ('持仓止损','持仓止盈') or reason.startswith('实验初始化'):
+        return reason
+    return 'AI委托成交'
+
 
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
@@ -45,5 +51,5 @@ def compact_context(context):
         if 'recent_fills' in account:
             account['recent_fills']=account['recent_fills'][:3]
             for fill in account['recent_fills']:
-                if fill.get('reason'): fill['reason']=fill['reason'][:120]
+                if fill.get('reason'): fill['reason']=fill_cause(fill['reason'])
     return out
