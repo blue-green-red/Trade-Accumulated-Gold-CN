@@ -9,7 +9,7 @@ from .jd_live_semantics import immediate_signature,management_signature,notifica
 class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
     thesis_status:Literal['new','valid','weakened','invalidated']
-    thesis:str=Field(min_length=1,max_length=180,description='当前持有或等待假设、支持证据与推翻条件')
+    thesis:str=Field(min_length=1,max_length=180,description='当前交易假设、支持证据与推翻条件')
     price_basis:str=Field(min_length=1,max_length=220,description='目标和复评价的来源及本轮沿用或调整依据；估计标为假设，无价位写不适用')
 
 class ReplacementOrder(BaseModel):
@@ -51,7 +51,7 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给输入中启用的真实账户人工建议，与模拟执行隔离；按risk_profile判断，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
-- reassessment结合previous_advice.strategy_review复核假设和旧价位；假设削弱/失效仍沿用时，price_basis给当前证据与目标可达依据，reason重算等待、现价部分减仓及退出的扣费收益/风险与仓位取舍；旧条件未触不能独立支持持有，情景目标不是涨幅上限。
+- 每轮按本户黄金/现金比例，对称比较加仓、持有、减仓/退出的扣费收益/风险与仓位取舍；不加仓时在reason说明支持买入所需的证据变化及届时规模，无可靠条件直说，不编造价位或凑单。reassessment结合previous_advice.strategy_review复核假设和旧价位；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有，情景目标不是涨幅上限。
 - 每轮评估适合无人盯盘时预挂的suggested_orders：限价买≤、限价卖≥或组合止盈止损卖出，不凑单；具体克数、价格、截止时间和依据见schema。与现有挂单及本轮买卖合计占用，不借用待卖出收入或别户资金，不重复推荐已有单；休市不保证触发成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
