@@ -31,6 +31,15 @@ class PriceReviewCondition(BaseModel):
     order_key:Optional[str]=Field(default=None,min_length=24,max_length=24,pattern='^[0-9a-f]{24}$',description='只针对某挂单复评时填写；null为账户级条件')
     reason:str=Field(max_length=500)
 
+class DownsideScenario(BaseModel):
+    price_cny:float=Field(gt=0,allow_inf_nan=False,description='自主选择有依据的下跌候选价，元/克；仅为情景，不等于下单')
+    price_role:Literal['stress_test','thesis_invalidation','risk_limit','entry_reference']
+    basis:str=Field(min_length=1,max_length=160,description='来源及该价格为何属于此用途；失效说明哪个假设被推翻，风险限制说明自选损失及理由')
+    buy_case:str=Field(min_length=1,max_length=120,description='下跌到此价加仓的价值或不合适原因，不套用现价拒买理由')
+    hold_case:str=Field(min_length=1,max_length=120,description='维持现仓的收益与风险取舍')
+    sell_case:str=Field(min_length=1,max_length=120,description='继续减仓/退出的必要性或不合适原因，考虑当前已低/高仓位')
+    preferred_action:Literal['buy','hold','sell','reassess']
+
 class LiveAdvice(BaseModel):
     action:Literal['buy','sell','hold','wait']
     grams:Optional[float]=Field(default=None,ge=0,allow_inf_nan=False)
@@ -40,6 +49,7 @@ class LiveAdvice(BaseModel):
     reason:str=Field(max_length=1600,description='简述本户持有、加仓、减仓的扣费比较与选择；不推荐条件单时说明原因，不重复reassessment')
     risk_note:str=Field(max_length=800)
     reassessment:Optional[AdviceReassessment]=None
+    downside_scenarios:list[DownsideScenario]=Field(default_factory=list,max_length=2,description='独立比较候选下跌价的加仓/持有/退出；无可支持价位填[]并在reason说明，禁止凑单')
     suggested_orders:list[SuggestedOrder]=Field(default_factory=list,max_length=2,description='本轮适合提前设置的条件单建议；互相独立、同时预留资金和克数。无合适机会填[]，不表示已挂单')
     order_management:list[OrderManagement]=Field(default_factory=list,max_length=5,description='对输入可见的已有挂单逐单给keep/cancel/replace建议，绝不直接执行')
     review_conditions:list[PriceReviewCondition]=Field(default_factory=list,max_length=4,description='使用本银行元/克报价触发AI复评；有效期沿用本条建议，不是下单条件')
@@ -52,7 +62,8 @@ PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给启用真实账户人工建议，与模拟执行隔离；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
 - reason按本户黄金/现金比例和共用比较规则选择规模与时机，补充持有、减仓/退出的扣费比较；情景标明假设，无法估计直说，不编造价位。reassessment结合previous_advice.strategy_review复核假设和旧价位；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有。
-- 每轮评估适合无人盯盘时预挂的suggested_orders：限价买≤、限价卖≥或组合止盈止损卖出，不凑单。与现有挂单及本轮买卖合计占用，不借用待卖出收入或别户资金，不重复推荐已有单；休市不保证触发成交。
+- account_risk为本户黄金+现金的扣卖费估值及风险参考，非家庭资产或必须用满的配额。downside_scenarios独立比较候选下跌价的加仓、持有、退出：压力测试价不自动成为止损，低仓位不自动买也不默认继续减仓；拒绝现价加仓不能替代较低价比较，无法支持候选价则留空并说明。
+- suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
 - review_conditions是本银行报价触发复评，沿用建议有效期；suggested_orders是需本人挂到京东的交易条件，有独立期限，二者不混用。已有单不等于成交，参数关联仅为推断。价格均为元/克，不保证成交；无账户输入填null。"""
@@ -72,9 +83,12 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         if bank not in enabled:continue
         source=(inputs.get('accounts') or {}).get(bank)
         if raw is None or not source or not source.get('revision'):continue
+        strict_downside='downside_scenarios' in raw
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
         if invalidation_note:warnings.append(invalidation_note)
-        value['risk_profile']=inputs.get('risk_profile')
+        value['risk_profile']={**(inputs.get('risk_profile') or {}),'risk_budget_cny':(source.get('account_risk') or {}).get('risk_budget_cny')}
+        value['input_account_risk']=source.get('account_risk')
+        value['input_position_pct']=source.get('position_pct')
         value['input_quote_status']=(source.get('quote') or {}).get('status')
         value['input_quote_at']=(source.get('quote') or {}).get('quoted_at')
         from .jd_live_feedback import price
@@ -85,7 +99,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
             'orders_at':(source.get('component_times') or {}).get('pending_orders')}
-        value['schema_version']=3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
+        value['schema_version']=4 if strict_downside else 3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
         value['input_state']={k:source.get(k) for k in ('total_grams','cash_cny','pending_order_count','recent_trade')}
         if source.get('status')!='fresh':warnings.append('输入账户数据不可用或过期')
         if value['action']=='sell' and (value['grams'] is None or value['grams']<=0 or value['grams']>(source.get('sellable_grams') or 0)+1e-8):warnings.append('卖出数量未填写或超过可卖克数')
@@ -97,6 +111,9 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         from .jd_live_conditions import validate_structure
         warnings.extend(validate_structure(value,source,now))
         warnings.extend(validate_proposals(value,source,now))
+        from .jd_live_risk import validate_downside,annotate
+        warnings.extend(validate_downside(value,source,require=strict_downside))
+        annotate(value,source)
         value['checks']=warnings
         value['validation_version']=1
         conn.execute('INSERT OR IGNORE INTO jd_live_advice(bank,analyst,view_id,created_at,expires_at,snapshot_revision,advice_json) VALUES(?,?,?,?,?,?,?)',
@@ -153,7 +170,8 @@ def notification_events(conn,analyst,view_id):
         order_note=f"已读取{len(orders.get('records',[]))}笔待成交明细" if orders.get('status')=='fresh' else '条件单明细待更新'
         tracking=(current.get('execution_progress') or {}).get('status')
         progress_note={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
-        structure=format_proposals(value)+format_structure(value)
+        from .jd_live_risk import format_downside
+        structure=format_downside(value)+format_proposals(value)+format_structure(value)
         if proposal_notice and not value.get('suggested_orders'):
             structure='本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。\n\n'+structure
         reason='仅推送已通过独立校验的部分；其余挂单或复评建议需核对，请查看前端明细。' if value.get('notification_partial') else value['reason']

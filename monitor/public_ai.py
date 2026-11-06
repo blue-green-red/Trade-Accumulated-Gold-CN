@@ -188,7 +188,8 @@ def privacy_ok(content, context):
     output_numbers.update(float(m.replace(",", "")) for m in re.findall(r"(?<![0-9.])\d[\d,]*(?:\.\d+)?", text))
     sensitive = {"average_cost_cny", "avg_cost", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
                  "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
-                 "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams"}
+                 "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
+                 "gold_value_cny", "gross_assets_cny", "net_assets_cny", "risk_budget_cny", "gold_down_1pct_net_loss_cny"}
     def private_numbers(value):
         if isinstance(value, dict):
             for k, v in value.items():

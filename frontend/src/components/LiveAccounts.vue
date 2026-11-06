@@ -1,6 +1,7 @@
 <script setup>
 import { computed, defineAsyncComponent } from "vue";
 import Card from "./Card.vue";
+import LiveRiskSummary from "./LiveRiskSummary.vue";
 const BankAdvice = defineAsyncComponent(() => import("./BankAdvice.vue"));
 import { pending, actionErrors, refreshLive } from "../composables/dashboard";
 import {
@@ -138,6 +139,11 @@ const cashSource = (a) =>
             </div>
           </div>
           <template v-if="section === 'holdings'">
+            <LiveRiskSummary
+              :risk="a.account_risk"
+              :profile="a.risk_profile"
+              :position="a.position_pct"
+            />
             <div class="live-gold-label">黄金持仓</div>
             <div class="live-gold-value">{{ quantity(a.total_grams) }}</div>
             <div class="live-holding-meta">

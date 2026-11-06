@@ -12,7 +12,7 @@ from .model_visibility import hidden_models
 LIVE_FIELDS = ('bank','name','status','connected','fetched_at','checked_at','message','official_url',
                'total_grams','sellable_grams','frozen_grams','cash_cny','cash_source','cash_declared_at',
                'average_cost_cny','holding_pnl_cny','holding_pnl_basis','quote','sell_fee_rate','pending_order_count',
-               'risk_profile','component_times','coverage','order_submission_enabled')
+               'risk_profile','position_pct','account_risk','component_times','coverage','order_submission_enabled')
 PORTFOLIO_FIELDS = ('key','model','analyst','name','start_mode','started','started_at','budget','value','return',
                     'cash','grams','position_pct','paused','realized_pnl','unrealized_pnl','pnl_breakdown')
 

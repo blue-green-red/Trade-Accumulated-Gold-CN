@@ -83,4 +83,8 @@ def format_proposals(value):
         expiry=stamp(order.get('expires_at'))
         line+=' · 条件单截止'+(expiry.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M 北京时间') if expiry else '待确认')
         lines.append(line+'\n'+order['reason'])
+        for leg,label in (('trigger','触发后'),('stop_loss','止损卖出后')):
+            metrics=(order.get('account_effects') or {}).get(leg) or {}
+            if metrics.get('position_after_pct') is not None:
+                lines.append(f"{label}黄金仓位约{metrics['position_after_pct']:.1f}%（单笔独立估算）。")
     return ('**以下仅为待本人确认的挂单建议，尚未提交京东。**\n\n'+'\n\n'.join(lines)+'\n\n') if lines else ''

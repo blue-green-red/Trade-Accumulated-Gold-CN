@@ -54,7 +54,7 @@ def risk_profile():
     if key not in PROFILES:key='high'
     return {'key':key,**PROFILES[key],'enforcement':'advice_reference_only',
             'risk_budget_cny':None,'historical_drawdown_pct':None,
-            'note':'金额预算取决于各户现金来源与有效报价；历史净值不完整，不能确认历史最大回撤，成本浮亏不等于峰值回撤。'}
+            'note':'金额预算见各户account_risk，仅为参考上限而非必须用满；历史峰值未知，成本浮亏不等于峰值回撤。'}
 SCHEMA='''CREATE TABLE IF NOT EXISTS jd_live_readonly (
  bank TEXT PRIMARY KEY, checked_at TEXT, public_status TEXT NOT NULL DEFAULT 'not_checked'
 );
@@ -212,6 +212,9 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
             if valid:row['message']='现金0为用户确认当前满仓的声明；完整委托明细仍未知。'
             row['revision']=hashlib.sha256((snap.get('revision','')+str(declaration[2])+str(valid)).encode()).hexdigest()[:24]
         if api_cash:row['message']='已读取该银行黄金电子账户余额；不含绑定银行卡余额。'
+        from .jd_live_risk import account_risk
+        row['position_pct'],row['account_risk']=account_risk(row,row['risk_profile'])
+        row['risk_profile']['risk_budget_cny']=row['account_risk']['risk_budget_cny']
         if include_advice and 'jd_live_advice' in tables:
             from .controls import active,control
             seen={}
@@ -249,7 +252,7 @@ def model_input(conn,now=None):
     rows=accounts(conn,now,include_advice=True)
     if not any(r.get('fetched_at') for r in rows):return None
     fields=('bank','name','product_sku','status','fetched_at','revision','total_grams','sellable_grams','frozen_grams',
-            'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
+            'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','account_risk','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
     values={r['bank']:{k:r.get(k) for k in fields} for r in rows}
     for row in rows:
         from .trade_costs import position_comparison
@@ -267,6 +270,8 @@ def model_input(conn,now=None):
                     reason=value.get('reason') or ''
                     brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
+                    if value.get('downside_scenarios'):
+                        brief['downside_scenarios']=[{k:s.get(k) for k in ('price_cny','price_role','preferred_action','basis')} for s in value['downside_scenarios']]
                     from .jd_live_feedback import strategy_review
                     brief['strategy_review']=strategy_review(conn,row,name,now)
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
@@ -281,7 +286,9 @@ def model_input(conn,now=None):
         for kind,limit in (('holding_details',3),('closed_positions',5)):
             part=row.get(kind)
             if part:values[row['bank']][kind]={**part,'records':part['records'][:limit],'limit':limit}
-    return {'execution':'advice_only_user_submits','risk_profile':risk_profile(),'accounts':values,
+    shared_profile=risk_profile()
+    shared_profile.pop('risk_budget_cny',None)  # The amount belongs to each bank's account_risk, never a shared pot.
+    return {'execution':'advice_only_user_submits','risk_profile':shared_profile,'accounts':values,
             'unknown':(['可用资金'] if any(r['cash_cny'] is None for r in rows) else [])+(['完整待成交委托列表'] if any(not (r.get('pending_orders') or {}).get('complete') for r in rows) else [])+['完整成交历史'],
             'note':'仅包含启用的真实账户；现金来源为用户声明时不可冒充接口返回；不可借用模拟盘现金或执行任何真实交易。'}
 

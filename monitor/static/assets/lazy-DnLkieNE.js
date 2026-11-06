@@ -1,0 +1,1 @@
+import{A as e,ht as t,k as n}from"./index-CeelyD0Z.js";var r=r=>t({loader:r,loadingComponent:e,errorComponent:n,delay:100,timeout:15e3});export{r as t};

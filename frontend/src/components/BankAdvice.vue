@@ -1,5 +1,8 @@
 <script setup>
 import { computed } from "vue";
+import LiveRiskSummary from "./LiveRiskSummary.vue";
+import DownsideReview from "./DownsideReview.vue";
+import OrderImpact from "./OrderImpact.vue";
 import {
   actions,
   modelNames,
@@ -135,6 +138,12 @@ const proposalState = (order) => {
       ><span class="live-advice-status">{{ stateLabel }}</span>
     </div>
     <template v-if="section !== 'orders'">
+      <LiveRiskSummary
+        :risk="advice.input_account_risk"
+        :profile="advice.risk_profile"
+        :position="advice.input_position_pct"
+        historical
+      />
       <div class="live-advice-values">
         <div>
           <div class="l">即时买卖数量</div>
@@ -205,6 +214,7 @@ const proposalState = (order) => {
           <strong>价位依据：</strong>{{ advice.reassessment.price_basis }}
         </div>
       </section>
+      <DownsideReview :items="advice.downside_scenarios" />
       <section class="live-proposals">
         <div class="live-section-heading" style="margin-top: 14px">
           <strong>建议预挂条件单</strong><span class="sub">需你在京东确认</span>
@@ -249,6 +259,7 @@ const proposalState = (order) => {
               条件单截止 {{ fmtTs(order.expires_at) }} · 北京时间
             </div>
             <div class="live-advice-reason">{{ order.reason }}</div>
+            <OrderImpact :effects="order.account_effects" :kind="order.kind" />
             <div
               v-for="check in order.checks || []"
               :key="check"
