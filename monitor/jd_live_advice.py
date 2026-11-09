@@ -141,6 +141,8 @@ def notification_events(conn,analyst,view_id):
         raw_value=json.loads(row[1]);value=notification_parts(raw_value)
         if value is None:continue
         if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
+        from .jd_live_notice_rules import reasons,LABELS
+        notice_reasons=reasons(conn,analyst,account['bank'],row[0],current['created_at'],raw_value)
         previous=conn.execute('SELECT advice_json,snapshot_revision,created_at FROM jd_live_advice WHERE bank=? AND analyst=? AND id<? ORDER BY id DESC LIMIT 1',
                               (account['bank'],analyst,row[0])).fetchone()
         raw_old=json.loads(previous[0]) if previous else None
@@ -156,8 +158,8 @@ def notification_events(conn,analyst,view_id):
         proposal_notice=(proposed_changed or renewed) and bool(old_drafts or value.get('suggested_orders'))
         manual_order_action=any(o['action'] in ('cancel','replace') for v in (old,value) if v for o in v.get('order_management',[]))
         order_notice=manual_order_action and (orders_changed or (previous and previous[1]!=row[2]))
-        if old and immediate_signature(old)==immediate_signature(value) and not orders_changed and not proposal_notice and not validation_recovered and previous[1]==row[2]:continue
-        if not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
+        if not notice_reasons and old and immediate_signature(old)==immediate_signature(value) and not orders_changed and not proposal_notice and not validation_recovered and previous[1]==row[2]:continue
+        if not notice_reasons and not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
         key=f'live-advice:{row[0]}'
         if conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue
         action={'buy':'买入建议','sell':'卖出建议','hold':'调整为持有','wait':'调整为观望'}[value['action']]
@@ -166,6 +168,8 @@ def notification_events(conn,analyst,view_id):
             action=({'cancel':'撤单建议','replace':'改单建议'}[actionable[0]['action']] if len(actionable)==1 else '挂单处理建议' if actionable else '挂单处理建议更新')
         elif proposal_notice:
             action='条件单建议' if value.get('suggested_orders') else '条件单方案更新'
+        elif notice_reasons and value['action'] in ('hold','wait'):
+            action='仓位变化复评' if 'position_changed' in notice_reasons else '当日首次评估'
         if value['action'] in ('buy','sell') and (order_notice or proposal_notice):
             action={'buy':'买入建议','sell':'卖出建议'}[value['action']]+'＋'+action
         condition={'at_or_above':'价格≥','at_or_below':'价格≤','reference':'参考价','none':'未设价格条件'}[value['price_condition']]
@@ -184,10 +188,12 @@ def notification_events(conn,analyst,view_id):
             structure='本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。\n\n'+structure
         reason='仅推送已通过独立校验的部分；其余挂单或复评建议需核对，请查看前端明细。' if value.get('notification_partial') else value['reason']
         risk='局部参数尚未通过校验，未包含在本次提醒；交易前请核对。' if value.get('notification_partial') else value['risk_note']
+        notice_note='提醒原因：'+'；'.join(LABELS[r] for r in notice_reasons)+'。\n\n' if notice_reasons else ''
         body=(f"**真实账户建议，需本人手动确认；程序未自动下单。**\n\n{account['name']} · {action}\n\n"
+              f"{notice_note}"
               f"{quantity} · {condition}{price}\n\n有效至北京时间{expiry} · 建议 #{row[0]}\n\n"
               f"{reason}\n\n{structure}风险：{risk}\n\n委托查询：{order_note}{'；'+progress_note if progress_note else ''}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
-        events.append({'key':key,'live_advice_id':row[0],'notification_topic':f"{analyst}:live_{account['bank']}",
+        events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
     return events
 

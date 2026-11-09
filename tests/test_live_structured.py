@@ -145,6 +145,8 @@ class StructuredAdviceTests(unittest.TestCase):
 
     def test_hold_with_cancel_or_replace_notifies_and_keep_only_is_quiet(self):
         set_subscription(self.s.conn,'codex:live_zheshang',True)
+        view=self.saved();events=notification_events(self.s.conn,'codex',view)
+        self.assertEqual(events[0]['notification_reasons'],['daily_first'])
         view=self.saved();self.assertEqual(notification_events(self.s.conn,'codex',view),[])
         view=self.saved(self.value('cancel'));events=notification_events(self.s.conn,'codex',view)
         self.assertEqual(len(events),1);self.assertIn('撤单建议',events[0]['title'])
