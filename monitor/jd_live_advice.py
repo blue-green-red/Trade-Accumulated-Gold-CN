@@ -3,7 +3,7 @@ import json
 from datetime import datetime,timedelta,timezone
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
-from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature,format_proposals
+from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature
 from .jd_live_semantics import immediate_signature,management_signature,notification_parts
 from .jd_live_entry import LimitBuyReview
 
@@ -130,7 +130,6 @@ def notification_events(conn,analyst,view_id):
     """Route advice through the existing dispatcher; wording never implies an executed bank trade."""
     if not view_id:return []
     from .jd_live_readonly import accounts
-    from zoneinfo import ZoneInfo
     events=[]
     for account in accounts(conn):
         row=conn.execute('SELECT id,advice_json,snapshot_revision,expires_at FROM jd_live_advice WHERE bank=? AND analyst=? AND view_id=?',
@@ -141,7 +140,7 @@ def notification_events(conn,analyst,view_id):
         raw_value=json.loads(row[1]);value=notification_parts(raw_value)
         if value is None:continue
         if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
-        from .jd_live_notice_rules import reasons,LABELS
+        from .jd_live_notice_rules import reasons
         notice_reasons=reasons(conn,analyst,account['bank'],row[0],current['created_at'],raw_value)
         previous=conn.execute('SELECT advice_json,snapshot_revision,created_at FROM jd_live_advice WHERE bank=? AND analyst=? AND id<? ORDER BY id DESC LIMIT 1',
                               (account['bank'],analyst,row[0])).fetchone()
@@ -172,57 +171,8 @@ def notification_events(conn,analyst,view_id):
             action='仓位变化复评' if 'position_changed' in notice_reasons else '当日首次评估'
         if value['action'] in ('buy','sell') and (order_notice or proposal_notice):
             action={'buy':'买入建议','sell':'卖出建议'}[value['action']]+'＋'+action
-        condition={'at_or_above':'价格≥','at_or_below':'价格≤','reference':'参考价','none':'未设价格条件'}[value['price_condition']]
-        quantity=('本轮不立即买卖' if value['action'] in ('hold','wait') else '数量待确认') if value['grams'] is None else f"{value['grams']:g}克"
-        if value['action'] in ('buy','sell'):quantity='新增买卖建议：'+{'buy':'买入','sell':'卖出'}[value['action']]+' '+quantity
-        price='' if value['price_cny'] is None else f"{value['price_cny']:g}元/克"
-        expiry=datetime.fromisoformat(row[3]).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')
-        orders=account.get('pending_orders') or {}
-        order_note=f"已读取{len(orders.get('records',[]))}笔待成交明细" if orders.get('status')=='fresh' else '条件单明细待更新'
-        tracking=(current.get('execution_progress') or {}).get('status')
-        progress_note={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
-        from .jd_live_risk import format_downside
-        from .jd_live_entry import format_reviews
-        structure=format_reviews(value)+format_downside(value)+format_proposals(value)+format_structure(value)
-        if proposal_notice and not value.get('suggested_orders'):
-            structure='本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。\n\n'+structure
-        reason='仅推送已通过独立校验的部分；其余挂单或复评建议需核对，请查看前端明细。' if value.get('notification_partial') else value['reason']
-        risk='局部参数尚未通过校验，未包含在本次提醒；交易前请核对。' if value.get('notification_partial') else value['risk_note']
-        notice_note='提醒原因：'+'；'.join(LABELS[r] for r in notice_reasons)+'。\n\n' if notice_reasons else ''
-        body=(f"**真实账户建议，需本人手动确认；程序未自动下单。**\n\n{account['name']} · {action}\n\n"
-              f"{notice_note}"
-              f"{quantity} · {condition}{price}\n\n有效至北京时间{expiry} · 建议 #{row[0]}\n\n"
-              f"{reason}\n\n{structure}风险：{risk}\n\n委托查询：{order_note}{'；'+progress_note if progress_note else ''}\n\n账户快照：{account['fetched_at']}\n\n银行报价时间：{(account.get('quote') or {}).get('quoted_at') or '未知'}\n\n详情见看板账户页。")
+        from .jd_live_notice import body as notification_body
+        body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders'))
         events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
     return events
-
-
-def format_structure(value):
-    lines=[]
-    symbol={'at_or_above':'≥','at_or_below':'≤'}
-    def terms(order):
-        grams=order.get('grams');price=order.get('price_cny')
-        if grams is None or price is None:return '参数待核对'
-        side={'sell':'卖出','buy':'买入'}.get(order.get('action'),'')
-        filled=order.get('filled_grams')
-        prices=f" · {symbol.get(order.get('price_condition'),'参考')} {price:g}元/克"
-        if order.get('kind')=='take_profit_stop_loss':
-            loss=order.get('loss_price_cny')
-            prices=f" · 止盈 ≥ {price:g}元/克 / 止损 ≤ "+(f'{loss:g}元/克' if loss is not None else '待核对')
-        return f"{side}{grams:g}克"+(f"（已成交{filled:g}克）" if filled else '')+prices
-    for item in value.get('order_management',[]):
-        original=item.get('input_order') or {}
-        action={'keep':'保留原单','cancel':'建议撤单（需本人操作）','replace':'建议改单（需本人操作）'}[item['action']]
-        line=f"挂单处理：{action} · 原单{terms(original)}"
-        if item['action']=='replace':
-            replacement=item.get('effective_replacement') or {}
-            from .jd_live_conditions import stamp
-            from zoneinfo import ZoneInfo
-            expiry=stamp(replacement.get('expires_at'))
-            deadline=expiry.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M 北京时间') if expiry else '待核对'
-            line+=f" → 修改后{terms(replacement)} · 截止{deadline}"
-        lines.append(line+'\n'+item['reason'])
-    for condition in value.get('review_conditions',[]):
-        lines.append(f"价格复评：本银行{'卖出' if condition['quote_side']=='sell' else '买入'}报价 {symbol[condition['condition']]} {condition['price_cny']:g}元/克时重新分析（不执行交易）\n{condition['reason']}")
-    return '\n\n'.join(lines)+'\n\n' if lines else ''
