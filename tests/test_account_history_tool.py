@@ -131,4 +131,7 @@ class AccountHistoryTests(unittest.TestCase):
 
     def test_zero_budget_removes_history_backend(self):
         f=self.f;f.a.settings=replace(f.settings,ai_history_max_queries=0)
+        with session(f.a,f.context(),{}) as binding:
+            if binding:self.assertNotIn(NAME,binding['readers'])
+        f.a.settings=replace(f.a.settings,ai_max_searches=0)
         with session(f.a,f.context(),{}) as binding:self.assertIsNone(binding)

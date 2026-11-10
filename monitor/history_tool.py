@@ -87,7 +87,9 @@ class HistoryReader:
                 'items':rows,'offset':offset,'has_more':more,'next_offset':offset+limit if more else None}
 
 
-def serve(reader,source=sys.stdin,target=sys.stdout):
+def serve(reader,source=sys.stdin,target=sys.stdout,page_reader=None):
+    tools={NAME:(TOOL,reader)} if reader.maximum>0 else {}
+    if page_reader and page_reader.maximum>0:tools[page_reader.tool['name']]=(page_reader.tool,page_reader)
     for line in source:
         req={}
         try:
@@ -98,12 +100,12 @@ def serve(reader,source=sys.stdin,target=sys.stdout):
             method=req.get('method');params=req.get('params') or {}
             if method=='initialize':result={'protocolVersion':params.get('protocolVersion','2024-11-05'),'capabilities':{'tools':{}},'serverInfo':{'name':'gold-account-history','version':'1.0.0'}}
             elif method=='ping':result={}
-            elif method=='tools/list':result={'tools':[TOOL]}
+            elif method=='tools/list':result={'tools':[tool for tool,_ in tools.values()]}
             elif method=='resources/list':result={'resources':[]}
             elif method=='resources/templates/list':result={'resourceTemplates':[]}
             elif method=='tools/call':
-                if params.get('name')!=NAME:raise ValueError('unknown tool')
-                value=reader.call(params.get('arguments',{}));result={'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False,separators=(',',':'))}],'isError':'error' in value}
+                if params.get('name') not in tools:raise ValueError('unknown tool')
+                value=tools[params['name']][1].call(params.get('arguments',{}));result={'content':[{'type':'text','text':json.dumps(value,ensure_ascii=False,separators=(',',':'))}],'isError':'error' in value}
             else:raise ValueError('unsupported method')
             response={'jsonrpc':'2.0','id':req['id'],'result':result}
         except (ValueError,TypeError,KeyError):response={'jsonrpc':'2.0','id':req.get('id') if isinstance(req,dict) else None,'error':{'code':-32602,'message':'Invalid history request'}}
@@ -113,4 +115,11 @@ def serve(reader,source=sys.stdin,target=sys.stdout):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--db',required=True);parser.add_argument('--model',choices=('claude','codex'),required=True)
     parser.add_argument('--as-of',required=True);parser.add_argument('--max-queries',type=int,default=6);parser.add_argument('--audit')
-    args=parser.parse_args();serve(HistoryReader(args.db,args.model,args.as_of,args.max_queries,args.audit))
+    parser.add_argument('--max-page-fetches',type=int,default=0);parser.add_argument('--page-audit');parser.add_argument('--page-cache')
+    args=parser.parse_args();page_reader=None
+    if args.max_page_fetches>0:
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('gold_public_page',Path(__file__).with_name('page_fetch.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        page_reader=module.PublicPageReader(args.max_page_fetches,args.page_audit,args.page_cache)
+    serve(HistoryReader(args.db,args.model,args.as_of,args.max_queries,args.audit),page_reader=page_reader)

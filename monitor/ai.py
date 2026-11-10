@@ -570,15 +570,16 @@ class AIAnalyst:
             policy = "本轮禁止联网搜索或抓取网页，仅允许结构化提交及只读账户历史查询工具；只根据共同上下文独立判断；缺失数据注明未知并降低置信度。"
         else:
             policy = f"本轮最多搜索 {self.settings.ai_max_searches} 次，仅补充上下文缺失的事实；数据缺失、过期或出现重大突发事件线索时优先核实。优先官方/一手来源，保留发布日期与网址；无新增可靠信息时停止搜索，不必用满次数。"
+            if self.settings.ai_page_fetch_max_calls>0:policy+=f"网页打开失败时调用fetch_public_page补取同一公开原文，可用focus定位相关段落，本轮最多{self.settings.ai_page_fetch_max_calls}次；仍失败注明未核实。"
         from .trade_costs import PROMPT as COST_PROMPT
         return (RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode=="risk_six_account" else RESEARCH_SYSTEM) + "\n" + policy + PUBLIC_PROMPT + COST_PROMPT
 
     def result_instructions(self):
         if self.settings.ai_trading_mode=="risk_six_account":
             notes=300 if self.settings.ai_optimize else 1000
-            return f"按JSON Schema提交所有字段和六户决策；research_notes最多{notes}字，只保留影响判断的事实、日期与来源，sources只列实际引用网址。reason最多360字，invalidation最多300字，内容遵守操盘要求，不重复余额或共用市场说明。历史只通过专用只读工具查询；不运行终端、不读本机文件或Skill；外部核实仅用获准搜索。"
+            return f"按JSON Schema提交所有字段和六户决策；research_notes最多{notes}字，只保留影响判断的事实、日期与来源，sources只列实际引用网址。reason最多360字，invalidation最多300字，内容遵守操盘要求，不重复余额或共用市场说明。历史只通过专用只读工具查询；不运行终端、不读本机文件或Skill；外部核实仅用获准的搜索与正文补取工具。"
         if self.settings.ai_optimize:
-            return "按 JSON schema 输出全部字段和全部活动账户决策。只允许通过专用账户历史工具按需查历史；不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；中长线持有/观望理由不超过120字，说明周期逻辑与辅助缺数的实际影响；短线reason不超过360字，空仓时无论买入或观望都给参与金额/仓位、入场E、目标T、退出R及依据、扣卖费后的收益和亏损，复查上次条件并说明变更依据；无法给数值须具体说明现有证据为何不能支持带假设情景。短线有持仓时比较持有/加减仓/退出；其他买卖理由不超过240字。观望reason以“机会不合适：”或“证据不足：”注明主要原因及依据；缺数据时指出具体影响。短线wait的invalidation不超过300字，写现有有效数据能验证的买回条件、来源及复查时点，不能等待未提供的京东完整日线或独立技术位，勿仅重复通用失效条款。不复述账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
+            return "按 JSON schema 输出全部字段和全部活动账户决策。只允许通过专用账户历史工具按需查历史；不运行终端命令，不读取本机文件或调用本机Skill；确需外部核实时只使用获准的网页搜索与正文补取工具。research_notes 控制在300字内，只保留新增或改变判断的证据、日期和来源；中长线持有/观望理由不超过120字，说明周期逻辑与辅助缺数的实际影响；短线reason不超过360字，空仓时无论买入或观望都给参与金额/仓位、入场E、目标T、退出R及依据、扣卖费后的收益和亏损，复查上次条件并说明变更依据；无法给数值须具体说明现有证据为何不能支持带假设情景。短线有持仓时比较持有/加减仓/退出；其他买卖理由不超过240字。观望reason以“机会不合适：”或“证据不足：”注明主要原因及依据；缺数据时指出具体影响。短线wait的invalidation不超过300字，写现有有效数据能验证的买回条件、来源及复查时点，不能等待未提供的京东完整日线或独立技术位，勿仅重复通用失效条款。不复述账户余额，不重复长段市场说明。不得因缩短说明省略数量、保护、有效期、失效条件或任何账户。"
         return "按给定 JSON schema 输出；research_notes 最多 1000 字，sources 仅列实际引用来源，不编造网址。"
 
     def result_type(self, context):
@@ -621,11 +622,11 @@ class AIAnalyst:
         from net_proxy import model_environment
         env = model_environment({k: v for k, v in os.environ.items() if k != "CLAWX_JR_API_KEY"})
         env.setdefault("HOME", os.path.expanduser("~"))   # systemd 下也要能找到 Claude Code 的登录凭据
-        from .history_access import session as history_session,CLAUDE_NAME
+        from .history_access import session as history_session
         with tempfile.TemporaryDirectory(prefix="gold-ai-") as workdir, history_session(self,context,usage) as history:
             if history:
                 cmd+=['--mcp-config',json.dumps(history['claude'])]
-                cmd.insert(cmd.index('--disallowedTools'),CLAUDE_NAME)
+                pos=cmd.index('--disallowedTools');cmd[pos:pos]=history['claude_names']
             proc = self._run_process(cmd, cwd=workdir, env=env, capture_output=True, text=True,
                                   timeout=CLAUDE_CODE_TIMEOUT_SECONDS)
         record(usage,"cli_response",{"stdout":proc.stdout,"stderr":proc.stderr,"returncode":proc.returncode})
@@ -666,15 +667,14 @@ class AIAnalyst:
     def _run_api_autonomous(self, context, usage):
         """One conversation submits public research and any private account decisions."""
         from .history_access import session as history_session
-        from .history_tool import NAME,DESCRIPTION,SCHEMA
         system=self.research_system()+"\n"+STRUCTURE_SYSTEM+self.trading_system(context)+"\n"+self.result_instructions()+live_advice_prompt(context)+"\n最终必须调用 submit_portfolio_decisions 提交全部活动账户的决策。先读取历史工具结果，再单独提交，不要在同一响应中同时查历史和提交。"
         messages=[{"role":"user","content":json.dumps(context,ensure_ascii=False,separators=(",",":"))}]
         tools=[{"name":"submit_portfolio_decisions","description":"返回完整研究和活动账户操作，由程序校验执行","input_schema":strict_schema(self.result_type(context).model_json_schema())}]
         if self.settings.ai_max_searches>0:tools.append({"type":"web_search_20260209","name":"web_search","max_uses":self.settings.ai_max_searches})
         with history_session(self,context,usage) as history:
-            if history:tools.append({"name":NAME,"description":DESCRIPTION,"input_schema":SCHEMA})
+            if history:tools.extend({'name':t['name'],'description':t['description'],'input_schema':t['inputSchema']} for t in history['definitions'])
             pauses=0
-            for _ in range(MAX_PAUSE_CONTINUATIONS+self.settings.ai_history_max_queries+2):
+            for _ in range(MAX_PAUSE_CONTINUATIONS+self.settings.ai_history_max_queries+(self.settings.ai_page_fetch_max_calls if self.settings.ai_max_searches>0 else 0)+2):
                 self._check_active()
                 from .analysis_archive import record
                 request=dict(max_tokens=12000,system=system,messages=messages,tools=tools)
@@ -688,9 +688,9 @@ class AIAnalyst:
                     return parsed.research_notes,[s.model_dump() for s in parsed.sources],parsed
                 results=[]
                 for block in calls:
-                    if block.name==NAME and history:
-                        result=history['reader'].call(block.input)
-                    else:result={'error':'请先读取历史查询结果，再单独调用submit_portfolio_decisions提交'}
+                    if history and block.name in history['readers']:
+                        result=history['readers'][block.name].call(block.input)
+                    else:result={'error':'请先读取只读工具结果，再单独调用submit_portfolio_decisions提交'}
                     results.append({'type':'tool_result','tool_use_id':block.id,'content':json.dumps(result,ensure_ascii=False,separators=(",",":")),'is_error':'error' in result})
                 if results:
                     messages.append({'role':'assistant','content':response.content})
@@ -705,32 +705,36 @@ class AIAnalyst:
                 + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
                 + "\n\n写简明研究笔记，列出实际使用的数据来源及时间，不编造网址。")
         messages: List[Dict[str, Any]] = [{"role": "user", "content": user}]
-        response = None
-        for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
-            self._check_active()
-            request = dict(
-                max_tokens=4000, system=self.research_system()+live_advice_prompt(context), messages=messages,
-                **({"tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": self.settings.ai_max_searches}]}
-                   if self.settings.ai_max_searches > 0 else {}),
-                output_config={"effort": "high"},
-            )
-            from .analysis_archive import record
-            record(usage,"request",{"stage":"api_research","model":getattr(self,"model",None),**request})
-            response=self._create(**request)
-            record(usage,"api_response",response)
-            self._add_usage(usage, response)
-            if response.stop_reason != "pause_turn":
-                break
-            # 服务端搜索循环到达上限：带上已有内容原样续跑，不追加「继续」
-            messages = [{"role": "user", "content": user}, {"role": "assistant", "content": response.content}]
+        response = None; sources = []
+        from .history_access import session as readonly_session
+        with readonly_session(self,context,usage) as binding:
+            tools=([{"type":"web_search_20260209","name":"web_search","max_uses":self.settings.ai_max_searches}]
+                   if self.settings.ai_max_searches>0 else [])
+            if binding:tools.extend({'name':t['name'],'description':t['description'],'input_schema':t['inputSchema']} for t in binding['definitions'])
+            for _ in range(MAX_PAUSE_CONTINUATIONS+(self.settings.ai_page_fetch_max_calls if self.settings.ai_max_searches>0 else 0)+1):
+                self._check_active()
+                request=dict(max_tokens=4000,system=self.research_system()+live_advice_prompt(context),
+                             messages=messages,output_config={"effort":"high"},**({'tools':tools} if tools else {}))
+                from .analysis_archive import record
+                record(usage,'request',{'stage':'api_research','model':getattr(self,'model',None),**request})
+                response=self._create(**request);record(usage,'api_response',response);self._add_usage(usage,response)
+                results=[]
+                for block in response.content:
+                    if block.type=='web_search_tool_result' and isinstance(block.content,list):
+                        sources.extend({'title':r.title,'url':r.url} for r in block.content if getattr(r,'type','')=='web_search_result')
+                    if block.type=='tool_use':
+                        result=binding['readers'][block.name].call(block.input) if binding and block.name in binding['readers'] else {'error':'未知只读工具'}
+                        results.append({'type':'tool_result','tool_use_id':block.id,'content':json.dumps(result,ensure_ascii=False,separators=(',',':')),'is_error':'error' in result})
+                        if result.get('url') and 'error' not in result:sources.append({'title':result.get('title') or result['url'],'url':result['url']})
+                if results:
+                    messages.append({'role':'assistant','content':response.content});messages.append({'role':'user','content':results})
+                elif response.stop_reason=='pause_turn':messages.append({'role':'assistant','content':response.content})
+                else:break
         if response.stop_reason == "max_tokens":
             raise RuntimeError("研究笔记被 max_tokens 截断")
 
         notes = "".join(b.text for b in response.content if b.type == "text").strip()
-        sources: List[Dict[str, str]] = []
-        for block in response.content:
-            if block.type == "web_search_tool_result" and isinstance(block.content, list):
-                sources += [{"title": r.title, "url": r.url} for r in block.content if getattr(r, "type", "") == "web_search_result"]
+        sources=list({r['url']:r for r in sources}.values())
         if not notes:
             raise RuntimeError("研究笔记为空")
         return notes, sources
