@@ -31,7 +31,7 @@ class Notifier:
             return "serverchan"
         return "log-only"
 
-    def send(self, title: str, body_markdown: str) -> bool:
+    def send(self, title: str, body_markdown: str, *, body_html: str | None = None) -> bool:
         """Return provider acceptance, not proof of delivery to or reading on the phone."""
         title = title[:32]
         channel = self.channel
@@ -44,7 +44,8 @@ class Notifier:
                 resp = requests.post(
                     PUSHPLUS_URL,
                     json={"token": self.settings.pushplus_token, "title": title,
-                          "content": body_markdown, "template": "markdown", "channel":"wechat"},
+                          "content": body_html if body_html is not None else body_markdown,
+                          "template": "html" if body_html is not None else "markdown", "channel":"wechat"},
                     timeout=15,
                 )
                 payload=resp.json();ok = resp.ok and payload.get("code") == 200

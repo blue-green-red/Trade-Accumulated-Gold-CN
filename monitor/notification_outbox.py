@@ -53,9 +53,14 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
         title=group[0][0]['title'] if len(group)==1 else (f'💡真实账户建议 · {len(group)}条' if category=='real_advice' else f"{group[0][0]['title']} 等{len(group)}条")
         title=title[:32]
         body='\n\n---\n\n'.join(f"### {e['title']}\n\n{e['body']}" for e,_ in group)
+        render_options={}
+        if category=='real_advice':
+            from .notification_html import real_advice
+            if len(group)==1:body=group[0][0]['body']
+            render_options['body_html']=real_advice(title,[e for e,_ in group])
         with store.conn:
             for event,_ in group:store.conn.execute("UPDATE notification_outbox SET status='sending',attempts=attempts+1,updated_at=? WHERE event_key=?",(stamp,event['key']))
-        ok=notifier.send(title,body)
+        ok=notifier.send(title,body,**render_options)
         receipt=getattr(notifier,'last_receipt',{})
         if not isinstance(receipt,dict):receipt={}
         status='accepted' if ok else receipt.get('status','failed')
