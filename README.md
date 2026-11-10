@@ -564,9 +564,9 @@ sudo systemctl enable --now gold-web
 
 密码错误限流仅信任本机回环代理覆盖的 `X-Real-IP`，按实际访问者分别计数，避免所有域名访问者共享回环IP的锁定；公网直接访问18080时忽略该请求头。
 
-HTTPS 使用独立的 `gold-https.service` 和 `/etc/nginx/gold.conf`，仅一个worker，内存上限64MB；不会加载其他 `sites-enabled` 站点，也不需要启动系统原有的 `nginx.service`。修改仓库里的部署模板后需重新复制、测试并reload，服务不会自动读取仓库修改。
+HTTPS 使用独立的 `gold-https.service` 和 `/etc/nginx/gold.conf`，仅一个worker，内存上限64MB，不加载其他 `sites-enabled` 站点。当前80端口由既有Nginx负责：原有视频中心仍转发至8097，只为 `gold.goalgoal.fun` 增加HTTP跳转和ACME验证路由；独立看板实例只监听443，避免抢占80导致反复重启。Tailscale和Jellyfin保持原有进程与端口，不读取视频内容或日志。修改仓库里的部署模板后需重新复制、测试并reload，服务不会自动读取仓库修改。
 
-首次部署（Ubuntu/Debian，模板已填写当前域名和后端端口；部署其他域名时先修改模板中的域名与证书路径）：
+首次独立部署（仅适用于没有其他进程占用80端口的机器；已有HTTP服务时使用后面的共存配置。模板已填写当前域名和后端端口，其他域名需先修改）：
 
 ```bash
 sudo apt-get install --no-install-recommends certbot
@@ -579,6 +579,8 @@ sudo certbot certonly --webroot -w /var/lib/gold-acme \
   -d gold.goalgoal.fun --cert-name gold.goalgoal.fun \
   --key-type ecdsa --non-interactive --agree-tos \
   --register-unsafely-without-email --no-eff-email
+sudo install -d -m 755 /etc/nginx/gold-http.d
+sudo install -m 644 deploy/gold-https-http-site.conf /etc/nginx/gold-http.d/gold.conf
 sudo install -m 644 deploy/gold-https.conf /etc/nginx/gold.conf
 sudo nginx -t -c /etc/nginx/gold.conf
 sudo systemctl reload gold-https.service
@@ -588,6 +590,10 @@ sudo install -m 755 deploy/gold-https-renew-hook.sh \
 sudo systemctl enable --now certbot.timer
 sudo certbot renew --cert-name gold.goalgoal.fun --dry-run --no-random-sleep-on-renew
 ```
+
+与既有Nginx共存时，将 `deploy/gold-https-http-site.conf` 安装到其 `sites-available/gold-http` 并链接至 `sites-enabled/gold-http`；保留原有站点，验证默认配置后对持有80端口的实例执行平滑reload，不另启动一套系统Nginx。此时 `/etc/nginx/gold-http.d/` 不加载任何80端口配置，`gold-https.service` 使用TLS模板只监听443。首次申请证书直接通过已有实例的ACME路由完成，无需启动独占80端口的bootstrap实例。证书签发后安装TLS配置和续期钩子，启用 `gold-https` 与 `certbot.timer`。切换模式前先确认实际端口和进程归属；不能仅凭 `nginx.service` inactive 判断80端口空闲。
+
+验证包含：HTTP跳转保留路径和查询参数、ACME测试文件可通过HTTP读取、HTTPS证书链/域名有效、私人看板未登录401而正确登录200、公众页200。共存模式还检查原视频入口的HEAD响应、原Nginx主进程及Tailscale/Jellyfin进程保持不变。不要查看视频内容或媒体访问日志来验证。
 
 `certbot.timer` 每天定时检查续期条件，到期前自动续期；部署钩子在本域名续期成功后先验证Nginx配置，再reload加载新证书。HTTP-01验证路径独立于看板密码，不代理至后端；**80端口和该验证路径需长期保留**。证书及私钥只保存在 `/etc/letsencrypt/`，不得复制到代码库、前端或模型输入。当前ACME账户未填写邮箱，续期失败排查使用 `systemctl status certbot.service` 和 `journalctl -u certbot.service`，HTTPS服务状态使用 `systemctl status gold-https.service`。
 
