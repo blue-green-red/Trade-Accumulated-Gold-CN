@@ -36,13 +36,14 @@ class WechatLabelTests(unittest.TestCase):
                 'title':'真实账户 · Codex · 浙商' if real else '📊Codex短期震荡',
                 'body':'## CODEX\n\nCodex本轮判断。\n\n[查看codex账户]('+self.url+')'}
 
-    def test_markdown_is_renamed_only_in_provider_payload_and_does_not_mutate_records(self):
+    def test_analysis_is_renamed_only_in_provider_payload_and_does_not_mutate_records(self):
         e=self.event()
         with patch('monitor.notify.requests.post',return_value=self.response) as request:
             dispatch(self.store,Notifier(self.settings),[e]);payload=request.call_args.kwargs['json']
             self.assertEqual(payload['title'],'📊AI短期震荡')
-            self.assertIn('## AI',payload['content']);self.assertIn('AI本轮判断',payload['content'])
-            self.assertIn('[查看AI账户]('+self.url+')',payload['content'])
+            self.assertEqual(payload['template'],'html');self.assertNotIn('## AI',payload['content'])
+            doc=Text(payload['content']);self.assertIn('AI本轮判断',''.join(doc.text))
+            self.assertIn('查看AI账户',''.join(doc.text));self.assertEqual(doc.links,[self.url])
             dispatch(self.store,Notifier(self.settings),[e]);self.assertEqual(request.call_count,1)
         self.assertEqual(e['title'],'📊Codex短期震荡')
         row=self.store.conn.execute('SELECT title,body FROM alerts').fetchone()

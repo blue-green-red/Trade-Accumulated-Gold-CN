@@ -25,7 +25,7 @@ from .config import BANK_NAMES, BJ, Settings  # 先导入：把 skill scripts �
 from net_proxy import apply_proxy
 
 from .accounts import Accounts, format_leaderboard
-from .ai import axis_m_from_view, format_view
+from .ai import axis_m_from_view
 from .alerts import AlertEngine, format_plan
 from .scorecard import evaluate as evaluate_scorecard, format_summary as scorecard_summary
 from .market import Market
@@ -350,9 +350,9 @@ class Monitor:
         from .ai import ANALYST_NAMES
         # Keep summaries model-scoped so one subscription cannot leak another model's result.
         for name,view in done.items():
+            from .analysis_notice import fields as analysis_notice
             self._ai_results.put({"key":f"ai:{name}:{run_id}","notification_topic":name+":analysis",
-                "title":f"📊{ANALYST_NAMES.get(name,name)}短期{axis_m_from_view(view)['axis']}",
-                "body":f"## {ANALYST_NAMES.get(name,name)}\n\n{format_view(view)}"})
+                **analysis_notice(view,ANALYST_NAMES.get(name,name))})
             from .jd_live_advice import notification_events as live_advice_events
             with closing(Store(self.settings.db_path).conn) as live_conn:
                 for event in live_advice_events(live_conn,name,view.get('_view_id')):self._ai_results.put(event)

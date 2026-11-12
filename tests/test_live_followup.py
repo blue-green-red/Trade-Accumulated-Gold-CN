@@ -76,8 +76,8 @@ class FollowupTests(unittest.TestCase):
         annotate(value,{**source(),'average_cost_cny':860})
         text=body(account,{'id':1,'expires_at':(fixtures.NOW+timedelta(hours=1)).isoformat()},value)
         self.assertIn('未发现已挂组合止盈止损单',text)
-        self.assertIn('已扣卖费的盈亏-2336.00元',text)
-        self.assertIn('整户相对分析时估值变化-6972.00元',text)
+        self.assertIn('本笔扣费盈亏：-2336.00元',text)
+        self.assertIn('整户相对分析时估值变化：-6972.00元',text)
         self.assertNotIn('已生效',text)
         self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
 

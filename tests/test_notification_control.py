@@ -110,7 +110,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(selected_events(self.store.conn,events),events[:1])
         m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
-        self.assertEqual(m.notifier.send.call_args.args,('Codex摘要','### Codex摘要\n\ncodex'))
+        self.assertEqual(m.notifier.send.call_args.args,('Codex摘要','codex'))
         self.assertEqual(self.store.conn.execute('select count(*) from alerts').fetchone()[0],5)
         self.assertEqual(self.store.conn.execute('select count(*) from alerts where delivered=1').fetchone()[0],1)
 

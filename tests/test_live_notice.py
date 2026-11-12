@@ -46,10 +46,18 @@ class LiveNoticeFormatTests(unittest.TestCase):
             self.assertIn(required,text)
         self.assertNotIn('暂无新增买卖',text)
 
+    def test_order_estimates_stay_separate_and_unknown_cost_is_not_presented_as_zero(self):
+        self.value['suggested_orders']=[self.draft(kind='limit_sell',price_cny=880,
+            account_effects={'trigger':{'account_change_cny':12.5}})]
+        text=self.render()
+        self.assertIn('本笔扣费盈亏：成本未知，暂无法估算',text)
+        self.assertIn('整户相对分析时估值变化：+12.50元',text)
+        self.assertNotIn('盈亏：+0.00',text)
+
     def test_limit_sell_direction_is_derived_from_draft_kind_without_extra_fields(self):
         self.value['suggested_orders']=[self.draft(kind='limit_sell',price_cny=880)]
         text=self.render()
-        self.assertIn('卖出2克 · ≥ 880元/克',text)
+        self.assertIn('卖出2克\n≥ 880元/克',text)
         self.assertNotIn('参考价 880',text)
 
     def test_combination_replacement_keeps_both_prices_quantity_and_expiry(self):

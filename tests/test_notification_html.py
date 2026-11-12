@@ -80,7 +80,7 @@ class HtmlDispatchTests(unittest.TestCase):
         self.response.json.return_value={'code':200,'data':'unit-html-receipt'}
     def tearDown(self):self.s.conn.close();self.tmp.cleanup()
 
-    def test_real_message_uses_html_and_summary_keeps_markdown_without_test_send(self):
+    def test_real_message_and_summary_use_shared_html_without_test_send(self):
         e=event();n=Notifier(self.settings)
         with patch('monitor.notify.requests.post',return_value=self.response) as request:
             dispatch(self.s,n,[e]);payload=request.call_args.kwargs['json']
@@ -91,7 +91,9 @@ class HtmlDispatchTests(unittest.TestCase):
             dispatch(self.s,n,[e]);self.assertEqual(request.call_count,1)
             summary={'key':'html-summary','title':'分析摘要','body':'市场概况','notification_topic':'codex:analysis'}
             dispatch(self.s,n,[summary]);payload=request.call_args.kwargs['json']
-            self.assertEqual(payload['template'],'markdown');self.assertEqual(payload['content'],'### 分析摘要\n\n市场概况')
+            self.assertEqual(payload['template'],'html')
+            self.assertEqual(Document(payload['content']).headings[0],('h1','分析摘要'))
+            self.assertIn('市场概况',payload['content']);self.assertNotIn('###',payload['content'])
         self.assertEqual(self.s.conn.execute('SELECT body FROM alerts WHERE key=?',(e['key'],)).fetchone()[0],e['body'])
 
     def test_serverchan_keeps_markdown_fallback_without_repeating_title(self):

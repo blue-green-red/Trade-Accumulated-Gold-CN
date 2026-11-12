@@ -1,4 +1,4 @@
-"""Self-contained real-account message details for PushPlus's HTML template."""
+"""Shared, self-contained message cards for analysis and real-account WeChat details."""
 from html import escape
 import re
 
@@ -19,7 +19,8 @@ def inline(text):
 def section(paragraph):
     plain=paragraph[2:-2] if paragraph.startswith('**') and paragraph.endswith('**') else paragraph
     label,colon,content=plain.partition('：')
-    known={'本轮结论','需要操作','提醒原因','低位买入','价格复评','简要依据','风险','委托查询','新增买卖建议','已有挂单'}
+    known={'本轮结论','需要操作','提醒原因','低位买入','价格复评','简要依据','风险','委托查询','新增买卖建议','已有挂单',
+           '关键变化','关键依据','下一次观察','当前保护查询','盈亏测算','时间与有效性','有效性提示'}
     if not colon or label not in known:
         label=next((name for prefix,name in (('建议撤单','挂单处理'),('建议改单','挂单处理'),
                    ('建议预挂','条件单建议'),('有效至','有效期与数据时间')) if plain.startswith(prefix)),None)
@@ -29,11 +30,11 @@ def section(paragraph):
         return ('<section style="margin:0 0 16px;padding:12px 14px;border:1px solid #e5e9ee;'
                 'border-radius:10px;background:'+background+'">'
                 '<h2 style="font-size:15px;line-height:1.5;margin:0 0 7px;font-weight:700;color:#25364a">'+escape(label)+'</h2>'
-                '<p style="margin:0;line-height:1.85">'+inline(content)+'</p></section>')
+                '<p style="margin:0;line-height:1.85">'+inline(content.strip())+'</p></section>')
     return '<p style="margin:0 0 16px;line-height:1.85">'+inline(paragraph)+'</p>'
 
 
-def real_advice(title,events):
+def message(title,events):
     """One visible title for one event; bank headings remain distinct in a merged notice."""
     display_title=events[0]['title'] if len(events)==1 else title
     parts=['<article style="max-width:640px;margin:0 auto;padding:20px 16px;box-sizing:border-box;'
@@ -44,6 +45,13 @@ def real_advice(title,events):
         if len(events)>1:
             if i:parts.append('<hr style="border:0;border-top:1px solid #d8dfe7;margin:24px 0">')
             parts.append('<h2 style="font-size:20px;line-height:1.5;margin:0 0 16px">'+escape(event['title'])+'</h2>')
-        parts.extend(section(p.strip()) for p in re.split(r'\n\s*\n',event['body']) if p.strip())
+        paragraphs=[p.strip() for p in re.split(r'\n\s*\n',event['body']) if p.strip()]
+        if event.get('notification_topic','').endswith(':analysis'):
+            while paragraphs and re.fullmatch(r'#{1,6}\s+(?:Codex|Claude|AI)',paragraphs[0],re.IGNORECASE):paragraphs.pop(0)
+        parts.extend(section(p) for p in paragraphs)
     parts.append('</main></article>')
     return ''.join(parts)
+
+
+# Keep the existing renderer import compatible for older integrations.
+real_advice=message

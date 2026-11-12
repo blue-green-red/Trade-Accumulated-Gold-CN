@@ -22,7 +22,7 @@ def brief(text,limit=160):
     return text[:end+1]+'…（详见账户页）' if end>=limit//2 else text[:limit]+'…（详见账户页）'
 
 
-def terms(order):
+def terms(order,*,multiline=False):
     grams=order.get('grams');price=order.get('price_cny')
     quantity=f'{grams:g}克' if grams is not None else '数量待确认'
     side={'buy':'买入','sell':'卖出'}.get(order.get('action'),'')
@@ -36,7 +36,9 @@ def terms(order):
     filled=order.get('filled_grams')
     remaining=(f'（已成交{filled:g}克）' if filled is not None and filled>0 else
                '（部分成交，剩余量待核对）' if order.get('status')=='partially_filled' else '')
-    return f'{side}{quantity}{remaining} · {prices} · 截止{time_text(order.get("expires_at"))}'
+    separator='\n' if multiline else ' · '
+    if multiline:prices=prices.replace(' / ','\n')
+    return separator.join((f'{side}{quantity}{remaining}',prices,'截止'+time_text(order.get('expires_at'))))
 
 
 def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
@@ -64,12 +66,12 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         condition={'at_or_above':'价格≥','at_or_below':'价格≤','reference':'参考价','none':'未设价格条件'}[value['price_condition']]
         price=f"{value['price_cny']:g}元/克" if value.get('price_cny') is not None else ''
         note='（参考价，不是触发条件）' if value['price_condition']=='reference' else ''
-        lines.append('新增买卖建议：'+{'buy':'买入','sell':'卖出'}[action]+' '+quantity+' · '+condition+price+note)
+        lines.append('新增买卖建议：'+{'buy':'买入','sell':'卖出'}[action]+' '+quantity+'\n'+condition+price+note)
     for item in manual:
         original=item.get('input_order') or {}
         label={'cancel':'建议撤单','replace':'建议改单'}[item['action']]
-        line=label+' · 原单'+terms(original)
-        if item['action']=='replace':line+='\n→ 修改后'+terms(item.get('effective_replacement') or {})
+        line=label+' · 原单'+terms(original,multiline=True)
+        if item['action']=='replace':line+='\n→ 修改后'+terms(item.get('effective_replacement') or {},multiline=True)
         if item.get('reason'):line+='\n'+brief(item['reason'],80)
         lines.append(line)
     if manual:lines.append('撤改前请核对剩余量及成交状态；尚未操作，不视为释放资金或克数。')
@@ -84,12 +86,17 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     for order in drafts:
         kind=order['kind']
         side='buy' if kind=='limit_buy' else 'sell'
-        lines.append('建议预挂（尚未提交京东）：'+terms({**order,'action':side}))
-        if order.get('reason'):lines.append(brief(order['reason'],80))
-        for leg,label in (('trigger','本笔成交'),('stop_loss','本笔止损成交')):
+        line='建议预挂（尚未提交京东）：'+terms({**order,'action':side},multiline=True)
+        if order.get('reason'):line+='\n依据：'+brief(order['reason'],80)
+        lines.append(line)
+        valuation=[]
+        for leg,label in (('trigger','止盈成交' if kind=='take_profit_stop_loss' else '卖出成交'),('stop_loss','止损成交')):
             effect=(order.get('account_effects') or {}).get(leg) or {}
-            if effect.get('position_pnl_cny') is not None:
-                lines.append(f"{label}：按买入均价估算、已扣卖费的盈亏{effect['position_pnl_cny']:+.2f}元；整户相对分析时估值变化{effect['account_change_cny']:+.2f}元。")
+            if kind!='limit_buy' and effect:
+                pnl=(f"{effect['position_pnl_cny']:+.2f}元（按买入均价估算）" if effect.get('position_pnl_cny') is not None
+                     else '成本未知，暂无法估算')
+                valuation.append(f"{label}：\n本笔扣费盈亏：{pnl}\n整户相对分析时估值变化：{effect['account_change_cny']:+.2f}元")
+        if valuation:lines.append('盈亏测算：\n'+'\n'.join(valuation))
         for review in value.get('limit_buy_reviews',[]):
             if review.get('checks') or review['decision']!='recommend' or not same_order(review,order):continue
             lines.append(f"评估目标{review['target_price_cny']:g}元/克 · 新增退出参考{review['risk_exit_cny']:g}元/克（仅风险参考，不是已挂止损）。")
@@ -100,6 +107,12 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         label={'needs_review':'仅待复评，暂不建议提前挂单；候选价格不代表买入指令',
                'not_worthwhile':'本轮不建议参与该候选方案','unavailable':'信息不足，暂未形成可挂单方案'}[review['decision']]
         lines.append('低位买入：'+label+'。\n'+brief(review.get('reason'),100))
+    if partial:
+        lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
+    else:
+        reason=value.get('reason') if action in ('buy','sell') else (value.get('reassessment') or {}).get('thesis') or value.get('reason')
+        if reason:lines.append('关键依据：'+brief(reason))
+        if value.get('risk_note'):lines.append('风险：'+brief(value['risk_note'],90))
     conditions=value.get('review_conditions',[])
     if conditions:
         observations=[]
@@ -107,20 +120,16 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
             symbol={'at_or_above':'≥','at_or_below':'≤'}[c['condition']]
             scope='（仅针对指定挂单）' if c.get('order_key') else ''
             observations.append(f"银行报价 {symbol} {c['price_cny']:g}元/克{scope}")
-        lines.append('价格复评：'+'；'.join(observations)+'。\n到价只触发重新分析，不执行交易；受交易时段、数据状态及本条建议有效期限制。')
-    if partial:
-        lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
-    else:
-        reason=value.get('reason') if action in ('buy','sell') else (value.get('reassessment') or {}).get('thesis') or value.get('reason')
-        if reason:lines.append('简要依据：'+brief(reason))
-        if value.get('risk_note'):lines.append('风险：'+brief(value['risk_note'],90))
+        lines.append('价格复评：\n'+'\n'.join(observations)+'。\n到价只触发重新分析，不执行交易；受交易时段、数据状态及本条建议有效期限制。')
     orders=account.get('pending_orders') or {}
     order_note=f"已读取{len(orders.get('records',[]))}笔待成交明细" if orders.get('status')=='fresh' else '条件单明细待更新'
     tracking=(current.get('execution_progress') or {}).get('status')
     progress={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
     lines.append('委托查询：'+order_note+('；'+progress if progress else '')+'。')
-    lines.append(f"有效至{time_text(current.get('expires_at'))} · 建议 #{current['id']}\n"
-                 f"账户更新{time_text(account.get('fetched_at'))} · 报价更新{time_text((account.get('quote') or {}).get('quoted_at'))}（以上均为北京时间）")
+    lines.append(f"时间与有效性：\n分析时间{time_text(current.get('created_at'))}\n"
+                 f"建议有效至{time_text(current.get('expires_at'))}\n"
+                 f"账户更新{time_text(account.get('fetched_at'))}\n"
+                 f"报价更新{time_text((account.get('quote') or {}).get('quoted_at'))}\n建议 #{current['id']}（以上均为北京时间）")
     lines.append('真实账户建议，需本人手动确认；程序未自动下单。')
     bank=account['bank']
     lines.append(f'[查看完整分析与挂单明细](https://gold.goalgoal.fun/#strategies/live/{bank}/advice)')

@@ -54,10 +54,10 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
         title=title[:32]
         body='\n\n---\n\n'.join(f"### {e['title']}\n\n{e['body']}" for e,_ in group)
         render_options={}
-        if category=='real_advice':
-            from .notification_html import real_advice
+        if category=='real_advice' or any(event_topic(e).endswith(':analysis') for e,_ in group):
+            from .notification_html import message
             if len(group)==1:body=group[0][0]['body']
-            render_options['body_html']=real_advice(title,[e for e,_ in group])
+            render_options['body_html']=message(title,[e for e,_ in group])
         with store.conn:
             for event,_ in group:store.conn.execute("UPDATE notification_outbox SET status='sending',attempts=attempts+1,updated_at=? WHERE event_key=?",(stamp,event['key']))
         ok=notifier.send(title,body,**render_options)

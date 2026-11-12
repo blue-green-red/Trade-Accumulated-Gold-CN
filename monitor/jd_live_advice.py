@@ -162,7 +162,7 @@ def notification_events(conn,analyst,view_id):
         if not notice_reasons and not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
         key=f'live-advice:{row[0]}'
         if conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue
-        action={'buy':'买入建议','sell':'卖出建议','hold':'调整为持有','wait':'调整为观望'}[value['action']]
+        action={'buy':'买入建议','sell':'卖出建议','hold':'持有','wait':'观望'}[value['action']]
         if order_notice:
             actionable=[o for o in value.get('order_management',[]) if o['action'] in ('cancel','replace')]
             action=({'cancel':'撤单建议','replace':'改单建议'}[actionable[0]['action']] if len(actionable)==1 else '挂单处理建议' if actionable else '挂单处理建议更新')
@@ -172,8 +172,10 @@ def notification_events(conn,analyst,view_id):
             action='仓位变化复评' if 'position_changed' in notice_reasons else '当日首次评估'
         if value['action'] in ('buy','sell') and (order_notice or proposal_notice):
             action={'buy':'买入建议','sell':'卖出建议'}[value['action']]+'＋'+action
+        if value['action'] in ('hold','wait') and action not in ('持有','观望'):
+            action={'hold':'持有','wait':'观望'}[value['action']]+'·'+action
         from .jd_live_notice import body as notification_body
         body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders'))
         events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
-                       'title':f"💡真实账户 · {analyst.title()} · {account['name']} · {action}",'body':body})
+                       'title':f"💡{analyst.title()}账户建议｜{account['name'].removesuffix('积存金')}｜{action}",'body':body})
     return events
