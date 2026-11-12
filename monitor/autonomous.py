@@ -67,7 +67,7 @@ class AccountDecision(BaseModel):
     clear_take_profit: bool = Field(default=False, description="主动取消已有止盈目标")
     valid_for_minutes: int = Field(ge=1, le=1440, description="从共同快照起算的计划有效分钟数，最长24小时")
     position_path: Optional[SimulationPath] = Field(default=None,description='新分析给目标、引用已有价格边界及追加条件；模拟保护作用于全仓')
-    reason: str = Field(min_length=1, max_length=600)
+    reason: str = Field(min_length=1, max_length=600,description='当前规模比较（事件仍未知）→事件影响；具体尺度按共用规则')
     invalidation: str = Field(max_length=400, description="判断失效的理由；程序执行价格条件、保护价和到期，语义变化交给下次分析")
 
     @model_validator(mode="after")
@@ -140,7 +140,7 @@ buy_paused=true时暂停新增买入，仍可持有、卖出或调整保护；�
 决策依据
 - position_path按共用规则给有条件目标、边界来源(risk_exit/stop_loss/none)及分步路径，复用已有价格字段；仅action和数量决定本轮交易。已有保护先执行且覆盖全仓，保护成交或边界触达撤销旧买单，须新分析；待成交买单不能预先取消旧保护，风险参考不自动平仓。
 - 使用日线和数日至周级别结构、资金与事件，忽略30分钟/1小时/4小时信号。每周约两次买卖操作仅是节奏参考，买卖各计一次，不要求凑次数、日内平仓或三日退出；目标和期限适合波段，不无限延期。
-- 空仓每轮在reason比较买入与等待：自选金额/仓位、入场E、目标T和风险退出R，按共用成本口径测算。允许明确标注假设的人民币换算情景，无需证明一定盈利；估计与历史事实分开，不编造价位、形态或胜率。无法估计须说明关键缺口；有持仓则比较持有、加减仓和退出。
+- 自选E/T/R及规模，按共用规则比较参与与等待；有持仓也比较持有、加减仓和退出。人民币换算情景可明确标为假设，无需保证盈利；不编造历史价位、形态或胜率，无法估计说明关键缺口。
 - 结合last_plan及short_wait_review复查上次条件、当轮变化和等待代价。更改门槛说明新增证据或原条件不可验证的原因；旧条件未出现也重估机会。wait的invalidation写现有数据可验证的观察条件与建议复查时点；语义条件不自动下单，复查由程序调度。
 - 有效京东执行报价和账户状态是交易必需信息；京东资金/挂单、ETF与央行配置流属于辅助证据，缺失不单独阻止交易。不能把未提供的完整京东日线或独立技术位设为前提。观望reason以“机会不合适：”（已知机会不值得参与）或“证据不足：”（关键判断或执行缺口）开头，并给依据。
 
