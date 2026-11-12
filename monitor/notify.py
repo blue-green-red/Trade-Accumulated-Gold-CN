@@ -15,6 +15,14 @@ PUSHPLUS_URL = "https://www.pushplus.plus/send"
 SERVERCHAN_URL = "https://sctapi.ftqq.com/{key}.send"
 
 
+def wechat_text(text: str, *, html: bool = False) -> str:
+    """Rename display text at the provider boundary; preserve links and HTML attributes."""
+    protected=r'https?://[^\s<>()]+'
+    if html:protected=r'<[^>]*>|'+protected
+    return ''.join(part if i%2 else re.sub('codex','AI',part,flags=re.IGNORECASE)
+                   for i,part in enumerate(re.split('('+protected+')',text)))
+
+
 class Notifier:
     def __init__(self, settings: Settings, dry_run: bool = False):
         self.settings = settings
@@ -33,7 +41,9 @@ class Notifier:
 
     def send(self, title: str, body_markdown: str, *, body_html: str | None = None) -> bool:
         """Return provider acceptance, not proof of delivery to or reading on the phone."""
-        title = title[:32]
+        title = re.sub('codex','AI',title,flags=re.IGNORECASE)[:32]
+        body_markdown = wechat_text(body_markdown)
+        if body_html is not None:body_html = wechat_text(body_html,html=True)
         channel = self.channel
         self.last_receipt = {'channel':channel,'status':'not_sent','provider_id':None,'provider_code':None}
         if channel in ("dry-run", "log-only"):
