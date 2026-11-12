@@ -20,7 +20,7 @@ def section(paragraph):
     plain=paragraph[2:-2] if paragraph.startswith('**') and paragraph.endswith('**') else paragraph
     label,colon,content=plain.partition('：')
     known={'本轮结论','需要操作','提醒原因','低位买入','价格复评','简要依据','风险','委托查询','新增买卖建议','已有挂单',
-           '概率判断','关键变化','关键依据','下一次观察','当前保护查询','盈亏测算','时间与有效性','有效性提示'}
+           '建仓路径','概率判断','关键变化','关键依据','下一次观察','当前保护查询','盈亏测算','时间与有效性','有效性提示'}
     if not colon or label not in known:
         label=next((name for prefix,name in (('建议撤单','挂单处理'),('建议改单','挂单处理'),
                    ('建议预挂','条件单建议'),('有效至','有效期与数据时间')) if plain.startswith(prefix)),None)

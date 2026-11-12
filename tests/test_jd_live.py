@@ -61,7 +61,8 @@ class LiveAccountTests(unittest.TestCase):
         self.assertEqual(row['holding_pnl_cny'],-3000)
     def test_advice_expiry_account_revision_and_model_switch(self):
         data=parse_account('zheshang',payload());record_success(self.c,'zheshang',data,NOW.isoformat())
-        inputs=model_input(self.c,NOW);value=LiveAdviceSet(zheshang=advice()).model_dump()
+        inputs=model_input(self.c,NOW);value=LiveAdviceSet(zheshang={**advice(),
+            'position_path':{'target_position_pct':None,'boundary_scenario_index':None,'exit_scope':'plan','continuation':'按新账户快照重评，尚无可量化边界。'}}).model_dump()
         save(self.c,'codex',1,value,inputs,NOW);self.c.commit()
         row=accounts(self.c,NOW)[0];self.assertEqual(row['advice'][0]['status'],'current')
         self.assertEqual(accounts(self.c,NOW+timedelta(minutes=61))[0]['advice'][0]['status'],'expired')
@@ -208,7 +209,7 @@ class LiveDashboardTests(unittest.TestCase):
                     self.assertIn('不自动撤改或下单',text)
                     self.assertIn('本轮变化',text);self.assertIn('原假设已削弱',text)
                     self.assertIn('价位依据',text);self.assertIn('建议预挂条件单',text)
-                    self.assertIn('止盈止损卖出 · 2.0000 克',text);self.assertIn('尚未提交京东',text)
+                    self.assertIn('止盈止损卖出 · 2.0000 克',text);self.assertIn('实际委托以京东为准',text)
                     self.assertIn('止损 ≤ 820.00 元/克',text)
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                     page.screenshot(path='/tmp/gold-live-proposals-mobile.png',full_page=True)

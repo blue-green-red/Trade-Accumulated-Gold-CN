@@ -24,6 +24,7 @@ def blocking_checks(value):
     local={prefix+c for field,prefix in (('order_management','挂单建议：'),
            ('review_conditions','复评条件：'),('suggested_orders','条件单建议：'),('downside_scenarios','下跌情景：'),('limit_buy_reviews','限价评估：'))
            for item in value.get(field,[]) for c in item.get('checks',[])}
+    local.update('建仓路径：'+c for c in (value.get('position_path') or {}).get('checks',[]))
     return [c for c in value.get('checks',[]) if c not in local]
 
 

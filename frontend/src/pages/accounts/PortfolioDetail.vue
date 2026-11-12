@@ -2,6 +2,7 @@
 import { computed, onMounted, onActivated } from "vue";
 import Card from "../../components/Card.vue";
 import PnlBreakdown from "../../components/PnlBreakdown.vue";
+import PositionPath from "../../components/PositionPath.vue";
 import { selectView, navigate } from "../../composables/dashboard";
 import {
   accountLabels,
@@ -14,6 +15,7 @@ import {
   statusLabel,
   validity,
   executionRange,
+  pastDeadline,
 } from "../../format";
 const props = defineProps({ data: Object });
 const a = computed(() => props.data.portfolio);
@@ -126,6 +128,15 @@ const records = (kind) =>
         >
           未设置止损：程序不会按固定亏损比例自动平仓
         </div>
+        <PositionPath
+          v-if="a.plan?.position_path"
+          :path="a.plan.position_path"
+          simulation
+          :active="
+            ['pending', 'executed'].includes(a.plan.status) &&
+            !pastDeadline(a.plan)
+          "
+        />
         <template v-if="a.plan?.decision"
           ><div v-if="a.plan.decision.risk_exit_cny" class="sub">
             计划风险退出参考

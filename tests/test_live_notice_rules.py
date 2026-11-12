@@ -18,7 +18,8 @@ NOW=datetime(2026,11,9,2,tzinfo=timezone.utc)
 
 
 def hold():
-    return LiveAdvice(action='hold',reason='维持本轮仓位',risk_note='价格仍可能波动').model_dump()
+    return LiveAdvice(action='hold',reason='维持本轮仓位',risk_note='价格仍可能波动',
+        position_path={'target_position_pct':None,'boundary_scenario_index':None,'exit_scope':'plan','continuation':'当前保留仓位，新增变化后独立比较加减仓。'}).model_dump()
 
 
 class MilestoneRulesTests(unittest.TestCase):

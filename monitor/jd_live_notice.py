@@ -107,6 +107,10 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         label={'needs_review':'仅待复评，暂不建议提前挂单；候选价格不代表买入指令',
                'not_worthwhile':'本轮不建议参与该候选方案','unavailable':'信息不足，暂未形成可挂单方案'}[review['decision']]
         lines.append('低位买入：'+label+'。\n'+brief(review.get('reason'),100))
+    if not partial:
+        from .jd_live_path import format_path
+        path_text=format_path(value)
+        if path_text:lines.append(path_text)
     if partial:
         lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
     else:

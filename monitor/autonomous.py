@@ -11,6 +11,7 @@ from .controls import MODELS, active, control, view_active
 from .execution import execution_quote
 from .store import utc_now
 from .ai_events import enqueue
+from .simulation_path import SimulationPath
 
 from .risk_profiles import MODE as RISK_MODE, MODES as RISK_MODES, LABELS as RISK_LABELS, profile, risk_state
 
@@ -65,6 +66,7 @@ class AccountDecision(BaseModel):
     clear_stop_loss: bool = Field(default=False, description="主动取消已有止损；与 stop_loss_cny 同时设置无效")
     clear_take_profit: bool = Field(default=False, description="主动取消已有止盈目标")
     valid_for_minutes: int = Field(ge=1, le=1440, description="从共同快照起算的计划有效分钟数，最长24小时")
+    position_path: Optional[SimulationPath] = Field(default=None,description='新分析给目标、引用已有价格边界及追加条件；模拟保护作用于全仓')
     reason: str = Field(min_length=1, max_length=600)
     invalidation: str = Field(max_length=400, description="判断失效的理由；程序执行价格条件、保护价和到期，语义变化交给下次分析")
 
@@ -129,13 +131,14 @@ def trading_prompt(settings):
 
 RISK_TRADING_PROMPT = """操盘目标
 你操盘六个独立模拟账户：low_full/low_empty、standard_full/standard_empty、high_full/high_empty，分别是低/标准/高风险的初始满仓/空仓起点。余额、持仓和历史以trading_accounts为准；一次提交全部六户account_decisions，禁止借款、做空、跨户调拨。
-全部账户做数日至一两周的短线波段，horizon=intraday。目标是争取扣费后的净值增长，同时考虑回撤、成本与踏空代价。目标总仓位、本轮增减量和保护由你决定，可分批推进至满仓，首笔不是仓位上限；允许有依据地提前布局、逆势反弹或分批交易，不默认小仓，不要求所有信号转多，也不以研究概率或置信度限制交易。
+全部账户做数日至一两周的短线波段，horizon=intraday。目标是争取扣费后的净值增长，同时考虑回撤、成本与踏空代价。行动和保护由你决定；允许有依据地提前布局、逆势反弹或分批交易，不默认小仓，不要求所有信号转多，也不以研究概率或置信度限制交易。
 
 风险预算
 每户上限以risk_budget为准，不是必须用满的配额。买入必填risk_exit_cny，低于当前及计划入场价；将买入后全部持仓按该参考价退出并扣费，较当前净值的计划损失不得超过trade_risk_cny。实际止损更低时按更低价计算，加仓须包含原有仓位。风险参考不自动设置止损，实际损失可能超预算。
 buy_paused=true时暂停新增买入，仍可持有、卖出或调整保护；回撤暂停不随反弹自动解除。初始满仓只是实验起点，不受单次买入预算约束。高风险账户不必比低风险账户更频繁交易或持仓更多。
 
 决策依据
+- position_path给目标总仓位、边界来源(risk_exit/stop_loss/none)和继续/暂停追加条件，复用已有价格字段；允许分批至满仓，首笔不是上限。已有保护先执行且覆盖全仓，保护成交或边界触达撤销旧买单，须新分析；待成交买单不能预先取消旧保护，风险参考不自动平仓。
 - 使用日线和数日至周级别结构、资金与事件，忽略30分钟/1小时/4小时信号。每周约两次买卖操作仅是节奏参考，买卖各计一次，不要求凑次数、日内平仓或三日退出；目标和期限适合波段，不无限延期。
 - 空仓每轮在reason比较买入与等待：自选金额/仓位、入场E、目标T和风险退出R，按共用成本口径测算。允许明确标注假设的人民币换算情景，无需证明一定盈利；估计与历史事实分开，不编造价位、形态或胜率。无法估计须说明关键缺口；有持仓则比较持有、加减仓和退出。
 - 结合last_plan及short_wait_review复查上次条件、当轮变化和等待代价。更改门槛说明新增证据或原条件不可验证的原因；旧条件未出现也重估机会。wait的invalidation写现有数据可验证的观察条件与建议复查时点；语义条件不自动下单，复查由程序调度。
@@ -219,6 +222,9 @@ def summaries(conn, settings, price):
             "position_pct": a["grams"] * price / (a["cash"] + a["grams"] * price) * 100 if price and a["cash"] + a["grams"] * price > 0 else 0,
             "paused": not active(conn, a["model"]), "fills": fills[0], "fees": fills[1],
             "plan": {**{k:plan[k] for k in plan.keys() if k!="decision_json"}, "decision": json.loads(plan["decision_json"])} if plan else None})
+    from .simulation_path import display as display_path
+    for account in rows:
+        if account.get('plan'):account['plan']['position_path']=display_path(account,account['plan'],conn)
     return rows
 
 
@@ -259,6 +265,8 @@ class AutonomousPortfolio:
             accounts[a["start_mode"]] = {k:a[k] for k in ("key", "revision", "budget", "cash", "grams", "avg_cost", "value", "unrealized_pnl", "realized_pnl", "position_pct", "stop_price", "target_price")}
             if self.settings.ai_trading_mode==RISK_MODE:accounts[a["start_mode"]]["risk_budget"]=a["risk_budget"]
             accounts[a["start_mode"]].update({"last_plan": {k:a["plan"][k] for k in ("status","reason","decision","expires_at")} if a["plan"] else None, "recent_fills": [dict(r) for r in recent]})
+            if a.get('plan') and a['plan'].get('position_path'):
+                accounts[a['start_mode']]['last_plan']['position_path_state']=a['plan']['position_path']['state']
             from .trade_costs import position_comparison
             if a['grams']>1e-9:
                 comparison=position_comparison(a['grams'],quote.get('price') if quote else None,self.settings.sell_fee_rate,self.settings.spread_cny,a['target_price'],a['stop_price'])
@@ -328,6 +336,8 @@ class AutonomousPortfolio:
 
     def _validate(self, a, d, quote, check_range=True):
         AccountDecision.model_validate(d)
+        from .simulation_path import validate as validate_path
+        validate_path(a,d,quote)
         price = quote["price"]
         if d["execution"] == "limit" and not d.get("limit_price_cny"):
             raise ValueError("限价委托缺少限价")
@@ -495,6 +505,15 @@ class AutonomousPortfolio:
                         self._reject(plan["id"],str(exc))
                         refreshes.append((a["model"],f"price-range:{plan['id']}",str(exc)))
                         continue
+                    from .simulation_path import boundary as path_boundary
+                    boundary=path_boundary(a,d)
+                    if d['action']=='buy' and boundary is not None and quote['price']<=boundary:
+                        from .simulation_path import observe as observe_path
+                        observe_path(c,a,plan,quote,utc_now().isoformat())
+                        reason='建仓边界已触达，暂停旧买单，须新分析'
+                        c.execute("UPDATE ai_plans SET status='cancelled',reason=? WHERE id=?",(reason,plan['id']))
+                        refreshes.append((a['model'],f"portfolio-path:{plan['id']}",reason))
+                        continue
                     if d["execution"] == "limit" and not (quote["price"] <= d["limit_price_cny"] if d["action"] == "buy" else quote["price"] >= d["limit_price_cny"]):
                         continue
                     if not d["min_execution_price_cny"] <= quote["price"] <= d["max_execution_price_cny"]:
@@ -515,6 +534,11 @@ class AutonomousPortfolio:
                         emitted.append({"notification_topic":a["model"]+":"+a["start_mode"].split("_")[0],"key":f"autonomous:{fill_id}","title":f"{a['model'].title()} · {(RISK_LABELS | LABELS)[a['start_mode']]} 模拟"+("买入" if d["action"]=="buy" else "卖出"),"body":f"{grams:.4f} 克 @ 京东 {quote['price']:.2f} 元/克；{d['reason']}"})
                     except (ValueError,TypeError) as exc:
                         self._reject(plan["id"],str(exc))
+                if can_trade and a['grams']>1e-9:
+                    from .simulation_path import observe as observe_path
+                    path_plan=c.execute("SELECT * FROM ai_plans WHERE account=? ORDER BY id DESC LIMIT 1",(a['key'],)).fetchone()
+                    if observe_path(c,a,path_plan,quote,utc_now().isoformat()):
+                        refreshes.append((a['model'],f"portfolio-path:{path_plan['id']}",'建仓边界触达，暂停旧追加并重新分析；风险参考不自动平仓'))
                 value = a["cash"] + a["grams"]*net_price(self.settings,quote["price"])
                 a["peak"] = max(a["peak"],value)
                 a["max_drawdown"] = max(a["max_drawdown"],1-value/a["peak"])
@@ -530,5 +554,5 @@ class AutonomousPortfolio:
                     c.execute("INSERT INTO ai_portfolio_model_stats VALUES(?,?,?) ON CONFLICT(model) DO UPDATE SET peak=excluded.peak,max_drawdown=excluded.max_drawdown",(model,peak,mdd))
         for model,event_id,reason in refreshes:
             if active(c,model):
-                enqueue(c,model,reason,0 if event_id.startswith(("portfolio-init:","price-range:","price-guard:","portfolio-stale:")) else 15,event_id,{"source":"账户风控"})
+                enqueue(c,model,reason,0 if event_id.startswith(("portfolio-init:","price-range:","price-guard:","portfolio-stale:","portfolio-path:")) else 15,event_id,{"source":"账户风控"})
         return emitted

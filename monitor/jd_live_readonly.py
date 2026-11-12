@@ -239,6 +239,8 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 from .jd_live_orders import proposal_progress
                 for proposal in entry.get('suggested_orders',[]):
                     proposal['execution_progress']=proposal_progress(proposal,r[2],row['order_history'],value.get('valid_for_minutes',240))
+                from .jd_live_path import current_state as path_current_state
+                path_current_state(entry,row,conn)
                 from .jd_live_conditions import condition_state,management_state
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
                 for condition in entry.get('review_conditions',[]):condition['monitoring']=condition_state(conn,row,entry,condition,now)
@@ -271,6 +273,8 @@ def model_input(conn,now=None):
                     reason=value.get('reason') or ''
                     brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
+                    if value.get('position_path'):
+                        brief['position_path']={k:value['position_path'].get(k) for k in ('target_position_pct','boundary_scenario_index','exit_scope','continuation','boundary_price_cny','input_grams','state')}
                     if value.get('downside_scenarios'):
                         brief['downside_scenarios']=[{k:s.get(k) for k in ('price_cny','price_role','preferred_action','basis')} for s in value['downside_scenarios']]
                     if value.get('limit_buy_reviews'):

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import LiveRiskSummary from "./LiveRiskSummary.vue";
 import DownsideReview from "./DownsideReview.vue";
 import LimitBuyReviews from "./LimitBuyReviews.vue";
+import PositionPath from "./PositionPath.vue";
 import OrderImpact from "./OrderImpact.vue";
 import {
   actions,
@@ -134,7 +135,10 @@ const proposalState = (order) => {
         {{
           section === "orders"
             ? "挂单复评"
-            : (actions[advice.action] || "待核对") + "建议"
+            : advice.position_path?.state === "boundary_reached" &&
+                advice.action === "buy"
+              ? "买入已暂停 · 待复评"
+              : (actions[advice.action] || "待核对") + "建议"
         }}</strong
       ><span class="live-advice-status">{{ stateLabel }}</span>
     </div>
@@ -215,6 +219,10 @@ const proposalState = (order) => {
           <strong>价位依据：</strong>{{ advice.reassessment.price_basis }}
         </div>
       </section>
+      <PositionPath
+        :path="advice.position_path"
+        :active="partState === 'current' && quoteFresh"
+      />
       <LimitBuyReviews
         :items="advice.limit_buy_reviews"
         :active="partState === 'current' && quoteFresh"
@@ -231,9 +239,7 @@ const proposalState = (order) => {
             v-else-if="account.protection_state?.status === 'present'"
           >
             已读取
-            {{
-              account.protection_state.count
-            }}
+            {{ account.protection_state.count }}
             笔组合止盈止损单，不代表覆盖全部持仓；与建议的关联仍需核对。
           </p>
           <p class="sub" v-else>挂单明细不足以确认保护状态，请在京东核对。</p>

@@ -96,7 +96,9 @@ def condition_state(conn,account,advice,condition,now):
     result={'condition_key':condition_key(condition),'triggered_at':watch.get('triggered_at') if watch.get('advice_id')==advice['id'] else None,
             'last_quote_at':watch.get('last_quote_at'),'last_price_cny':watch.get('last_price_cny'),
             'event_id':watch.get('event_id')}
-    if advice.get('action_status',advice['status'])!='current':result['status']=advice.get('action_status',advice['status']);return result
+    path_boundary=(advice.get('position_path') or {}).get('boundary_price_cny')
+    boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
+    if advice.get('action_status',advice['status'])!='current' and not boundary_review:result['status']=advice.get('action_status',advice['status']);return result
     if condition.get('checks'):result['status']='review_required';return result
     if not trading_session(now)['is_open']:result['status']='market_closed';return result
     quote=account.get('quote') or {}

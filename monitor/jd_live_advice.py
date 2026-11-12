@@ -6,6 +6,7 @@ from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature
 from .jd_live_semantics import immediate_signature,management_signature,notification_parts
 from .jd_live_entry import LimitBuyReview
+from .jd_live_path import PositionPath
 
 class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
@@ -50,6 +51,7 @@ class LiveAdvice(BaseModel):
     reason:str=Field(max_length=1600,description='简述本户持有、加仓、减仓的扣费比较与选择；不推荐条件单时说明原因，不重复reassessment')
     risk_note:str=Field(max_length=800)
     reassessment:Optional[AdviceReassessment]=None
+    position_path:Optional[PositionPath]=Field(default=None,description='新分析填写建仓与退出的关联；无有效账户时null，复用下跌情景，不重复算式')
     downside_scenarios:list[DownsideScenario]=Field(default_factory=list,max_length=2,description='独立比较候选下跌价的加仓/持有/退出；无可支持价位填[]并在reason说明，禁止凑单')
     limit_buy_reviews:list[LimitBuyReview]=Field(default_factory=list,max_length=2,description='新版独立评估低位提前买入方案；无可靠候选也说明具体缺口，未知参数null，不强制买入')
     suggested_orders:list[SuggestedOrder]=Field(default_factory=list,max_length=2,description='本轮适合提前设置的条件单建议；互相独立、同时预留资金和克数。无合适机会填[]，不表示已挂单')
@@ -63,7 +65,8 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给启用真实账户人工建议，与模拟执行隔离；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
-- reason按本户黄金/现金比例和共用比较规则选择规模与时机，自定目标总仓位与本轮增减量，允许分批至满仓，首笔不是仓位上限；独立比较再买一笔、维持现仓和等待，已有首笔或缺少新增利好不能单独否决追加；按当前价重算累计投入、均价及整仓风险，给追加/暂停/退出条件；补充减仓的扣费比较；情景标明假设，无法估计直说，不编造价位。reassessment结合previous_advice.strategy_review复核假设与候选变动；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有。
+- reason按本户黄金/现金比例和共用比较规则选择规模与时机；独立比较再买一笔、维持现仓和等待，已有首笔或缺少新增利好不能单独否决追加；按当前价重算累计投入、均价及整仓风险，给追加/暂停/退出条件；补充减仓的扣费比较；情景标明假设，无法估计直说，不编造价位。reassessment结合previous_advice.strategy_review复核假设与候选变动；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有。
+- position_path给目标仓位、0起的退出情景索引（无价格边界null）、退出影响整套建仓(plan)或当前这批(tranche)，以及继续/暂停追加的依据；自选损失边界不等于假设失效，须解释其范围。允许分批至满仓。保护仅覆盖确认现仓；买入或保护退出后刷新重评，旧追加不自动沿用，独立京东单不保证先后，边界内买单先复评及人工撤改确认。
 - account_risk为本户黄金+现金的扣卖费估值及风险参考，预算约束净值损失，不直接等于金价折扣或退出幅度，也非必须用满。downside_scenarios比较候选下跌价的加仓、持有、退出：压力价不自动成为止损或买点；低仓位不自动买也不默认再卖，拒绝现价不替代较低价比较，无依据可留空。
 - 废弃旧候选只在reassessment说明，不替代本轮新增评估；limit_buy_reviews仅写本轮低位方案，分别说明入场、目标、新增退出、规模及期限依据；百分比假设可用，但须说明适用性，不能仅按每轮现价固定折价滚动下移或把压力价换名作入场。候选保留、改动或废弃须结合新增事实，已触及旧候选却继续等待需解释；退出可为假设失效或自选损失限制，无需独立技术位确认。适合现价参与用buy，适合提前挂买单用recommend并给同参数买单；已知不值得用not_worthwhile，needs_review只用于影响决定的具体待核验前提，给截止及不同结果对应行动；未知参数null，不凑单、不重复评估表。
 - suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。已挂保护以本轮pending_orders为准，旧建议不等于已挂；无实际保护须说建议新挂。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
@@ -88,6 +91,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         if raw is None or not source or not source.get('revision'):continue
         strict_downside='downside_scenarios' in raw
         strict_entry='limit_buy_reviews' in raw
+        strict_path='position_path' in raw
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
         if invalidation_note:warnings.append(invalidation_note)
         value['risk_profile']={**(inputs.get('risk_profile') or {}),'risk_budget_cny':(source.get('account_risk') or {}).get('risk_budget_cny')}
@@ -103,7 +107,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
             'orders_at':(source.get('component_times') or {}).get('pending_orders')}
-        value['schema_version']=5 if strict_entry else 4 if strict_downside else 3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
+        value['schema_version']=6 if strict_path else 5 if strict_entry else 4 if strict_downside else 3 if value.get('reassessment') is not None or value.get('suggested_orders') else 2
         value['input_state']={k:source.get(k) for k in ('total_grams','cash_cny','pending_order_count','recent_trade')}
         if source.get('status')!='fresh':warnings.append('输入账户数据不可用或过期')
         if value['action']=='sell' and (value['grams'] is None or value['grams']<=0 or value['grams']>(source.get('sellable_grams') or 0)+1e-8):warnings.append('卖出数量未填写或超过可卖克数')
@@ -119,6 +123,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         warnings.extend(validate_downside(value,source,require=strict_downside))
         from .jd_live_entry import validate as validate_entry
         warnings.extend(validate_entry(value,source,now,require=strict_entry))
+        from .jd_live_path import validate as validate_path
+        warnings.extend(validate_path(value,source,now,require=strict_path))
         annotate(value,source)
         value['input_protection']=protection_state(source)
         value['checks']=warnings
@@ -138,7 +144,7 @@ def notification_events(conn,analyst,view_id):
         if not row:continue
         current=next((a for a in account['advice'] if a['id']==row[0]),None)
         if not current or current.get('action_status',current['status'])!='current':continue
-        raw_value=json.loads(row[1]);value=notification_parts(raw_value)
+        raw_value=json.loads(row[1]);value=notification_parts(current)
         if value is None:continue
         if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
         from .jd_live_notice_rules import reasons
