@@ -18,7 +18,7 @@ defineProps({ path: Object, active: Boolean, simulation: Boolean });
     </div>
     <div class="live-advice-values">
       <div>
-        <div class="l">目标黄金仓位</div>
+        <div class="l">路径目标仓位 · 以条件为准</div>
         <div class="v">
           {{
             path.target_position_pct == null
@@ -46,6 +46,7 @@ defineProps({ path: Object, active: Boolean, simulation: Boolean });
       }}
     </p>
     <p class="live-advice-reason">{{ path.continuation }}</p>
+    <p class="sub">路径目标不等于本轮买入指令；后续批次须按新快照重新分析。</p>
     <div v-if="simulation" class="sub">
       当前持仓 {{ quantity(path.input_grams) }}；已设止损覆盖
       {{ quantity(path.stop_coverage_grams) }}，已设止盈覆盖

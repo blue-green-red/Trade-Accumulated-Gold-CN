@@ -6,10 +6,10 @@ from .jd_live_conditions import stamp
 
 
 class PositionPath(BaseModel):
-    target_position_pct:Optional[float]=Field(ge=0,le=100,allow_inf_nan=False,description='自主目标总仓位；可分批至满仓，未知null')
+    target_position_pct:Optional[float]=Field(ge=0,le=100,allow_inf_nan=False,description='路径条件成立后的目标总仓位，非本轮成交量；可至满仓，未知null')
     boundary_scenario_index:Optional[int]=Field(ge=0,le=1,strict=True,description='暂停追加/退出边界引用downside_scenarios的0起索引；无价格边界null')
     exit_scope:Literal['tranche','plan']=Field(description='边界终止当前这批仓位或整套建仓；均须成交后刷新重评，非自动续买')
-    continuation:str=Field(min_length=1,max_length=220,description='继续/暂停追加条件，解释边界为何约束该范围；不重复全部价位测算')
+    continuation:str=Field(min_length=1,max_length=220,description='本轮→改善后的条件与规模；不扩仓写障碍、解除条件及复评截止，说明退出范围，不重复算式')
 
 
 def remaining(order):
@@ -122,7 +122,7 @@ def format_path(value):
     if not path or path.get('checks'):return ''
     target=path.get('target_position_pct');boundary=path.get('boundary_price_cny')
     scope='整套建仓结束并重评' if path['exit_scope']=='plan' else '当前这批退出，建仓思路仍需重评'
-    lines=['建仓路径：'+('目标仓位待确认' if target is None else f'目标黄金仓位{target:g}%')]
+    lines=['建仓路径：'+('目标仓位待确认' if target is None else f'条件成立时目标黄金仓位{target:g}%，非本轮追加指令')]
     lines.append((f'边界{boundary:g}元/克触达时 · ' if boundary is not None else '退出条件满足时 · ')+scope)
     lines.append(path['continuation']);lines.append(path['execution_note'])
     if path.get('manual_resolution_required'):lines.append('须先人工确认旧买单撤改结果，当前不新增独立买单。')

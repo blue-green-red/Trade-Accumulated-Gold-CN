@@ -65,3 +65,16 @@ class SimulationPathTests(unittest.TestCase):
         self.assertEqual(self.row()['plan']['position_path']['state'],'boundary_reached')
         events=[e for e in read(self.f.m.store.conn,'codex')['pending'] if e['id'].startswith('portfolio-path:')]
         self.assertEqual(len(events),1)
+
+    def test_conditional_growth_target_never_spends_cash_without_a_new_buy_decision(self):
+        self.publish(action='buy',amount_cny=10000,risk_exit_cny=980,position_path=path())
+        staged=path(target_position_pct=80,continuation='本轮持有10%；合成事件改善后先评估20%，再按新风险预算评估80%；中性或延期须在下轮独立重评，边界触达暂停。')
+        self.publish(action='hold',risk_exit_cny=980,position_path=staged)
+        self.f.m.portfolios.on_tick(fixtures.snapshot(995))
+        self.assertEqual(self.account()['grams'],10)
+        self.assertEqual(self.row()['plan']['position_path']['target_position_pct'],80)
+        self.assertEqual(self.row()['plan']['position_path']['continuation'],staged['continuation'])
+        self.publish(action='buy',amount_cny=5000,risk_exit_cny=980,position_path=staged)
+        self.assertEqual(self.account()['grams'],15)
+        fills=self.f.m.store.conn.execute("SELECT count(*) FROM ai_portfolio_fills WHERE account='codex:high_empty'").fetchone()[0]
+        self.assertEqual(fills,2)

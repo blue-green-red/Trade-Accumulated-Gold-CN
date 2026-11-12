@@ -5,9 +5,9 @@ from pydantic import BaseModel,Field,ConfigDict
 
 class SimulationPath(BaseModel):
     model_config=ConfigDict(extra='forbid',allow_inf_nan=False)
-    target_position_pct:Optional[float]=Field(ge=0,le=100,description='自主目标总仓位；可分批至满仓，未知null')
+    target_position_pct:Optional[float]=Field(ge=0,le=100,description='路径条件成立后的目标总仓位，非本轮成交量；可至满仓，未知null')
     boundary_source:Literal['risk_exit','stop_loss','none']=Field(description='复用risk_exit_cny或生效止损；none不另设参考边界，仍尊重已生效保护')
-    continuation:str=Field(min_length=1,max_length=120,description='继续或暂停追加的条件；边界触达或保护成交后须新分析')
+    continuation:str=Field(min_length=1,max_length=180,description='本轮→改善后的条件与规模；不扩仓写障碍、解除条件及复评截止，边界/保护触发须重评')
 
 
 def boundary(account,decision):

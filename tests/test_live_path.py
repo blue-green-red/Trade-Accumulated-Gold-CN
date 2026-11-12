@@ -43,7 +43,9 @@ class LivePathTests(unittest.TestCase):
         self.assertEqual(v['position_path']['boundary_role'],'risk_limit')
         self.assertEqual(len(v['review_conditions']),1);self.assertEqual(v['review_conditions'][0]['price_cny'],820)
         self.assertEqual(v['position_path']['coverage']['confirmed_protected_grams'],0)
+        self.assertEqual(v['position_path']['coverage']['additional_buy_grams'],0)
         self.assertIn('目标黄金仓位100%',format_path(v))
+        self.assertIn('非本轮追加指令',format_path(v))
         self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
 
     def test_actual_add_above_boundary_is_allowed_but_protection_does_not_expand_to_unfilled_buys(self):
@@ -143,7 +145,7 @@ class LivePathTests(unittest.TestCase):
         v=self.saved()
         a=accounts(self.f.s.conn,fixtures.NOW)[0]
         text=body(a,v,notification_parts(v))
-        self.assertIn('建仓路径：目标黄金仓位100%',text)
+        self.assertIn('建仓路径：条件成立时目标黄金仓位100%，非本轮追加指令',text)
         self.assertIn('当前这批退出',text);self.assertIn('刷新账户再复评',text)
         bad=self.candidate(810)
         v=self.saved(limit_buy_reviews=[bad],suggested_orders=[self.value()['suggested_orders'][0],self.buy_order(bad)])
