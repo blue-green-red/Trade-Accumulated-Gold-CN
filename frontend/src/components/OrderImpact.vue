@@ -16,8 +16,15 @@ defineProps({ effects: Object, kind: String });
           }}黄金仓位约 {{ num(effect.position_after_pct, 1) }}%</strong
         >
         <div>
-          到该价时，维持现仓的账户净值变动约
-          {{ signed(effect.account_change_pct) }}%。
+          相对分析时账户净估值变化 {{ signed(effect.account_change_cny) }} 元
+          （{{ signed(effect.account_change_pct) }}%）。
+        </div>
+        <div v-if="effect.position_pnl_cny != null">
+          本笔按买入均价估算盈亏
+          {{ signed(effect.position_pnl_cny) }} 元（已扣卖费）。
+        </div>
+        <div v-else-if="kind !== 'limit_buy'">
+          买入成本未知，本笔盈亏暂无法估算。
         </div>
         <div v-if="effect.sale_fee_cny > 0">
           本笔卖费约 {{ money(effect.sale_fee_cny) }}。

@@ -57,6 +57,10 @@ def validate(value,source,now,require=False):
     warnings=[];reviews=value.get('limit_buy_reviews',[]);orders=value.get('suggested_orders',[])
     price=quote_price(source);cash=number(source.get('cash_cny'))
     for review in reviews:
+        # Rejected plans are explanations, never current candidates or executable buy drafts.
+        if review['decision']=='not_worthwhile':
+            review['checks']=[];review['metrics']=None
+            continue
         checks=[];entry=review.get('entry_price_cny');target=review.get('target_price_cny');exit_price=review.get('risk_exit_cny')
         if entry is not None and price is not None and entry>=price:checks.append('低位入场价须低于本轮银行报价')
         if entry is not None and target is not None and target<=entry:checks.append('目标价须高于候选入场价')
@@ -88,6 +92,9 @@ DECISIONS={'recommend':'建议提前挂出','not_worthwhile':'候选机会不值
 def format_reviews(value):
     lines=[]
     for r in value.get('limit_buy_reviews',[]):
+        if r['decision']=='not_worthwhile':
+            lines.extend(('未采纳方案复核（不是当前候选）：',r['basis'],r['reason']))
+            continue
         if r.get('checks'):continue
         lines.append('低位买入评估：'+DECISIONS[r['decision']])
         known=[f'{label}{r[key]:g}元/克' for key,label in (('entry_price_cny','入场≤'),('target_price_cny','目标'),('risk_exit_cny','新增退出参考')) if r.get(key) is not None]

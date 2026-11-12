@@ -75,11 +75,21 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     if manual:lines.append('撤改前请核对剩余量及成交状态；尚未操作，不视为释放资金或克数。')
     keep=sum(o['action']=='keep' for o in management)
     if keep:lines.append(f'已有挂单：建议保留{keep}笔，原参数不变。')
+    if any(o['kind']=='take_profit_stop_loss' for o in drafts):
+        protection=account.get('protection_state') or {}
+        state=protection.get('status')
+        lines.append('当前保护查询：'+('未发现已挂组合止盈止损单；以下为新挂建议。' if state=='none' else
+            f"已读取{protection.get('count',0)}笔组合止盈止损单，不代表覆盖全部持仓；以下方案需核对。" if state=='present' else
+            '挂单明细不足以确认是否已有保护；请先核对，以下仅为建议。'))
     for order in drafts:
         kind=order['kind']
         side='buy' if kind=='limit_buy' else 'sell'
         lines.append('建议预挂（尚未提交京东）：'+terms({**order,'action':side}))
         if order.get('reason'):lines.append(brief(order['reason'],80))
+        for leg,label in (('trigger','本笔成交'),('stop_loss','本笔止损成交')):
+            effect=(order.get('account_effects') or {}).get(leg) or {}
+            if effect.get('position_pnl_cny') is not None:
+                lines.append(f"{label}：按买入均价估算、已扣卖费的盈亏{effect['position_pnl_cny']:+.2f}元；整户相对分析时估值变化{effect['account_change_cny']:+.2f}元。")
         for review in value.get('limit_buy_reviews',[]):
             if review.get('checks') or review['decision']!='recommend' or not same_order(review,order):continue
             lines.append(f"评估目标{review['target_price_cny']:g}元/克 · 新增退出参考{review['risk_exit_cny']:g}元/克（仅风险参考，不是已挂止损）。")

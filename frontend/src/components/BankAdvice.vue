@@ -195,7 +195,7 @@ const proposalState = (order) => {
           v-if="advice.input_strategy_review.revalidate_unchanged_plan"
           class="sub"
         >
-          本轮重点复核旧价位，以及继续等待与现价减仓的取舍，依据见下方本轮变化和方案比较。
+          本轮重点复核旧价位，以及新增一笔、维持现仓与减仓的取舍，依据见下方本轮变化和方案比较。
         </div>
       </div>
       <section v-if="advice.reassessment" class="live-quote live-reassessment">
@@ -221,6 +221,32 @@ const proposalState = (order) => {
       />
       <DownsideReview :items="advice.downside_scenarios" />
       <section class="live-proposals">
+        <div class="live-quote" data-protection-status>
+          <strong>当前保护查询</strong>
+          <p class="sub" v-if="account.protection_state?.status === 'none'">
+            接口未发现已挂组合止盈止损单；建议保护价不代表已生效。
+          </p>
+          <p
+            class="sub"
+            v-else-if="account.protection_state?.status === 'present'"
+          >
+            已读取
+            {{
+              account.protection_state.count
+            }}
+            笔组合止盈止损单，不代表覆盖全部持仓；与建议的关联仍需核对。
+          </p>
+          <p class="sub" v-else>挂单明细不足以确认保护状态，请在京东核对。</p>
+          <div v-if="advice.input_protection" class="sub">
+            分析时：{{
+              {
+                none: "未发现已挂组合保护",
+                present: "已读取组合保护挂单",
+                unknown: "保护状态待确认",
+              }[advice.input_protection.status]
+            }}。
+          </div>
+        </div>
         <div class="live-section-heading" style="margin-top: 14px">
           <strong>建议预挂条件单</strong><span class="sub">需你在京东确认</span>
         </div>
@@ -233,7 +259,7 @@ const proposalState = (order) => {
         </div>
         <template v-else>
           <div class="sub">
-            以下是挂单方案，尚未提交京东。休市不保证触发或成交。
+            以下是AI建议方案。是否已挂出见各单状态，实际委托以京东为准。
           </div>
           <div
             v-for="(order, i) in advice.suggested_orders"

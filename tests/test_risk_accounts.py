@@ -108,6 +108,20 @@ class RiskAccountTests(unittest.TestCase):
         budget=c.execute("select risk_exit_cny from (select json_extract(decision_json,'$.risk_exit_cny') risk_exit_cny from ai_plans where account='codex:standard_empty')").fetchone()[0]
         self.assertEqual(budget,950)
 
+    def test_multiple_buys_can_reach_full_position_with_whole_account_risk_checks(self):
+        for amount in (40000,60000):
+            data=fixtures.response().model_dump()
+            data['account_decisions']=self.decisions(high_empty={'action':'buy','amount_cny':amount,'risk_exit_cny':980})
+            self.a._run_codex=Mock(return_value=('notes',[],RiskAccountResult.model_validate(data)))
+            context={'snapshot_at':self.snap['ts'].isoformat(),'xauusd':4000,
+                'trading_accounts':self.m.portfolios.input('codex',self.snap['execution_quote'])}
+            self.a.analyze(context,'staged-full')
+            self.m.portfolios.on_tick(self.snap)
+        row=self.m.store.conn.execute("SELECT cash,grams FROM ai_portfolios WHERE key='codex:high_empty'").fetchone()
+        self.assertAlmostEqual(row[0],0);self.assertAlmostEqual(row[1],100)
+        fills=self.m.store.conn.execute("SELECT COUNT(*) FROM ai_portfolio_fills WHERE account='codex:high_empty'").fetchone()[0]
+        self.assertEqual(fills,2)
+
     def test_reset_removes_old_positions_once_preserves_market_and_controls(self):
         c=self.m.store.conn
         self.m.store.set_state('model_control:claude',{'enabled':False,'generation':4})

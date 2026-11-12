@@ -16,7 +16,7 @@ class LiveRiskBrowserTests(unittest.TestCase):
             c=f.m.store.conn;ensure_schema(c);set_enabled_banks(c,['zheshang'])
             now=datetime.now(timezone.utc)
             data=parse_account('zheshang',payload());data.update(total_grams=200,sellable_grams=200,frozen_grams=0,
-                cash_cny=700000,cash_source='jd_electronic_account_api',
+                average_cost_cny=860,cash_cny=700000,cash_source='jd_electronic_account_api',
                 quote={'buy_price_cny':875,'sell_price_cny':875,'quoted_at':now.isoformat()},pending_order_count=0,
                 pending_orders={'records':[],'total_count':0,'complete':True},coverage={'pending_orders':'available'},
                 component_times={'pending_orders':now.isoformat()})
@@ -25,7 +25,10 @@ class LiveRiskBrowserTests(unittest.TestCase):
             value=advice();value.update(action='hold',grams=None,price_cny=875,price_condition='reference',
                 limit_buy_reviews=[{'decision':'needs_review','entry_price_cny':850.,'target_price_cny':900.,'risk_exit_cny':820.,
                     'grams':10.,'expires_at':expiry,'basis':'独立候选，不默认使用旧压力价作为新增退出。',
-                    'reason':'价格单无法区分数据公布后的两种相反情景，暂不提前挂出。'}],
+                    'reason':'价格单无法区分数据公布后的两种相反情景，暂不提前挂出。'},
+                    {'decision':'not_worthwhile','entry_price_cny':880,'target_price_cny':900,'risk_exit_cny':840,
+                     'grams':10,'expires_at':(now-timedelta(hours=1)).isoformat(),
+                     'basis':'旧候选已废弃，仅留复核。','reason':'本轮重新比较新增一笔。'}],
                 downside_scenarios=[scenario()],suggested_orders=[
                     {'kind':'take_profit_stop_loss','grams':100,'price_cny':900,'loss_price_cny':840,
                      'expires_at':expiry,'reason':'测试不一致方案，应提示核对。'},
@@ -48,6 +51,11 @@ class LiveRiskBrowserTests(unittest.TestCase):
                 expect(page.locator('.live-advice')).to_contain_text('部分建议需核对')
                 expect(page.locator('.live-advice')).to_contain_text('组合止损与下跌情景选择不一致')
                 expect(page.locator('.live-advice')).to_contain_text('止损卖出后黄金仓位约 9.7%')
+                rejected=page.locator('[data-rejected-entry]');expect(rejected).to_contain_text('不是当前入场候选')
+                self.assertEqual(rejected.locator('.live-advice-values').count(),0)
+                expect(page.locator('[data-protection-status]')).to_contain_text('未发现已挂组合止盈止损单')
+                expect(page.locator('[data-order-impact]').first).to_contain_text('按买入均价估算盈亏')
+                expect(page.locator('[data-order-impact]').first).to_contain_text('相对分析时账户净估值变化')
                 for width in (390,1280):
                     page.set_viewport_size({'width':width,'height':900})
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))

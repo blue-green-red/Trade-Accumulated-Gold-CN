@@ -212,7 +212,8 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
             if valid:row['message']='现金0为用户确认当前满仓的声明；完整委托明细仍未知。'
             row['revision']=hashlib.sha256((snap.get('revision','')+str(declaration[2])+str(valid)).encode()).hexdigest()[:24]
         if api_cash:row['message']='已读取该银行黄金电子账户余额；不含绑定银行卡余额。'
-        from .jd_live_risk import account_risk
+        from .jd_live_risk import account_risk,protection_state
+        row['protection_state']=protection_state(row)
         row['position_pct'],row['account_risk']=account_risk(row,row['risk_profile'])
         row['risk_profile']['risk_budget_cny']=row['account_risk']['risk_budget_cny']
         if include_advice and 'jd_live_advice' in tables:
@@ -273,7 +274,8 @@ def model_input(conn,now=None):
                     if value.get('downside_scenarios'):
                         brief['downside_scenarios']=[{k:s.get(k) for k in ('price_cny','price_role','preferred_action','basis')} for s in value['downside_scenarios']]
                     if value.get('limit_buy_reviews'):
-                        brief['limit_buy_reviews']=[{k:s.get(k) for k in ('decision','entry_price_cny','target_price_cny','risk_exit_cny','grams','expires_at','basis','reason')} for s in value['limit_buy_reviews']]
+                        brief['limit_buy_reviews']=[{k:s.get(k) for k in (('decision','basis','reason') if s.get('decision')=='not_worthwhile' else
+                            ('decision','entry_price_cny','target_price_cny','risk_exit_cny','grams','expires_at','basis','reason'))} for s in value['limit_buy_reviews']]
                     from .jd_live_feedback import strategy_review
                     brief['strategy_review']=strategy_review(conn,row,name,now)
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]

@@ -8,6 +8,18 @@ def quote_price(source):
     return price if source.get('status')=='fresh' and quote.get('status')=='fresh' and price and price>0 else None
 
 
+def protection_state(source):
+    """Observed combination orders only; a suggested order is never proof of protection."""
+    orders=source.get('pending_orders') or {}
+    fresh=source.get('status')=='fresh' and orders.get('status')=='fresh'
+    complete=fresh and bool(orders.get('complete'))
+    count=sum(o.get('kind')=='take_profit_stop_loss' and o.get('status','pending') in ('pending','partially_filled')
+              and bool(number(o.get('loss_price_cny'))) for o in orders.get('records',[]))
+    return {'status':('present' if count else 'none' if complete else 'unknown') if fresh else 'unknown',
+            'count':count if fresh else None,'complete':complete,
+            'observed_at':(source.get('component_times') or {}).get('pending_orders')}
+
+
 def account_risk(source,profile):
     cash=number(source.get('cash_cny'));grams=number(source.get('total_grams'))
     price=quote_price(source);fee=number(source.get('sell_fee_rate'))
@@ -50,10 +62,14 @@ def effect(source,price,action=None,grams=0):
         if grams>holding+1e-8:return None
         after_cash+=grams*price*(1-fee);after_grams-=grams
     after_gross=after_cash+after_grams*price
-    return {'price_cny':price,'account_change_cny':round(changed,2),
+    result={'price_cny':price,'account_change_cny':round(changed,2),
             'account_change_pct':round(changed/net_now*100,4),
             'position_after_pct':round(after_grams*price/after_gross*100,4) if after_gross>0 else None,
             'sale_fee_cny':round(grams*price*fee,2) if action=='sell' else 0.}
+    cost=number(source.get('average_cost_cny'))
+    if action=='sell' and cost is not None:
+        result['position_pnl_cny']=round(grams*(price*(1-fee)-cost),2)
+    return result
 
 
 def annotate(value,source):

@@ -1,6 +1,16 @@
 <script setup>
+import { computed } from "vue";
 import { num, quantity, money, signed, fmtTs, pastDeadline } from "../format";
-defineProps({ items: Array, active: { type: Boolean, default: true } });
+const props = defineProps({
+  items: Array,
+  active: { type: Boolean, default: true },
+});
+const current = computed(() =>
+  (props.items || []).filter((item) => item.decision !== "not_worthwhile"),
+);
+const rejected = computed(() =>
+  (props.items || []).filter((item) => item.decision === "not_worthwhile"),
+);
 const decisions = {
   recommend: "建议提前挂出",
   not_worthwhile: "候选机会不值得参与",
@@ -10,9 +20,13 @@ const decisions = {
 </script>
 <template>
   <section v-if="items?.length" class="live-quote" data-limit-buy-review>
-    <strong>低位限价买入评估</strong>
-    <p class="sub">候选方案不等于已挂单；新增退出参考不会自动设置持仓止损。</p>
-    <div v-for="(item, i) in items" :key="i" class="live-quote">
+    <strong>{{
+      current.length ? "低位限价买入评估" : "本轮未采纳方案"
+    }}</strong>
+    <p v-if="current.length" class="sub">
+      候选方案不等于已挂单；新增退出参考不会自动设置持仓止损。
+    </p>
+    <div v-for="(item, i) in current" :key="i" class="live-quote">
       <strong>{{
         item.checks?.length
           ? "候选需核对"
@@ -70,5 +84,19 @@ const decisions = {
         需核对：{{ check }}
       </p>
     </div>
+    <details v-if="rejected.length" data-rejected-entry>
+      <summary>未采纳方案复核（{{ rejected.length }}）</summary>
+      <p class="sub">以下仅解释未采纳原因，不是当前入场候选或待执行委托。</p>
+      <div v-for="(item, i) in rejected" :key="i" class="live-quote">
+        <div v-if="item.entry_price_cny != null" class="sub">
+          原方案参考入场 {{ num(item.entry_price_cny) }} 元/克
+        </div>
+        <div v-if="item.expires_at" class="sub">
+          原方案截止 {{ fmtTs(item.expires_at) }} · 北京时间
+        </div>
+        <p class="live-advice-reason">{{ item.basis }}</p>
+        <p class="live-advice-reason">{{ item.reason }}</p>
+      </div>
+    </details>
   </section>
 </template>
