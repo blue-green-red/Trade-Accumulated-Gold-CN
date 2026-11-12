@@ -1,5 +1,6 @@
 """Compact summaries of completed views; no new model calls or trading instructions."""
 from .jd_live_notice import time_text
+from .trade_costs import number
 
 BIAS={'bullish':'偏多','bearish':'偏空','neutral':'中性'}
 
@@ -11,9 +12,20 @@ def compact(value,limit):
     return text[:end+1]+'…（详见分析页）' if end>=limit//2 else text[:limit]+'…（详见分析页）'
 
 
+def probability_lines(view):
+    lines=[]
+    for suffix,horizon,threshold in (('3d','3个交易日','0.4%'),('3m','3个月','4%')):
+        up,down=(number(view.get('p_'+side+'_'+suffix)) for side in ('up','down'))
+        if up is None or down is None or up>1 or down>1 or up+down>1+1e-8:
+            lines.append(horizon+'：概率待确认')
+        else:lines.append(f'{horizon}：涨 {up:.0%} · 跌 {down:.0%}（幅度超{threshold}）')
+    return '\n'.join(lines)+'\n国际现货金价的模型估计，其余为区间内波动。'
+
+
 def fields(view,model_name):
     short=BIAS.get(view.get('bias_short'),'待确认');long=BIAS.get(view.get('bias_long'),'待确认')
     lines=[f'本轮结论：短期{short} · 中长期{long}。\n'+compact(view.get('summary'),180)]
+    lines.append('概率判断：\n'+probability_lines(view))
     change=((view.get('public_content') or {}).get('analysis') or {}).get('change_summary')
     if change:lines.append('关键变化：'+compact(change,140))
     drivers=[]

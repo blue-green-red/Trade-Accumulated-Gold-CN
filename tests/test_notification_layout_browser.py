@@ -46,6 +46,10 @@ class NotificationLayoutBrowserTests(unittest.TestCase):
                     page.set_content('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+content)
                     self.assertEqual(page.locator('h1').count(),1)
                     self.assertNotIn('Codex',page.locator('body').inner_text());self.assertNotIn('##',page.locator('body').inner_text())
+                    if name=='analysis':
+                        expect(page.locator('main')).to_contain_text('3个交易日：涨 21% · 跌 65%')
+                        expect(page.locator('main')).to_contain_text('3个月：涨 31% · 跌 32%')
+                        self.assertNotIn('置信',page.locator('body').inner_text())
                     if name=='real':
                         self.assertIn('卖出20克\n止盈 ≥ 900元/克\n止损 ≤ 840元/克\n截止11-13 21:00',page.locator('main').inner_text())
                         expect(page.locator('main')).to_contain_text('本笔扣费盈亏：+728.00元')

@@ -36,10 +36,26 @@ class AnalysisNoticeTests(unittest.TestCase):
         for text in ('关键变化：本轮美元走强','合成依据0','合成依据2','合成事件0','合成事件1',
                      '分析时间11-12 14:00','行情快照11-12 13:58','本轮快照参考','https://gold.goalgoal.fun/#ai/research'):
             self.assertIn(text,e['body'])
-        for text in ('合成依据3','合成事件2','置信','3 日：','PRIVATE_ACCOUNT_NOT_A_SUMMARY_SOURCE','有效至'):
+        for text in ('合成依据3','合成事件2','置信','PRIVATE_ACCOUNT_NOT_A_SUMMARY_SOURCE','有效至'):
             self.assertNotIn(text,e['body'])
+        self.assertIn('3个交易日：涨 21% · 跌 65%（幅度超0.4%）',e['body'])
+        self.assertIn('3个月：涨 31% · 跌 32%（幅度超4%）',e['body'])
         self.assertEqual(v,before);self.assertEqual(v['p_up_3d'],.21)
         self.assertLess(len(e['body']),1000)
+
+    def test_invalid_or_missing_probabilities_are_unknown_without_confidence_based_estimates(self):
+        for changes in ({'p_up_3d':None},{'p_up_3d':False},{'p_up_3d':float('nan')},
+                        {'p_down_3d':float('inf')},{'p_up_3d':-1},{'p_down_3d':1.2},
+                        {'p_up_3d':.9,'p_down_3d':.9}):
+            with self.subTest(changes=changes):
+                v=view();v.update(changes);e=fields(v,'Codex')
+                self.assertIn('3个交易日：概率待确认',e['body'])
+                self.assertIn('3个月：涨 31% · 跌 32%',e['body'])
+                self.assertNotIn('置信',e['body'])
+        v=view();v['p_up_3d']=0;v['p_down_3d']=1
+        self.assertIn('3个交易日：涨 0% · 跌 100%',fields(v,'Codex')['body'])
+        for key in ('p_up_3d','p_down_3d','p_up_3m','p_down_3m'):v.pop(key)
+        self.assertEqual(fields(v,'Codex')['body'].count('概率待确认'),2)
 
     def test_missing_metadata_stays_unknown_and_invalidated_or_hard_event_warnings_remain_visible(self):
         v=view();v.update(_completed_at=None,_snapshot_at=None,drivers=[],upcoming_events=[],
@@ -68,7 +84,7 @@ class AnalysisDispatchTests(unittest.TestCase):
         self.assertEqual(payload['template'],'html');self.assertEqual(payload['title'],'📊AI行情分析｜短期偏空')
         self.assertEqual([x for x in doc.headings if x[0]=='h1'],[('h1',payload['title'])])
         self.assertEqual([text for tag,text in doc.headings if tag=='h2'],
-            ['本轮结论','关键变化','关键依据','下一次观察','时间与有效性'])
+            ['本轮结论','概率判断','关键变化','关键依据','下一次观察','时间与有效性'])
         self.assertNotIn('codex',''.join(doc.text).lower())
         self.assertEqual(self.s.conn.execute('SELECT title FROM alerts').fetchone()[0],self.e['title'])
         original=json.loads(self.s.conn.execute('SELECT event_json FROM notification_outbox').fetchone()[0])
@@ -88,3 +104,5 @@ class AnalysisDispatchTests(unittest.TestCase):
         self.assertIn('AI行情分析',data['title']);self.assertTrue(data['desp'].startswith('本轮结论：'))
         self.assertNotIn('<article',data['desp']);self.assertNotIn('## AI',data['desp'])
         self.assertIn('本轮美元走强',data['desp'])
+        self.assertIn('3个交易日：涨 21% · 跌 65%',data['desp'])
+        self.assertNotIn('置信',data['desp'])
