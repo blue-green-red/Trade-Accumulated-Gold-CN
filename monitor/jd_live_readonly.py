@@ -294,6 +294,14 @@ def model_input(conn,now=None):
                     brief['suggested_orders']=[{k:o.get(k) for k in ('kind','grams','price_cny','loss_price_cny','expires_at','reason','execution_progress')} for o in value['suggested_orders']]
                 previous.append(brief)
         values[row['bank']]['previous_advice']=previous
+        # First use / newly enabled models have no historical advice to carry the feedback.
+        from .controls import MODELS,active
+        if any(active(conn,name) and name not in counts for name in MODELS):
+            from .participation_review import current,bank_cash
+            q=row.get('quote') or {}
+            values[row['bank']]['participation_review']=(
+                {**current(bank_cash(row),row.get('total_grams'),q.get('sell_price_cny'),row.get('sell_fee_rate'),total_cash=row.get('cash_cny')),'as_of':q.get('quoted_at')}
+                if row.get('connected') and q.get('status')=='fresh' else {'status':'data_unavailable'})
         orders=values[row['bank']].get('pending_orders')
         if orders and len(orders['records'])>5:
             values[row['bank']]['pending_orders']={**orders,'records':orders['records'][:5],'source_complete':orders['complete'],'complete':False,'omitted_count':len(orders['records'])-5}

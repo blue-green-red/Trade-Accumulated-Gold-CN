@@ -127,6 +127,23 @@ class ParticipationReviewTests(unittest.TestCase):
 
 
 class LiveParticipationIntegrationTests(unittest.TestCase):
+    def test_first_analysis_and_new_model_receive_current_diagnostics_without_fake_history(self):
+        import test_live_proposals as fixtures
+        from monitor.jd_live_readonly import model_input
+        from monitor.controls import set_enabled
+        f=fixtures.LiveProposalTests();f.setUp();self.addCleanup(f.tearDown)
+        c=f.s.conn
+        first=model_input(c,fixtures.NOW)['accounts']['zheshang']
+        self.assertEqual(first['previous_advice'],[])
+        self.assertEqual(first['participation_review']['status'],'ready')
+        self.assertNotIn('waiting',first['participation_review'])
+        f.saved(f.value(suggested_orders=[]))
+        set_enabled(c,'claude',False);set_enabled(c,'claude',True)
+        value=model_input(c,fixtures.NOW)['accounts']['zheshang']
+        self.assertEqual(value['participation_review']['status'],'ready')
+        self.assertNotIn('waiting',value['participation_review'])
+        self.assertFalse(any(p['analyst']=='claude' for p in value['previous_advice']))
+
     def test_input_feedback_is_archived_and_reading_does_not_rewrite_advice(self):
         import test_live_proposals as fixtures
         from monitor.jd_live_readonly import model_input
