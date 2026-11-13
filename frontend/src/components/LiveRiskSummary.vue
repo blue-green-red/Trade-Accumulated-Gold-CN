@@ -1,5 +1,5 @@
 <script setup>
-import { num, money } from "../format";
+import { num, money, participationNames } from "../format";
 defineProps({
   risk: Object,
   profile: Object,
@@ -36,6 +36,9 @@ defineProps({
     </div>
     <p class="sub">
       仅本银行黄金＋电子户现金，不含绑定银行卡。卖费为清算估值预留，尚未扣款；风险参考不是必须用满的配额，历史峰值回撤仍未知。
+    </p>
+    <p v-if="profile?.participation_preference" class="sub">
+      行动偏好：{{ participationNames[profile.participation_preference] || profile.participation_preference }}。AI仍可基于机会及风险选择不买。
     </p>
   </section>
 </template>

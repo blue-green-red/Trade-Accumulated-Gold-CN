@@ -32,6 +32,7 @@ class LivePathBrowserTests(unittest.TestCase):
                 page=browser.new_page();page.clock.install();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
                 page.goto(url+'/#strategies/live/zheshang/advice')
                 area=page.locator('[data-position-path]')
+                expect(page.locator('[data-live-risk]').first).to_contain_text('证据分歧时偏向有限参与')
                 comparison=page.locator('[data-participation-review]')
                 expect(comparison).to_contain_text('对照规模为净资产1%和5%')
                 comparison.locator('summary').click()
@@ -82,6 +83,7 @@ class LivePathBrowserTests(unittest.TestCase):
             browser=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
             try:
                 page=browser.new_page();page.goto(url+'/#strategies/simulation/codex:high_empty')
+                expect(page.locator('.notice').filter(has_text='单次计划风险')).to_contain_text('证据分歧时偏向有限参与')
                 area=page.locator('[data-position-path]')
                 comparison=page.locator('[data-participation-review]')
                 expect(comparison).to_contain_text('±2%不是交易或复评阈值')

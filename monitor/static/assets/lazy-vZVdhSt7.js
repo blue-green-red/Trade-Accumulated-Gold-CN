@@ -1,0 +1,1 @@
+import{A as e,gt as t,j as n}from"./index-C6yGcw-u.js";var r=r=>t({loader:r,loadingComponent:n,errorComponent:e,delay:100,timeout:15e3});export{r as t};

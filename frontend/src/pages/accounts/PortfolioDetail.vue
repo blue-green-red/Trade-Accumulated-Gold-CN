@@ -17,6 +17,7 @@ import {
   validity,
   executionRange,
   pastDeadline,
+  participationNames,
 } from "../../format";
 const props = defineProps({ data: Object });
 const a = computed(() => props.data.portfolio);
@@ -121,6 +122,9 @@ const records = (kind) =>
           }}元） · 阶段回撤线 {{ a.risk_budget.drawdown_limit_pct }}% ·
           已发生最大回撤 {{ num(a.risk_budget.drawdown_pct) }}% ·
           {{ a.risk_budget.buy_paused ? "已触线，暂停新增买入" : "预算正常" }}
+          <div v-if="a.risk_budget.participation_preference" class="sub">
+            行动偏好：{{ participationNames[a.risk_budget.participation_preference] || a.risk_budget.participation_preference }}。
+          </div>
         </div>
         <div
           v-if="a.started && a.grams > 0 && a.stop_price == null"

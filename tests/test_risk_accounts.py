@@ -53,6 +53,8 @@ class RiskAccountTests(unittest.TestCase):
             self.assertTrue(v['key'].startswith('codex:'))
             self.assertEqual(v['grams']>0,k.endswith('_full'))
             self.assertIn('risk_budget',v)
+            self.assertEqual(v['risk_budget']['participation_preference'],
+                {'low':'wait','standard':'balanced','high':'participate'}[k.split('_')[0]])
         data=fixtures.response().model_dump();data['account_decisions']=self.decisions()
         self.a._run_codex=Mock(return_value=('notes',[],RiskAccountResult.model_validate(data)))
         result=self.a.analyze(context,'risk-test')
@@ -67,6 +69,23 @@ class RiskAccountTests(unittest.TestCase):
         self.assertEqual(topics,['codex:low','codex:standard','codex:high','codex:analysis','codex:live_zheshang','codex:live_minsheng'])
         reader=HistoryReader(self.settings.db_path,'codex',self.snap['ts'].isoformat())
         self.assertNotIn('error',reader.call({'account':'low_full','kind':'fills'}))
+
+    def test_participation_preference_does_not_override_explicit_wait(self):
+        c=self.m.store.conn
+        before=c.execute('SELECT count(*) FROM ai_portfolio_fills').fetchone()[0]
+        context={'snapshot_at':self.snap['ts'].isoformat(),'xauusd':4000,
+            'trading_accounts':self.m.portfolios.input('codex',self.snap['execution_quote'])}
+        self.assertEqual(context['trading_accounts']['accounts']['high_empty']['risk_budget']['participation_preference'],'participate')
+        data=fixtures.response().model_dump()
+        data['account_decisions']=self.decisions(**{k:{'action':'wait'} for k in MODES})
+        self.a._run_codex=Mock(return_value=('notes',[],RiskAccountResult.model_validate(data)))
+        self.a.analyze(context,'participation-preference')
+        self.m.portfolios.on_tick(self.snap)
+        self.assertEqual(c.execute('SELECT count(*) FROM ai_portfolio_fills').fetchone()[0],before)
+        self.assertEqual(c.execute("SELECT cash FROM ai_portfolios WHERE key='codex:high_empty'").fetchone()[0],100000)
+        plans=c.execute("SELECT status,decision_json FROM ai_plans WHERE account LIKE 'codex:%'").fetchall()
+        self.assertEqual(len(plans),6)
+        self.assertTrue(all(p['status']=='executed' and json.loads(p['decision_json'])['action']=='wait' for p in plans))
 
     def test_risk_budget_fees_additions_and_drawdown(self):
         c=self.m.store.conn

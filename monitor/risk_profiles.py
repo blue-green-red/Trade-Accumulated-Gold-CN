@@ -4,9 +4,9 @@ from .store import utc_now
 
 MODE = 'risk_six_account'
 PROFILES = {
-    'low': {'name':'低风险', 'trade_risk_pct':1.0, 'drawdown_limit_pct':5.0},
-    'standard': {'name':'标准风险', 'trade_risk_pct':2.0, 'drawdown_limit_pct':10.0},
-    'high': {'name':'高风险', 'trade_risk_pct':4.0, 'drawdown_limit_pct':20.0},
+    'low': {'name':'低风险', 'trade_risk_pct':1.0, 'drawdown_limit_pct':5.0, 'participation_preference':'wait'},
+    'standard': {'name':'标准风险', 'trade_risk_pct':2.0, 'drawdown_limit_pct':10.0, 'participation_preference':'balanced'},
+    'high': {'name':'高风险', 'trade_risk_pct':4.0, 'drawdown_limit_pct':20.0, 'participation_preference':'participate'},
 }
 MODES = tuple(f'{p}_{s}' for p in PROFILES for s in ('full','empty'))
 LABELS = {f'{p}_{s}':f'{v["name"]} · 初始'+('满仓' if s=='full' else '空仓') for p,v in PROFILES.items() for s in ('full','empty')}

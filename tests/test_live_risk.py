@@ -2,12 +2,28 @@
 from copy import deepcopy
 from datetime import timedelta
 import unittest
+import os
+from unittest.mock import patch
 
 from monitor.jd_live_risk import account_risk,effect,annotate,validate_downside
 from monitor.jd_live_proposals import proposal_signature,format_proposals
 from monitor.jd_live_semantics import notification_parts
 from monitor.public_ai import privacy_ok
 import test_live_proposals as fixtures
+
+
+class ParticipationPreferenceTests(unittest.TestCase):
+    def test_real_profile_and_saved_advice_share_simulation_preference(self):
+        from monitor.jd_live_readonly import model_input
+        from monitor.risk_profiles import profile
+        f=fixtures.LiveProposalTests();f.setUp();self.addCleanup(f.tearDown)
+        with patch.dict(os.environ,{'GOLD_JD_LIVE_RISK_PROFILE':'high'}):
+            value=model_input(f.s.conn,fixtures.NOW)
+            self.assertEqual(value['risk_profile']['participation_preference'],profile('high_empty')['participation_preference'])
+            self.assertEqual(value['risk_profile']['trade_risk_pct'],4)
+            f.saved(f.value(suggested_orders=[]))
+            self.assertEqual(f.latest()['risk_profile']['participation_preference'],'participate')
+            self.assertEqual(f.s.conn.execute('SELECT count(*) FROM jd_live_orders').fetchone()[0],0)
 
 
 def source():

@@ -1,4 +1,9 @@
 import { clock } from "./clock.js";
+export const participationNames = {
+  wait: "证据分歧时偏向等待",
+  balanced: "均衡比较参与与等待",
+  participate: "证据分歧时偏向有限参与",
+};
 const bj = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Hong_Kong",
   month: "2-digit",
