@@ -119,7 +119,7 @@ defineProps({
           判断 #{{ record.view_id }} · 计划 #{{ record.id }}
         </div>
         <div v-if="record.decision?.invalidation" class="sub">
-          失效条件：{{ record.decision.invalidation }}
+          价位依据与失效条件：{{ record.decision.invalidation }}
         </div>
       </details></template
     >

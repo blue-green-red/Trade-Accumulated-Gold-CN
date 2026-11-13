@@ -209,13 +209,7 @@ const records = (kind) =>
             <div class="sub">{{ a.short_wait_review.note }}</div>
           </div>
           <details v-if="a.plan.decision.invalidation" class="more">
-            <summary>
-              {{
-                a.plan.decision.action === "wait"
-                  ? "买回观察与复查条件"
-                  : "计划失效条件"
-              }}
-            </summary>
+            <summary>价位依据、失效与复评</summary>
             <div class="sub">{{ a.plan.decision.invalidation }}</div>
           </details></template
         >

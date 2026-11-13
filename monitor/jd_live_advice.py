@@ -12,7 +12,7 @@ class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
     thesis_status:Literal['new','valid','weakened','invalidated']
     thesis:str=Field(min_length=1,max_length=180,description='当前交易假设、支持证据与推翻条件')
-    price_basis:str=Field(min_length=1,max_length=220,description='目标和复评价的来源及本轮沿用或调整依据；估计标为假设，无价位写不适用')
+    price_basis:str=Field(min_length=1,max_length=220,description='T/R来源、期限可达性、退出幅度与敏感性按共用规则；含沿用/改动依据，假设标明，无价位写不适用')
 
 class ReplacementOrder(BaseModel):
     grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
@@ -65,7 +65,7 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给启用真实账户人工建议，与模拟执行隔离；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
-- 按本户仓位及共用规则比较，已有首笔不单独否决追加。reassessment结合previous_advice.strategy_review复核假设与候选变化；沿用削弱/失效假设时，price_basis给当前证据与目标可达依据；旧条件未触不能独立支持持有。
+- 按本户仓位及共用规则比较，已有首笔不单独否决追加。reassessment结合previous_advice.strategy_review复核假设与候选变化，price_basis集中解释价位；旧条件未触不能独立支持持有。
 - position_path写有条件目标和分步路径、0起的退出情景索引（无价格边界null）、整套(plan)或当前批次(tranche)退出及理由；自选损失边界非假设失效。路径不替代本轮action或条件单。保护仅覆盖确认现仓；买入或保护退出后刷新重评，旧追加不沿用，独立京东单不保证先后，边界内买单先复评及人工撤改确认。
 - account_risk为本户黄金+现金的扣卖费估值及风险参考，预算约束净值损失，不直接等于金价折扣或退出幅度，也非必须用满。downside_scenarios比较候选下跌价的加仓、持有、退出：压力价不自动成为止损或买点；低仓位不自动买也不默认再卖，拒绝现价不替代较低价比较，无依据可留空。
 - 废弃旧候选只在reassessment说明，不替代本轮新增评估；limit_buy_reviews仅写本轮低位方案，分别说明入场、目标、新增退出、规模及期限依据；百分比假设可用，但须说明适用性，不能仅按每轮现价固定折价滚动下移或把压力价换名作入场。候选保留、改动或废弃须结合新增事实，已触及旧候选却继续等待需解释；退出可为假设失效或自选损失限制，无需独立技术位确认。适合现价参与用buy，适合提前挂买单用recommend并给同参数买单；已知不值得用not_worthwhile，needs_review只用于影响决定的具体待核验前提，给截止及不同结果对应行动；未知参数null，不凑单、不重复评估表。

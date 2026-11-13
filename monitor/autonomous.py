@@ -68,7 +68,7 @@ class AccountDecision(BaseModel):
     valid_for_minutes: int = Field(ge=1, le=1440, description="从共同快照起算的计划有效分钟数，最长24小时")
     position_path: Optional[SimulationPath] = Field(default=None,description='新分析给目标、引用已有价格边界及追加条件；模拟保护作用于全仓')
     reason: str = Field(min_length=1, max_length=600,description='当前规模比较（事件仍未知）→事件影响；具体尺度按共用规则')
-    invalidation: str = Field(max_length=400, description="判断失效的理由；程序执行价格条件、保护价和到期，语义变化交给下次分析")
+    invalidation: str = Field(max_length=400, description="T/R选择依据与敏感性按共用规则，含判断失效及保护沿用/改动理由；语义变化交下轮")
 
     @model_validator(mode="after")
     def execution_range(self):
