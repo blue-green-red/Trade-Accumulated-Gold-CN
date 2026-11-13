@@ -12,7 +12,7 @@ from monitor.config import Settings
 from monitor.store import Store,utc_now
 from monitor.ai import AIAnalyst
 from monitor.ai_inputs import compact_context
-from monitor.codex_runtime import Events,choose_session
+from monitor.codex_runtime import Events,choose_session,run_frozen
 from monitor.controls import set_enabled
 from test_autonomous import response,LABELS
 
@@ -112,6 +112,21 @@ class SpeedTests(unittest.TestCase):
         for i in range(1,len(raw)):events.feed(raw[:i])
         events.feed(raw,final=True)
         self.assertEqual(usage['input'],5);self.assertNotIn('cached',usage)
+
+    def test_frozen_request_preserves_exact_context_schema_and_disables_all_tools(self):
+        self.a.settings=replace(self.settings,codex_resume_enabled=False,ai_history_max_queries=0,ai_page_fetch_max_calls=0)
+        original=deepcopy(self.ctx)
+        req={'mode':'fresh','system':'Frozen original policy','user':'Archived exact user JSON',
+             'context':self.ctx,'schema':response().model_json_schema()}
+        run_frozen(self.a,req,{})
+        cmd=self.calls[0][0]
+        self.assertEqual(cmd[-1],req['system']+'\n\n'+req['user'])
+        self.assertEqual(json.loads(Path(cmd[cmd.index('--output-schema')+1]).read_text()),req['schema'])
+        self.assertIn('--ephemeral',cmd);self.assertNotIn('resume',cmd)
+        for value in ('mcp_servers={}','features.apps=false','features.shell_tool=false','features.unified_exec=false',
+                      'features.multi_agent=false','web_search="disabled"'):
+            self.assertIn(value,cmd)
+        self.assertEqual(self.ctx,original)
 
 
 if __name__=='__main__':unittest.main()
