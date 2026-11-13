@@ -104,24 +104,9 @@ class Monitor:
         return bool(self._ai_thread and self._ai_thread.is_alive())
 
     def recent_jin10(self) -> List[Dict]:
-        """主线程调用（AI 后台线程不能用这里的 SQLite 连接）：给 AI 的金十快讯——
-        24 小时内金十标红的重要快讯（最多 12 条）+ 6 小时内其他相关快讯（最多 6 条），新→旧。"""
-        now = datetime.now(BJ)
-        day = (now - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
-        six = (now - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
-        flashes = sorted(self.store.get_state("jin10_flash", []), key=lambda x: x["time_bj"], reverse=True)
-        chosen, seen, counts = [], set(), {True: 0, False: 0}
-        for x in flashes:
-            important = bool(x["important"])
-            text_key = "".join(x["text"].split())
-            if x["time_bj"] < (day if important else six) or text_key in seen:
-                continue
-            if counts[important] >= (12 if important else 6):
-                continue
-            seen.add(text_key)
-            counts[important] += 1
-            chosen.append({"time_bj": x["time_bj"], "important": important, "text": x["text"][:160]})
-        return chosen
+        """主线程连接；主题/政策发言覆盖与最新快讯共用固定输入预算。"""
+        from .research_evidence import select_news
+        return select_news(self.store.get_state('jin10_flash',[]),utc_now())
 
     def ai_context(self, snap, plan, jin10_recent=None) -> Dict:
         """给 AI 的上下文：行情 + 代码算出的点位 + 经济日历与宏观行情（均为程序直取，无需浏览器）。"""
@@ -143,6 +128,9 @@ class Monitor:
             ctx["daily_indicators"] = daily_indicators(snap,now)
             ctx["daily_trend_reference"] = daily_reference(store.conn,now)
             ctx["jd_daily_samples"] = jd_daily_samples(store.conn,now)
+            from .research_evidence import build as research_evidence
+            evidence=research_evidence(store.conn,now)
+            if evidence:ctx['public_evidence']=evidence
             from .macro_cache import age_seconds
             times = {kind: macro.get(kind + "_fetched_at", macro.get("fetched_at"))
                      for kind in ("quotes", "calendar")}
@@ -263,12 +251,13 @@ class Monitor:
                 if not live_preflight['can_analyze']:
                     log.info("真实账户仍在刷新，本轮暂缓模型分析；保留手动请求与待覆盖事件")
                     return
-                if live_preflight.get('waited_seconds', 0) >= 1:
-                    latest = coverage_store.get_state('web_snapshot', {})
-                    if latest.get('ts') and snap.get('ts') and datetime.fromisoformat(latest['ts']) > snap['ts']:
-                        snap = {**snap, **latest, 'ts': datetime.fromisoformat(latest['ts'])}
-                        base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, spread_cny=self.settings.spread_cny,
-                                               sell_fee_rate=self.settings.sell_fee_rate, ratio_bank=self.settings.paper_bank)
+                latest = coverage_store.get_state('web_snapshot', {})
+                if latest.get('ts') and snap.get('ts') and datetime.fromisoformat(latest['ts']) > snap['ts']:
+                    snap = {**snap, **latest, 'ts': datetime.fromisoformat(latest['ts'])}
+                    base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, spread_cny=self.settings.spread_cny,
+                                           sell_fee_rate=self.settings.sell_fee_rate, ratio_bank=self.settings.paper_bank)
+                from .research_evidence import select_news
+                jin10_recent=select_news(coverage_store.get_state('jin10_flash',jin10_recent or []),snap.get('ts') or utc_now())
                 pending = {name: read_events(coverage_store.conn, name)["pending"] for name in due}
                 portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
