@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
+from types import SimpleNamespace
 import test_autonomous as fixtures
 from monitor.config import Settings
 from monitor.__main__ import Monitor
@@ -86,6 +87,28 @@ class RiskAccountTests(unittest.TestCase):
         plans=c.execute("SELECT status,decision_json FROM ai_plans WHERE account LIKE 'codex:%'").fetchall()
         self.assertEqual(len(plans),6)
         self.assertTrue(all(p['status']=='executed' and json.loads(p['decision_json'])['action']=='wait' for p in plans))
+
+    def test_six_and_live_accounts_receive_shared_policy_once_in_actual_request(self):
+        from monitor.trade_costs import PROMPT
+        context={'snapshot_at':self.snap['ts'].isoformat(),'xauusd':4000,
+            'trading_accounts':self.m.portfolios.input('codex',self.snap['execution_quote']),
+            'live_readonly_accounts':{'risk_profile':{'key':'high'},'accounts':{'zheshang':{
+                'status':'fresh','cash_cny':900000,'total_grams':50,
+                'quote':{'status':'fresh','buy_price_cny':1000,'sell_price_cny':1000}}}}}
+        data=fixtures.response().model_dump()
+        data['account_decisions']=self.decisions(**{k:{'action':'wait'} for k in MODES})
+        result=RiskAccountResult.model_validate(data);requests=[]
+        def process(cmd,**kwargs):
+            Path(cmd[cmd.index('-o')+1]).write_text(result.model_dump_json())
+            return SimpleNamespace(stdout='',stderr='',returncode=0)
+        self.a.settings=replace(self.settings,codex_resume_enabled=False,ai_history_max_queries=0,ai_max_searches=0,ai_page_fetch_max_calls=0)
+        with patch.object(self.a,'_run_process',side_effect=process),patch('monitor.analysis_archive.record',side_effect=lambda u,k,v:requests.append(v) if k=='request' else None):
+            _,_,parsed=self.a._run_codex(context,{})
+        self.assertEqual(len(requests),1)
+        self.assertEqual(requests[0]['system'].count(PROMPT),1)
+        self.assertEqual(len(requests[0]['context']['trading_accounts']['accounts']),6)
+        self.assertEqual(requests[0]['context']['live_readonly_accounts']['accounts']['zheshang']['cash_cny'],900000)
+        self.assertTrue(all(d['action']=='wait' for d in parsed.account_decisions.model_dump().values()))
 
     def test_risk_budget_fees_additions_and_drawdown(self):
         c=self.m.store.conn
