@@ -90,4 +90,5 @@ def strategy_review(conn,account,model,now=None):
             'revalidate_unchanged_plan':len(unchanged)>=2 and weakened>=2}
     entry=entry_reassessment(conn,history)
     if entry:result['entry_reassessment']=entry
+    if latest.get('participation_review') is not None:result['participation_review']=latest['participation_review']
     return result

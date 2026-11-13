@@ -190,11 +190,14 @@ def privacy_ok(content, context):
                  "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
                  "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
                  "gold_value_cny", "gross_assets_cny", "net_assets_cny", "risk_budget_cny", "gold_down_1pct_net_loss_cny",
-                 "entry_price_cny", "target_price_cny", "boundary_price_cny", "input_grams", "budget_cny"}
+                 "entry_price_cny", "target_price_cny", "boundary_price_cny", "input_grams", "budget_cny",
+                 "available_cash_cny", "reference_amount_cny", "reference_quote_cny", "input_participation_cash_cny"}
     def private_numbers(value):
         if isinstance(value, dict):
             for k, v in value.items():
-                if k in sensitive and isinstance(v, (int, float)) and not isinstance(v, bool):
+                if k in ('reference_amounts_cny','up_delta_cny','down_delta_cny','buy_hold_delta_cny'):
+                    for n in numbers(v):yield abs(n)
+                elif k in sensitive and isinstance(v, (int, float)) and not isinstance(v, bool):
                     yield float(v)
                 else:
                     yield from private_numbers(v)

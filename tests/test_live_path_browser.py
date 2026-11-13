@@ -29,9 +29,13 @@ class LivePathBrowserTests(unittest.TestCase):
             save(c,'codex',999,{'zheshang':v},model_input(c,now),now);c.commit()
             browser=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
             try:
-                page=browser.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
+                page=browser.new_page();page.clock.install();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
                 page.goto(url+'/#strategies/live/zheshang/advice')
                 area=page.locator('[data-position-path]')
+                comparison=page.locator('[data-participation-review]')
+                expect(comparison).to_contain_text('对照规模为净资产1%和5%')
+                comparison.locator('summary').click()
+                expect(comparison).to_contain_text('追加对照（元）')
                 for text in ('100.0%','840.00','当前这批仓位退出','若全部新增买入成交','保护不自动扩量','成交先后'):
                     expect(area).to_contain_text(text)
                 expect(area).to_contain_text('30.0000 克');expect(area).to_contain_text('10.0000 克')
@@ -49,6 +53,8 @@ class LivePathBrowserTests(unittest.TestCase):
                 expect(page.locator('.live-advice-heading')).to_contain_text('买入已暂停')
                 self.assertEqual(errors,[])
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
+                page.clock.fast_forward(181000)
+                expect(page.locator('[data-participation-review]')).to_contain_text('对照报价已过期')
             finally:browser.close()
 
     def test_simulation_detail_shows_whole_account_protection_and_reference_only_boundary(self):
@@ -71,6 +77,10 @@ class LivePathBrowserTests(unittest.TestCase):
             try:
                 page=browser.new_page();page.goto(url+'/#strategies/simulation/codex:high_empty')
                 area=page.locator('[data-position-path]')
+                comparison=page.locator('[data-participation-review]')
+                expect(comparison).to_contain_text('±2%不是交易或复评阈值')
+                comparison.locator('summary').click()
+                expect(comparison).to_contain_text('追加对照（元）')
                 for text in ('80.0%','950.00','模拟盘先执行','全仓','风险参考边界只暂停买单，不自动平仓'):
                     expect(area).to_contain_text(text)
                 self.assertNotIn('京东委托',area.inner_text())

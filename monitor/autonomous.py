@@ -281,6 +281,9 @@ class AutonomousPortfolio:
                 from .short_review import wait_review
                 review=wait_review(conn,a["plan"],quote,as_of)
                 if review:accounts[a["start_mode"]]["short_wait_review"]=review
+            if a["start_mode"].startswith("short_") or self.settings.ai_trading_mode==RISK_MODE:
+                from .participation_review import simulation
+                accounts[a['start_mode']]['participation_review']=simulation(conn,a,quote,as_of,self.settings.sell_fee_rate,self.settings.spread_cny)
 
         from .trade_costs import cost_reference
         return {"policy_version":policy_version(self.settings), "short_strategy_profile":{"name":"短线波段","holding_period":"数日至一两周","primary_timeframes":["1D"],"ignored_timeframes":["30m","1H","4H"],"entry_exit_timing":"日线与数日至周级别价格结构，不要求小时确认","pace":"每周约两次买卖操作是参考，不是配额或硬上限；不要求日内平仓"}, "reference_quote":quote, "cost_reference":cost_reference(quote.get('price') if quote else None,self.settings.sell_fee_rate,self.settings.spread_cny), "accounts": accounts, "control_generation": control(conn,model)["generation"], "constraints": {"sell_fee_rate": self.settings.sell_fee_rate,

@@ -103,6 +103,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['input_quote_cny']=price((source.get('quote') or {}).get('sell_price_cny')) if value['input_quote_status']=='fresh' else None
         previous=next((v for v in source.get('previous_advice',[]) if v.get('analyst')==analyst),{})
         if previous.get('strategy_review') is not None:value['input_strategy_review']=previous['strategy_review']
+        from .participation_review import bank_cash
+        value['input_participation_cash_cny']=bank_cash(source)
         input_orders=source.get('pending_orders') or {}
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),

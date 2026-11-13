@@ -4,6 +4,7 @@ import LiveRiskSummary from "./LiveRiskSummary.vue";
 import DownsideReview from "./DownsideReview.vue";
 import LimitBuyReviews from "./LimitBuyReviews.vue";
 import PositionPath from "./PositionPath.vue";
+import ParticipationReview from "./ParticipationReview.vue";
 import OrderImpact from "./OrderImpact.vue";
 import {
   actions,
@@ -202,6 +203,10 @@ const proposalState = (order) => {
           本轮重点复核旧价位，以及新增一笔、维持现仓与减仓的取舍，依据见下方本轮变化和方案比较。
         </div>
       </div>
+      <ParticipationReview
+        :review="advice.participation_review || advice.input_strategy_review?.participation_review"
+        :snapshot="!advice.participation_review"
+      />
       <section v-if="advice.reassessment" class="live-quote live-reassessment">
         <div class="live-section-heading">
           <strong>本轮变化</strong>

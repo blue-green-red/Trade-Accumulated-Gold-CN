@@ -246,6 +246,12 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 for condition in entry.get('review_conditions',[]):condition['monitoring']=condition_state(conn,row,entry,condition,now)
                 target.append(entry)
                 seen[r[1]]=seen.get(r[1],0)+1
+            from .participation_review import live as participation_review
+            reviewed=set()
+            for entry in sorted(row['advice']+row['advice_history'],key=lambda v:v['id'],reverse=True):
+                if entry['analyst'] not in reviewed:
+                    entry['participation_review']=participation_review(conn,row,entry['analyst'],now)
+                    reviewed.add(entry['analyst'])
         row['review_status']=_review_status(conn,bank)
         out.append(row)
     return out

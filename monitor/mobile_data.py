@@ -96,6 +96,9 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
                 from .short_review import wait_review
                 feedback=wait_review(conn,a.get('plan'),quote,datetime.now(timezone.utc).isoformat())
                 if feedback:a['short_wait_review']=feedback
+            if a and (settings.ai_trading_mode=='risk_six_account' or a['start_mode'].startswith('short_')):
+                from .participation_review import simulation
+                a['participation_review']=simulation(conn,a,quote,datetime.now(timezone.utc).isoformat(),settings.sell_fee_rate,settings.spread_cny)
             return True
         rows=live_accounts(conn) if view!='simulation-list' else []
         mode=('live' if any(a.get('fetched_at') for a in rows) else 'simulation') if view=='auto-list' else view.removesuffix('-list')

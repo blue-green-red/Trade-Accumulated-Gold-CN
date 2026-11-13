@@ -3,6 +3,7 @@ import { computed, onMounted, onActivated } from "vue";
 import Card from "../../components/Card.vue";
 import PnlBreakdown from "../../components/PnlBreakdown.vue";
 import PositionPath from "../../components/PositionPath.vue";
+import ParticipationReview from "../../components/ParticipationReview.vue";
 import { selectView, navigate } from "../../composables/dashboard";
 import {
   accountLabels,
@@ -176,7 +177,7 @@ const records = (kind) =>
             <div class="sub">{{ a.plan.reason }}</div>
           </div>
           <div
-            v-if="a.short_wait_review"
+            v-if="a.short_wait_review && (!a.participation_review?.waiting || a.short_wait_review.entry_limit_cny != null)"
             class="notice info"
             style="margin-top: 10px"
           >
@@ -208,6 +209,7 @@ const records = (kind) =>
             </div>
             <div class="sub">{{ a.short_wait_review.note }}</div>
           </div>
+          <ParticipationReview :review="a.participation_review" :max-age-seconds="120" />
           <details v-if="a.plan.decision.invalidation" class="more">
             <summary>价位依据、失效与复评</summary>
             <div class="sub">{{ a.plan.decision.invalidation }}</div>

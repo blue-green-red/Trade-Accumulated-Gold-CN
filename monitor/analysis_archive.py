@@ -53,7 +53,7 @@ class AnalysisArchive:
         settings=analyst.settings
         root=Path(__file__).parent
         hashes={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in
-                ('ai.py','autonomous.py','simulation_path.py','ai_inputs.py','codex_runtime.py','history_tool.py','page_fetch.py','risk_profiles.py','trade_costs.py','short_review.py','jd_live_readonly.py','jd_live_advice.py','jd_live_notice_rules.py','jd_live_notice.py','notification_html.py','jd_live_risk.py','jd_live_path.py','jd_live_entry.py','jd_live_proposals.py','jd_live_orders.py','jd_live_review.py','jd_live_conditions.py','jd_live_feedback.py','public_ai.py','public_research.py')}
+                ('ai.py','autonomous.py','simulation_path.py','participation_review.py','ai_inputs.py','codex_runtime.py','history_tool.py','page_fetch.py','risk_profiles.py','trade_costs.py','short_review.py','jd_live_readonly.py','jd_live_advice.py','jd_live_notice_rules.py','jd_live_notice.py','notification_html.py','jd_live_risk.py','jd_live_path.py','jd_live_entry.py','jd_live_proposals.py','jd_live_orders.py','jd_live_review.py','jd_live_conditions.py','jd_live_feedback.py','public_ai.py','public_research.py')}
         meta={'format_version':1,'attempt_id':attempt,'trigger':trigger,'snapshot_at':context.get('snapshot_at'),
               'trading_mode':settings.ai_trading_mode,'ai_optimize':settings.ai_optimize,
               'search_budget':settings.ai_max_searches,'history_budget':settings.ai_history_max_queries,
