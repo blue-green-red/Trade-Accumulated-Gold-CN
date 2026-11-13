@@ -54,7 +54,10 @@ def history(anchor,rounds,current_price,fee,spread,now):
     if amount<=0:return None
     return {'since':anchor['created_at'],'reference_quote_at':anchor['quote_at'],'rounds':rounds,
             'reference_quote_cny':anchor['price'],'reference_amount_cny':amount,
+            'observed_minutes':round((end-at).total_seconds()/60,1),
             'quote_change_pct':round((current_price/anchor['price']-1)*100,3),
+            'price_only_delta_cny':round(amount*(current_price/anchor['price']-1),2),
+            'exit_cost_cny':round(amount/anchor['price']*(current_price*fee+spread),2),
             'buy_hold_delta_cny':round(delta(amount,anchor['price'],current_price,fee,spread),2)}
 
 

@@ -195,7 +195,7 @@ def privacy_ok(content, context):
     def private_numbers(value):
         if isinstance(value, dict):
             for k, v in value.items():
-                if k in ('reference_amounts_cny','up_delta_cny','down_delta_cny','buy_hold_delta_cny'):
+                if k in ('reference_amounts_cny','up_delta_cny','down_delta_cny','buy_hold_delta_cny','price_only_delta_cny','exit_cost_cny'):
                     for n in numbers(v):yield abs(n)
                 elif k in sensitive and isinstance(v, (int, float)) and not isinstance(v, bool):
                     yield float(v)

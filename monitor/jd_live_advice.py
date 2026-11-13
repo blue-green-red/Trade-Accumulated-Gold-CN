@@ -48,7 +48,7 @@ class LiveAdvice(BaseModel):
     price_condition:Literal['at_or_above','at_or_below','reference','none']='none'
     price_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
     valid_for_minutes:int=Field(default=240,ge=15,le=1440)
-    reason:str=Field(max_length=1600,description='当前规模比较（事件仍未知）→事件影响，按共用规则；含持有/减仓及不挂单依据，不重复reassessment')
+    reason:str=Field(max_length=1600,description='当前规模与同幅涨跌金额取舍、等待的具体反证；含持有/减仓及不挂单依据，不重复reassessment')
     risk_note:str=Field(max_length=800)
     reassessment:Optional[AdviceReassessment]=None
     position_path:Optional[PositionPath]=Field(default=None,description='新分析填写建仓与退出的关联；无有效账户时null，复用下跌情景，不重复算式')

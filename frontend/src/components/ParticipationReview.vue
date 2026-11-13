@@ -36,6 +36,11 @@ const signed = (v) => (v > 0 ? "+" : "") + money(v);
           <strong>{{ signed(review.waiting.buy_hold_delta_cny) }} 元</strong>。
           {{ review.waiting.buy_hold_delta_cny > 0 ? "正值表示等待错过的对照收益。" : review.waiting.buy_hold_delta_cny < 0 ? "负值表示等待避开的对照亏损。" : "与保留现金相同。" }}
         </p>
+        <p v-if="review.waiting.price_only_delta_cny != null" class="sub">
+          观察 {{ num(review.waiting.observed_minutes, 0) }} 分钟：价格变化贡献
+          {{ signed(review.waiting.price_only_delta_cny) }} 元，退出成本估计
+          {{ money(review.waiting.exit_cost_cny) }} 元。短期费用影响不能单独证明波段等待更优。
+        </p>
       </div>
       <p v-else class="sub">尚无同一账户状态下连续未追加的有效记录。</p>
       <details class="more">

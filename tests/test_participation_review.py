@@ -67,7 +67,13 @@ class ParticipationReviewTests(unittest.TestCase):
     def test_losses_avoided_are_negative_counterfactual_not_missed_gain(self):
         self.plan(-60,1000)
         self.assertLess(self.sim(950)['waiting']['buy_hold_delta_cny'],0)
-        self.assertAlmostEqual(self.sim(1000)['waiting']['buy_hold_delta_cny'],-.88)
+        flat=self.sim(1000)['waiting']
+        self.assertAlmostEqual(flat['buy_hold_delta_cny'],-.88)
+        self.assertEqual(flat['price_only_delta_cny'],0)
+        self.assertAlmostEqual(flat['exit_cost_cny'],.88)
+        self.assertEqual(flat['observed_minutes'],60)
+        rise=self.sim()['waiting']
+        self.assertAlmostEqual(rise['price_only_delta_cny']-rise['exit_cost_cny'],rise['buy_hold_delta_cny'],places=2)
 
     def test_actual_fill_revision_and_buy_or_invalid_plan_end_cohort(self):
         self.plan(-240,1000);self.a['revision']=4
@@ -121,7 +127,7 @@ class ParticipationReviewTests(unittest.TestCase):
         self.assertEqual(live(self.c,self.bank,'codex',NOW)['waiting']['rounds'],1)
 
     def test_new_private_diagnostic_numbers_cannot_be_published(self):
-        for field,value,shown in [('reference_amounts_cny',[7654.32],7654.32),('down_delta_cny',[-321.98],321.98),('buy_hold_delta_cny',-543.21,543.21)]:
+        for field,value,shown in [('reference_amounts_cny',[7654.32],7654.32),('down_delta_cny',[-321.98],321.98),('buy_hold_delta_cny',-543.21,543.21),('price_only_delta_cny',-654.32,654.32),('exit_cost_cny',123.45,123.45)]:
             self.assertFalse(privacy_ok({'analysis':{'outlook':f'参考收益{shown}元'}},
                 {'trading_accounts':{'accounts':{'synthetic':{'participation_review':{field:value}}}}}))
 

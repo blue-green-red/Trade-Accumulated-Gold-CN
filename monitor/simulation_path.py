@@ -7,7 +7,7 @@ class SimulationPath(BaseModel):
     model_config=ConfigDict(extra='forbid',allow_inf_nan=False)
     target_position_pct:Optional[float]=Field(ge=0,le=100,description='路径条件成立后的目标总仓位，非本轮成交量；可至满仓，未知null')
     boundary_source:Literal['risk_exit','stop_loss','none']=Field(description='复用risk_exit_cny或生效止损；none不另设参考边界，仍尊重已生效保护')
-    continuation:str=Field(min_length=1,max_length=180,description='本轮→后续的条件与规模；报价变化、事件分别评估，不预设利好门槛；无机会直说，含复评截止及暂停/退出')
+    continuation:str=Field(min_length=1,max_length=180,description='上涨/回调各自的参与条件与规模或放弃理由，不能只写再评时间；含截止及暂停/退出，不强制交易')
 
 
 def boundary(account,decision):

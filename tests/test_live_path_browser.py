@@ -45,12 +45,18 @@ class LivePathBrowserTests(unittest.TestCase):
                 response=page.request.get(url+'/api/pages/strategies?view=live%2Fzheshang%2Fadvice').json()
                 account=response['live_account'];entry=account['advice'][0]
                 account['quote'].update(buy_price_cny=839,sell_price_cny=839)
+                from monitor.participation_review import current,history
+                earlier=(now-timedelta(minutes=10)).isoformat()
+                entry['participation_review']={**current(50000,20,839,.004),'as_of':now.isoformat(),
+                    'waiting':history({'created_at':earlier,'quote_at':earlier,'cash':50000,'grams':20,'price':875},2,839,.004,0,now.isoformat())}
                 from monitor.jd_live_path import current_state
                 current_state(entry,account)
                 page.route('**/api/pages/strategies*',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(response)))
                 page.reload()
                 expect(page.locator('[data-position-path]')).to_contain_text('边界已触达 · 暂停追加')
                 expect(page.locator('.live-advice-heading')).to_contain_text('买入已暂停')
+                expect(page.locator('[data-participation-review]')).to_contain_text('价格变化贡献')
+                expect(page.locator('[data-participation-review]')).to_contain_text('退出成本估计')
                 self.assertEqual(errors,[])
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
                 page.clock.fast_forward(181000)
