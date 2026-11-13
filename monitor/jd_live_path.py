@@ -9,7 +9,7 @@ class PositionPath(BaseModel):
     target_position_pct:Optional[float]=Field(ge=0,le=100,allow_inf_nan=False,description='路径条件成立后的目标总仓位，非本轮成交量；可至满仓，未知null')
     boundary_scenario_index:Optional[int]=Field(ge=0,le=1,strict=True,description='暂停追加/退出边界引用downside_scenarios的0起索引；无价格边界null')
     exit_scope:Literal['tranche','plan']=Field(description='边界终止当前这批仓位或整套建仓；均须成交后刷新重评，非自动续买')
-    continuation:str=Field(min_length=1,max_length=220,description='上涨/回调各自的参与条件与规模或放弃理由，不能只写再评时间；含截止和退出范围，不重复算式或强制交易')
+    continuation:str=Field(min_length=1,max_length=220,description='事件未知时，上涨/回调各自的参与条件与规模或放弃理由，不仅再评时间；含截止和退出范围，不重复算式或强制交易')
 
 
 def remaining(order):
