@@ -169,7 +169,9 @@ def _totals(conn, settings, accounts):
 def _notifications(conn, settings):
     from .notification_control import visible_subscriptions
     from .notification_outbox import visible_tasks
+    from .jd_login_watch import public_state
     return {'configured':bool(settings.pushplus_token or settings.serverchan_sendkey),
+        'login_watch':public_state(conn),
         'channel':'PushPlus' if settings.pushplus_token else 'Server酱' if settings.serverchan_sendkey else None,
         'subscriptions':visible_subscriptions(conn,settings.ai_trading_mode),
         'deliveries':[dict(r) for r in conn.execute('SELECT id,ts,category,title,channel,status,provider_id,provider_code,event_keys_json FROM notification_deliveries ORDER BY id DESC LIMIT 10')],

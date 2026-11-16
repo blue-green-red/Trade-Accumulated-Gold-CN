@@ -9,6 +9,7 @@ TOPICS.update({f'{model}:analysis':f'{model.title()} · 分析摘要' for model 
 TOPICS.update({f'{model}:live_{bank}':f'{model.title()} · {label}真实账户建议'
                for model in ('claude','codex') for bank,label in (('zheshang','浙商'),('minsheng','民生'))})
 DEFAULT_MODE = 'risk_six_account'
+LOGIN_TOPIC='jd:login'
 
 
 def topics_for_mode(mode,conn=None):
@@ -17,8 +18,10 @@ def topics_for_mode(mode,conn=None):
         'short','medium','long','analysis','live_zheshang','live_minsheng')
     from .jd_live_readonly import enabled_banks
     banks=enabled_banks(conn) if conn is not None else ('zheshang','minsheng')
-    return {key: label for key, label in TOPICS.items() if key.split(':')[1] in allowed
+    result={key: label for key, label in TOPICS.items() if key.split(':')[1] in allowed
             and (not key.split(':')[1].startswith('live_') or key.split(':')[1][5:] in banks)}
+    if banks:result[LOGIN_TOPIC]='京东登录失效与自动登录入口'
+    return result
 
 
 def subscriptions(conn, mode=DEFAULT_MODE):
@@ -62,6 +65,9 @@ def event_topic(event):
 def selected_events(conn, events, mode=DEFAULT_MODE):
     enabled={s['key'] for s in subscriptions(conn, mode) if s['enabled']}
     def current(e):
+        if event_topic(e)==LOGIN_TOPIC:
+            from .jd_login_watch import notification_current
+            return notification_current(conn,e)
         if not e.get('live_advice_id'):return True
         from .jd_live_readonly import accounts
         from .jd_live_semantics import notification_parts

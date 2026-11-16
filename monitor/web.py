@@ -32,6 +32,7 @@ from .config import BANK_NAMES, Settings
 from .scorecard import evaluate as evaluate_scorecard
 from .strategies import REGISTRY
 from .notification_control import visible_subscriptions
+from .jd_login_watch import public_state as login_watch_state
 from .notification_outbox import visible_tasks
 from .controls import control, set_enabled, identity, short_labels, daily_keys
 from .performance import comparison, autonomous_comparison
@@ -359,6 +360,7 @@ def dashboard(settings: Settings) -> Dict[str, Any]:
             "execution": {"name": EXECUTION_NAME, "quote": quote, "valuation_quote": valuation_quote,
                           "ready": quote is not None, "status":snap.get("jd_quote_status"), "since": get_state(conn, "jd_execution_since")},
             "notifications": {"configured": bool(settings.pushplus_token or settings.serverchan_sendkey),
+                "login_watch":login_watch_state(conn),
                 "channel": "PushPlus" if settings.pushplus_token else "Server酱" if settings.serverchan_sendkey else None,
                 "subscriptions": visible_subscriptions(conn,settings.ai_trading_mode),
                 "deliveries": [dict(r) for r in conn.execute("SELECT id,ts,category,title,channel,status,provider_id,provider_code,event_keys_json FROM notification_deliveries ORDER BY id DESC LIMIT 10")] if table_exists(conn,"notification_deliveries") else [],

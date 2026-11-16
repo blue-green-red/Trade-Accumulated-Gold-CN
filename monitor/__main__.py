@@ -86,6 +86,8 @@ class Monitor:
             except Exception as exc:
                 log.warning("%s 初始化失败，跳过: %s", name, exc)
         for name in settings.ai_analysts:
+            from .ai_runtime import recover as recover_runtime
+            recover_runtime(self.store,(name,))
             self.store.set_state(f"ai_status:{name}", {"available": name in self.analysts})
             self.store.set_state(f"ai_runtime:{name}", {"running": False})
             from .manual_ai import recover
@@ -300,7 +302,7 @@ class Monitor:
                 if not active(store.conn, name):
                     return name, None
                 from .runtime_resources import slot
-                with slot(self.settings.db_path) as acquired:
+                with slot(self.settings.db_path,model=True) as acquired:
                     if not acquired:
                         log.info("%s 等待账户采集浏览器退出；未消费分析请求", name)
                         return name,None
@@ -541,6 +543,14 @@ class Monitor:
                  self.settings.tick_seconds, BANK_NAMES[self.settings.paper_bank])
         while True:
             started = time.monotonic()
+            try:
+                if not self.ai_running():
+                    from .ai_runtime import recover as recover_runtime
+                    recover_runtime(self.store,self.analysts)
+                from .jd_login_watch import poll as login_watch
+                self.dispatch(login_watch(self.store,self.settings))
+            except Exception:
+                log.exception('京东登录检查失败，下一轮重试')
             try:
                 snap, plan, events = self.tick()
                 self.dispatch(events)

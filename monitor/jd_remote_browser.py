@@ -100,6 +100,15 @@ def child_environment(display=None):
 
 def run(port=1455,ttl=3600,public_host=None,dashboard_auth=False):
     if not 1024<=port<=65535 or not 60<=ttl<=3600:raise ValueError('Invalid port or lifetime')
+    from .config import Settings
+    from .runtime_resources import interactive_slot
+    with interactive_slot(Settings().db_path,hold_startup=True) as release_startup:
+        if not release_startup:raise RuntimeError('Model/browser resources busy; retry later')
+        return _run(port,ttl,public_host,dashboard_auth,on_browser_ready=release_startup)
+
+
+def _run(port=1455,ttl=3600,public_host=None,dashboard_auth=False,*,on_browser_ready=None):
+    if not 1024<=port<=65535 or not 60<=ttl<=3600:raise ValueError('Invalid port or lifetime')
     backend=1456 if public_host else port
     if public_host:ipaddress.IPv4Address(public_host)
     for p in set((port,backend,5905,9225)):free_port(p)
@@ -163,6 +172,7 @@ def run(port=1455,ttl=3600,public_host=None,dashboard_auth=False):
              '--remote-debugging-address=127.0.0.1','--remote-debugging-port=9225',
              '--user-data-dir='+str(profile),'--window-size=1200,850','about:blank'],env=env)
         wait_port(9225,chrome)
+        if on_browser_ready:on_browser_ready()
         stage='readonly_guard'
         from playwright.sync_api import sync_playwright,Error as BrowserError
         with sync_playwright() as p:

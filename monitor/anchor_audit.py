@@ -101,7 +101,7 @@ def run_pair(settings,context,key,output):
         'source_sha256':digest(context),'method':manifest,
         'controls':{'search_budget':0,'history_budget':0,'resume':False,'normal_analysis_requests':1},
         'published':False,'execution_invoked':False,'results':[]}
-    with slot(settings.db_path) as acquired:
+    with slot(settings.db_path,model=True) as acquired:
         if not acquired:raise RuntimeError('Model/browser resource slot is busy; retry after it finishes')
         output.mkdir(parents=True,exist_ok=False,mode=0o700)
         os.chmod(output,0o700)

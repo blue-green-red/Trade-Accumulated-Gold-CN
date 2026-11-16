@@ -134,7 +134,9 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
                                  'channel':'PushPlus' if settings.pushplus_token else 'Server酱' if settings.serverchan_sendkey else None}
         if view=='settings':
             from .notification_control import visible_subscriptions
+            from .jd_login_watch import public_state
             result['notifications']['subscriptions']=visible_subscriptions(conn,settings.ai_trading_mode)
+            result['notifications']['login_watch']=public_state(conn)
         else:result['notifications']['messages']=message_history(conn,settings)
         return True
     if page=='me':

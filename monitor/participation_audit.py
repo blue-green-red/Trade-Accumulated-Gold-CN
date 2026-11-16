@@ -264,7 +264,7 @@ def run(settings,archive_ids,output,matched_ids=()):
             '3/5 weekday same-clock markouts, sampled quotes, no holiday adjustment; not a full strategy backtest or actual fills.',
             'Market proposals assume snapshot-price execution; no slippage, inflight repricing, later stop/target/plan changes or existing-order fills.',
             'Limit/conditional proposals are listed but never assumed filled. Bank quotes never substituted with public/simulation prices.']}
-    with slot(settings.db_path) as acquired:
+    with slot(settings.db_path,model=True) as acquired:
         if not acquired:raise RuntimeError('Model/browser resource slot is busy; retry later')
         output.mkdir(parents=True,exist_ok=False,mode=0o700)
         output.chmod(0o700)

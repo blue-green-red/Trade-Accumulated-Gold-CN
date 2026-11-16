@@ -67,9 +67,11 @@ const states = {
             {{
               r.category === "real_advice"
                 ? "真实账户建议"
-                : r.category === "pending"
-                  ? "待发送事件"
-                  : "分析 / 模拟操盘"
+                : r.category === "account_login"
+                  ? "京东登录维护"
+                  : r.category === "pending"
+                    ? "待发送事件"
+                    : "分析 / 模拟操盘"
             }}
           </div>
           <div v-if="r.next_attempt_at" class="sub">

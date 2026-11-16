@@ -33,6 +33,8 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
                                    (stamp,event['key'],event['title'],event['body']))
         for event in selected:
             expiry = now + timedelta(minutes=15)
+            if event.get('entry_expires_at'):
+                expiry=min(expiry,datetime.fromisoformat(event['entry_expires_at']))
             if event.get('live_advice_id'):
                 row=store.conn.execute('SELECT expires_at FROM jd_live_advice WHERE id=?',(event['live_advice_id'],)).fetchone()
                 if row: expiry=min(expiry, datetime.fromisoformat(row[0]))
@@ -47,14 +49,16 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
         if row[2]>=3 or datetime.fromisoformat(row[3])<=now or not valid:
             with store.conn:store.conn.execute("UPDATE notification_outbox SET status='cancelled',updated_at=? WHERE event_key=?",(stamp,row[0]))
         else:due.append((event,row[2]))
-    for category in ('real_advice','other'):
-        group=[(e,n) for e,n in due if (':live_' in e.get('notification_topic',''))==(category=='real_advice')]
+    def category_for(e):
+        return 'account_login' if event_topic(e)=='jd:login' else 'real_advice' if ':live_' in event_topic(e) else 'other'
+    for category in ('real_advice','account_login','other'):
+        group=[(e,n) for e,n in due if category_for(e)==category]
         if not group:continue
         title=group[0][0]['title'] if len(group)==1 else (f'💡真实账户建议 · {len(group)}条' if category=='real_advice' else f"{group[0][0]['title']} 等{len(group)}条")
         title=title[:32]
         body='\n\n---\n\n'.join(f"### {e['title']}\n\n{e['body']}" for e,_ in group)
         render_options={}
-        if category=='real_advice' or any(event_topic(e).endswith(':analysis') for e,_ in group):
+        if category in ('real_advice','account_login') or any(event_topic(e).endswith(':analysis') for e,_ in group):
             from .notification_html import message
             if len(group)==1:body=group[0][0]['body']
             render_options['body_html']=message(title,[e for e,_ in group])
