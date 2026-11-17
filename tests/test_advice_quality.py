@@ -114,6 +114,15 @@ class AdviceQualityTests(unittest.TestCase):
                        {'position_path':{**a['position_path'],'target_position_pct':30}}):
             self.assertFalse(same_plan(plan_terms(a),plan_terms({**a,**change})))
 
+    def test_recommended_entry_terms_survive_json_persistence(self):
+        import json
+        at='2026-11-19T10:00:00+08:00'
+        v={'action':'hold','suggested_orders':[{'kind':'limit_buy','grams':2,'price_cny':840,'expires_at':at}],
+           'limit_buy_reviews':[{'decision':'recommend','entry_price_cny':840,'target_price_cny':860,
+                                'risk_exit_cny':820,'grams':2,'expires_at':at}]}
+        terms=plan_terms(v);self.assertEqual(len(terms['entry']),1)
+        self.assertTrue(same_plan(json.loads(json.dumps(terms)),plan_terms(v)))
+
     def test_notice_price_drift_is_anchored_to_last_notice_not_last_round(self):
         f=notices.MilestoneNotificationTests();f.setUp();self.addCleanup(f.tearDown)
         from monitor.notification_control import set_subscription

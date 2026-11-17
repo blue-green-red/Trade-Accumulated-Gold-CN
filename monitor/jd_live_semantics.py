@@ -26,7 +26,7 @@ def plan_terms(value):
     from .jd_live_entry import signature
     value=value or {}
     return {'trade':immediate_signature(value),'proposals':proposal_signature(value),
-            'management':management_signature(value),'entry':signature(value),
+            'management':management_signature(value),'entry':[list(item) for item in signature(value)],
             'target':(value.get('position_path') or {}).get('target_position_pct'),
             'boundary':(value.get('position_path') or {}).get('boundary_price_cny'),
             'scope':(value.get('position_path') or {}).get('exit_scope'),
