@@ -68,6 +68,25 @@ class CalendarQualityTests(unittest.TestCase):
 
 
 class AdviceQualityTests(unittest.TestCase):
+    def test_live_schema_has_no_ref_siblings_and_keeps_field_instructions(self):
+        from monitor.ai import ClaudeCodeResult,strict_schema
+        schema=ClaudeCodeResult.model_json_schema();original=deepcopy(schema)
+        strict=strict_schema(schema)
+        def walk(value):
+            if isinstance(value,dict):
+                if '$ref' in value:self.assertEqual(list(value),['$ref'])
+                if value.get('type')=='object':
+                    self.assertEqual(value.get('required'),list(value.get('properties',{})))
+                    self.assertIs(value.get('additionalProperties'),False)
+                self.assertNotIn('default',value)
+                for child in value.values():walk(child)
+            elif isinstance(value,list):
+                for child in value:walk(child)
+        walk(strict);self.assertEqual(schema,original)
+        field=strict['properties']['live_account_advice']
+        self.assertEqual(field['description'],schema['properties']['live_account_advice']['description'])
+        self.assertEqual(field['anyOf'],[{'$ref':'#/$defs/LiveAdviceSet'}])
+
     def test_expiry_review_survives_small_hard_limit_moves_and_restart(self):
         import test_live_structured as structured
         from monitor.jd_live_review import request_reviews

@@ -204,6 +204,11 @@ def strict_schema(schema: Any) -> Any:
         if out.get("type") == "object" and "properties" in out:
             out["required"] = list(out["properties"])
             out["additionalProperties"] = False
+        if "$ref" in out and len(out)>1:
+            # Strict providers reject metadata beside $ref. Keep its instructions
+            # on a wrapper rather than discarding descriptions or weakening refs.
+            ref=out.pop("$ref")
+            out={"anyOf":[{"$ref":ref}],**out}
         return out
     if isinstance(schema, list):
         return [strict_schema(v) for v in schema]
