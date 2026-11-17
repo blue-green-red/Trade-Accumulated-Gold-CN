@@ -82,12 +82,16 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
                 value.update({k:account.get(k) for k in ('cash_balance_cny','cash_scope','holding_details')})
             elif section=='advice':
                 value.update({k:account.get(k) for k in ('advice','pending_orders','review_status')})
+                from .jd_live_presentation import presentation
+                value['advice']=[{**a,'presentation':presentation(a)} for a in account.get('advice',[])]
             elif section=='orders':
                 value.update(pending_orders=account.get('pending_orders'),order_history=account.get('order_history'),
                              advice=[{k:a.get(k) for k in ('id','analyst','created_at','expires_at','status','action_status','schema_version','action','order_management','review_conditions','execution_progress')} for a in account.get('advice',[])])
             else:
                 value.update({k:account.get(k) for k in ('order_history','holding_details','closed_positions','recent_trade')})
                 value['advice_history']=sorted(account.get('advice',[])+account.get('advice_history',[]),key=lambda a:a['id'],reverse=True)
+                from .jd_live_presentation import presentation
+                value['advice_history']=[{**a,'presentation':presentation(a)} for a in value['advice_history']]
             result.update(account_view='live',bank_view=section,live_account=value)
             result['live_readonly_sync']=get_state(conn,'jd_live_sync_status') or {}
             result['live_readonly_refresh']=get_state(conn,'jd_live_refresh') or {}

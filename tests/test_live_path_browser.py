@@ -37,7 +37,7 @@ class LivePathBrowserTests(unittest.TestCase):
                 expect(comparison).to_contain_text('对照规模为净资产1%和5%')
                 comparison.locator('summary').click()
                 expect(comparison).to_contain_text('追加对照（元）')
-                for text in ('100.0%','840.00','当前这批仓位退出','若全部新增买入成交','保护不自动扩量','成交先后'):
+                for text in ('100.0%','840.00','处理当前这批持仓','若全部新增买入成交','新增买入不会自动加入原止盈止损单','不能保证先买后卖或先卖后买'):
                     expect(area).to_contain_text(text)
                 expect(area).to_contain_text('30.0000 克');expect(area).to_contain_text('10.0000 克')
                 for width in (360,390,1280):
@@ -54,7 +54,7 @@ class LivePathBrowserTests(unittest.TestCase):
                 current_state(entry,account)
                 page.route('**/api/pages/strategies*',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(response)))
                 page.reload()
-                expect(page.locator('[data-position-path]')).to_contain_text('边界已触达 · 暂停追加')
+                expect(page.locator('[data-position-path]')).to_contain_text('已到退出参考价 · 暂停继续买入')
                 expect(page.locator('.live-advice-heading')).to_contain_text('买入已暂停')
                 expect(page.locator('[data-participation-review]')).to_contain_text('价格变化贡献')
                 expect(page.locator('[data-participation-review]')).to_contain_text('退出成本估计')

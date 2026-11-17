@@ -29,7 +29,7 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.value['review_conditions']=[{'condition':'at_or_below','price_cny':840,'quote_side':'buy'}]
         text=self.render()
         self.assertTrue(text.startswith('**本轮结论：继续持有'))
-        self.assertIn('需要重新分析后再决定，暂不建议提前挂低价买单',text)
+        self.assertNotIn('低价挂单：',text);self.assertNotIn('低位买入：',text)
         self.assertIn('到价只触发重新分析，不执行交易',text)
         self.assertIn('银行报价 ≤ 840元/克',text)
         for misleading in ('入场≤','建议预挂','2克','新增退出参考810'):
@@ -95,13 +95,16 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.assertEqual(time_text(None),'待确认')
         self.assertEqual(time_text('2026-11-09T13:00:00'),'待确认')
 
-    def test_brief_expands_jargon_prefers_thesis_and_bounds_analysis_without_mutation(self):
-        self.assertEqual(brief('E850/T900/R810；ETF不变。'),'入场价850/目标价900/风险参考价810；ETF不变。')
-        self.value['reason']='不应重复的总体长理由。'*100
-        self.value['reassessment']={'thesis':'本轮交易假设仍需观察。'*30}
+    def test_basis_is_expanded_in_full_and_risk_note_is_removed_without_mutation(self):
+        self.assertEqual(brief('E850/T900/R810；ETF不变。'),'买入参考价850元/克，目标价900元/克，退出参考价810元/克；ETF不变。')
+        self.value['reason']='数量取舍依据。'*40+'这是完整依据结尾。'
+        self.value['reassessment']={'thesis':'本轮交易假设仍需观察。'*30,'price_basis':'目标来自近期价格范围。','change_summary':'本轮现金已更新。'}
         before=copy.deepcopy(self.value);text=self.render()
-        self.assertNotIn('不应重复',text);self.assertLess(len(text),800)
-        self.assertIn('详见账户页',text);self.assertEqual(before,self.value)
+        for required in ('关键依据：','数量取舍依据','这是完整依据结尾','目标来自近期价格范围','本轮现金已更新'):
+            self.assertIn(required,text)
+        for removed in ('风险：','注意事项：',self.value['risk_note'],'详见账户页'):
+            self.assertNotIn(removed,text)
+        self.assertEqual(before,self.value)
 
     def test_overlapping_reasons_and_withdrawal_stay_explicit(self):
         text=body(self.account,self.current,self.value,['daily_first','position_changed'],True)
@@ -122,6 +125,16 @@ class LiveNoticeFormatTests(unittest.TestCase):
         before=copy.deepcopy(self.value);text=self.render()
         for required in ('57,270元','持仓约169克','黄金仓位约15.0%','实物需求提供支撑','不会自动包含新增克数','未挂单时不会自动卖出'):
             self.assertIn(required,text)
-        for jargon in ('不加+2000','整套建仓结束','条件成立时目标黄金仓位20%','本轮不建议参与该候选方案'):
+        for jargon in ('+2000/-2500','整套建仓结束','条件成立时目标黄金仓位20%','本轮不建议参与该候选方案'):
             self.assertNotIn(jargon,text)
         self.assertEqual(before,self.value)
+
+    def test_reduction_path_explains_retained_position_without_changing_macro_percentages(self):
+        self.value['position_path']={'target_position_pct':20,'exit_scope':'plan','boundary_price_cny':804,
+            'continuation':'若美元与收益率走强，比较降至10%；收益率降至5%时重新分析。',
+            'coverage':{},'checks':[]}
+        text=self.render()
+        self.assertIn('保留10%，不是卖出10%',text)
+        self.assertIn('收益率降至5%',text)
+        self.assertNotIn('保留5%',text)
+        self.assertEqual(self.value['position_path']['target_position_pct'],20)

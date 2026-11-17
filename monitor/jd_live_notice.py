@@ -1,10 +1,10 @@
 """Compact human-readable real-account notifications, never executable instructions."""
-import re
 from .config import BJ
 from .jd_live_conditions import stamp
 from .jd_live_entry import same_order
 from .jd_live_notice_rules import LABELS
 from .trade_costs import number
+from .jd_live_presentation import brief,basis,plan_steps
 
 
 def time_text(value):
@@ -12,23 +12,6 @@ def time_text(value):
     return at.astimezone(BJ).strftime('%m-%d %H:%M') if at else '待确认'
 
 
-def brief(text,limit=160):
-    text=re.sub(r'(?<![A-Za-z])[ETR](?![A-Za-z])',
-                lambda m:{'E':'入场价','T':'目标价','R':'风险参考价'}[m[0]],str(text or ''))
-    text=re.sub(r'(?<![A-Za-z])MA(20|50)(?!\d)',lambda m:m[1]+'日均线',text)
-    for old,new in (('边界终止整套','到退出参考价时停止这套加仓计划'),('整套退出边界','停止加仓并重新考虑卖出的价格'),
-                    ('先人工撤改追加','先撤销或修改尚未成交的买单'),('宏观未同步走强','美元和美债收益率没有同时上升'),
-                    ('整仓损失','全部持仓可能亏损的金额'),('保护数量','止盈止损单的克数'),('本轮无已挂保护','目前没有已挂止盈止损单'),
-                    ('实物承接','实物买盘支撑'),('有限修复','一定幅度的反弹'),('流动性压力','市场资金紧张'),
-                    ('可比较补至','考虑是否加至'),('比较补至','考虑是否加至'),('比较降至','考虑是否减至'),('先刷新','先更新账户'),('再复评','再重新分析'),('刷新重评','更新账户后重新分析'),('自主风险边界','需要重新考虑退出的价格'),('总仓','黄金仓位'),('复评','重新分析'),('现仓','现有持仓'),
-                    ('宏观同步走强','美元和美债收益率同时上升'),('全仓风险','全部持仓可能亏损的金额'),
-                    ('整仓风险','全部持仓可能亏损的金额'),('本批','这批'),('后批','下一次买入'),
-                    ('不追增','不追着上涨继续买'),('新快照','更新后的账户数据')):
-        text=text.replace(old,new)
-    text=' '.join(text.split())
-    if len(text)<=limit:return text
-    end=max(text.rfind(mark,0,limit) for mark in ('。','！','？','；'))
-    return text[:end+1]+'…（详见账户页）' if end>=limit//2 else text[:limit]+'…（详见账户页）'
 
 
 def follow_up(value):
@@ -36,7 +19,7 @@ def follow_up(value):
     path=value.get('position_path') or {}
     if not path or path.get('checks'):return ''
     lines=[]
-    if path.get('continuation'):lines.append(brief(path['continuation'],1000))
+    lines.extend(plan_steps(path))
     boundary=number(path.get('boundary_price_cny'))
     if boundary is not None:
         scope='停止这套加仓计划，重新考虑现有持仓的处理' if path.get('exit_scope')=='plan' else '处理当前这批持仓，后续是否加仓需要重新分析'
@@ -129,22 +112,15 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
             lines.append(f"买入后的参考目标价{review['target_price_cny']:g}元/克；风险退出参考价{review['risk_exit_cny']:g}元/克（不是已挂止损）。")
     if proposal_withdrawn:
         lines.append('本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。')
-    for review in value.get('limit_buy_reviews',[]):
-        if review.get('checks') or review['decision']=='recommend':continue
-        label={'needs_review':'需要重新分析后再决定，暂不建议提前挂低价买单',
-               'not_worthwhile':'这轮暂不建议提前挂低价买单，不影响上面的买卖建议',
-               'unavailable':'信息不足，暂不能确定低价买单的价格和数量'}[review['decision']]
-        lines.append('低价挂单：'+label+'。')
-        break
     if not partial:
         path_text=follow_up(value)
         if path_text:lines.append(path_text)
     if partial:
         lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
     else:
-        reason=(value.get('reassessment') or {}).get('thesis') or value.get('reason')
-        if reason:lines.append('为什么这样建议：'+brief(reason))
-        if value.get('risk_note'):lines.append('注意事项：'+brief(value['risk_note'],160))
+        explanation=basis(value)
+        if explanation:
+            lines.append('关键依据：\n'+'\n'.join('**'+item['label']+'**\n'+item['text'] for item in explanation))
     conditions=value.get('review_conditions',[])
     if conditions:
         observations=[]

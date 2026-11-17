@@ -2,7 +2,6 @@
 import { computed } from "vue";
 import LiveRiskSummary from "./LiveRiskSummary.vue";
 import DownsideReview from "./DownsideReview.vue";
-import LimitBuyReviews from "./LimitBuyReviews.vue";
 import PositionPath from "./PositionPath.vue";
 import ParticipationReview from "./ParticipationReview.vue";
 import OrderImpact from "./OrderImpact.vue";
@@ -204,10 +203,16 @@ const proposalState = (order) => {
         </div>
       </div>
       <ParticipationReview
-        :review="advice.participation_review || advice.input_strategy_review?.participation_review"
+        :review="
+          advice.participation_review ||
+          advice.input_strategy_review?.participation_review
+        "
         :snapshot="!advice.participation_review"
       />
-      <section v-if="advice.reassessment" class="live-quote live-reassessment">
+      <section
+        v-if="advice.reassessment && !advice.presentation"
+        class="live-quote live-reassessment"
+      >
         <div class="live-section-heading">
           <strong>本轮变化</strong>
           <span class="sub">{{
@@ -226,10 +231,8 @@ const proposalState = (order) => {
       </section>
       <PositionPath
         :path="advice.position_path"
-        :active="partState === 'current' && quoteFresh"
-      />
-      <LimitBuyReviews
-        :items="advice.limit_buy_reviews"
+        :steps="advice.presentation?.plan_steps"
+        :note="advice.presentation?.execution_note"
         :active="partState === 'current' && quoteFresh"
       />
       <DownsideReview :items="advice.downside_scenarios" />
@@ -465,14 +468,22 @@ const proposalState = (order) => {
     >
       需核对：{{ check }}
     </div>
-    <details v-if="section !== 'orders'" class="more">
-      <summary>
-        {{ advice.reassessment ? "查看方案比较与风险" : "查看依据与风险" }}
-      </summary>
-      <p class="live-advice-reason">
-        {{ advice.reason || "本轮未提供判断依据" }}
-      </p>
-      <div class="sub">{{ advice.risk_note }}</div>
-    </details>
+    <section v-if="section !== 'orders'" class="live-quote" data-advice-basis>
+      <strong>关键依据</strong>
+      <div
+        v-for="(item, index) in advice.presentation?.basis || [
+          {
+            label: '操作与数量说明',
+            text: advice.reason || '本轮未提供判断依据',
+          },
+        ]"
+        :key="index"
+      >
+        <p class="sub">
+          <strong>{{ item.label }}</strong>
+        </p>
+        <p class="live-advice-reason">{{ item.text }}</p>
+      </div>
+    </section>
   </article>
 </template>
