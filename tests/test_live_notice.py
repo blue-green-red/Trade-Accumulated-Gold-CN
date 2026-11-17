@@ -123,7 +123,7 @@ class LiveNoticeFormatTests(unittest.TestCase):
                 'continuation':'回落823且美元与收益率未同步走强，再比较加至20%。',
                 'coverage':{'additional_buy_grams':69,'after_all_buys_grams':169},'checks':[]})
         before=copy.deepcopy(self.value);text=self.render()
-        for required in ('57,270元','持仓约169克','黄金仓位约15.0%','实物需求提供支撑','不会自动包含新增克数','未挂单时不会自动卖出'):
+        for required in ('57,270元','持仓约169克','黄金仓位约15.0%','实物需求提供支撑','成交后更新账户并核对止盈止损数量','不自动买卖'):
             self.assertIn(required,text)
         for jargon in ('+2000/-2500','整套建仓结束','条件成立时目标黄金仓位20%','本轮不建议参与该候选方案'):
             self.assertNotIn(jargon,text)
@@ -133,9 +133,29 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.value['position_path']={'target_position_pct':20,'exit_scope':'plan','boundary_price_cny':804,
             'continuation':'若美元与收益率走强，比较降至10%；收益率降至5%时重新分析。',
             'coverage':{},'checks':[]}
-        text=self.render()
+        from monitor.jd_live_presentation import presentation
+        text=''.join(presentation(self.value)['plan_steps'])
         self.assertIn('保留10%，不是卖出10%',text)
         self.assertIn('收益率降至5%',text)
         self.assertNotIn('保留5%',text)
         self.assertEqual(self.value['position_path']['target_position_pct'],20)
         self.assertIn('即保留约10%，不是卖出约10%',brief('若回调同时走弱，比较减至约10%。',1000))
+
+    def test_follow_up_is_short_and_does_not_repeat_price_watch_or_full_plan(self):
+        from monitor.jd_live_notice import follow_up
+        self.value['position_path']={'exit_scope':'plan','boundary_price_cny':804.39,'checks':[],
+            'continuation':'完整交易条件只在账户页展示。'*20}
+        self.value['review_conditions']=[
+            {'condition':'at_or_above','price_cny':835.47,'reason':'比较保留约15%与放弃追增。'},
+            {'condition':'at_or_below','price_cny':823.64,'reason':'比较总仓20%、维持15%及宏观恶化时降至10%。'},
+            {'condition':'at_or_below','price_cny':804.39,'reason':'按退出方案核对。'}]
+        self.value['downside_scenarios']=[{'price_cny':823.64,'price_role':'entry_reference','preferred_action':'reassess','checks':[]}]
+        before=copy.deepcopy(self.value);summary=follow_up(self.value);text=self.render()
+        self.assertEqual(summary.count('• '),3);self.assertLess(len(summary),240)
+        for price in ('835.47','823.64','804.39'):self.assertIn(price,summary)
+        self.assertIn('暂停加仓',summary);self.assertIn('不自动买卖',summary)
+        self.assertIn('重新评估是否维持约15%仓位',summary)
+        self.assertIn('重新评估是否加仓',summary)
+        self.assertNotIn('完整交易条件',summary)
+        self.assertNotIn('什么时候重新分析：',text)
+        self.assertEqual(before,self.value)

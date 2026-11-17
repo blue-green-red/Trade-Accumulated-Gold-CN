@@ -146,7 +146,7 @@ class LivePathTests(unittest.TestCase):
         a=accounts(self.f.s.conn,fixtures.NOW)[0]
         text=body(a,v,notification_parts(v))
         self.assertIn('之后怎么做：',text);self.assertNotIn('目标黄金仓位100%',text)
-        self.assertIn('处理当前这批持仓',text);self.assertIn('更新后的账户数据',text)
+        self.assertIn('处理本批持仓',text);self.assertIn('成交后更新账户',text)
         bad=self.candidate(810)
         v=self.saved(limit_buy_reviews=[bad],suggested_orders=[self.value()['suggested_orders'][0],self.buy_order(bad)])
         text=body(a,v,notification_parts(v))

@@ -1,10 +1,11 @@
 """Compact human-readable real-account notifications, never executable instructions."""
+import re
 from .config import BJ
 from .jd_live_conditions import stamp
 from .jd_live_entry import same_order
 from .jd_live_notice_rules import LABELS
 from .trade_costs import number
-from .jd_live_presentation import brief,basis,plan_steps
+from .jd_live_presentation import brief,basis
 
 
 def time_text(value):
@@ -15,20 +16,35 @@ def time_text(value):
 
 
 def follow_up(value):
-    """Use the saved plan; do not turn a later target into today's trade size."""
+    """A short review checklist; the full conditional trading path stays on the account page."""
     path=value.get('position_path') or {}
     if not path or path.get('checks'):return ''
-    lines=[]
-    lines.extend(plan_steps(path))
     boundary=number(path.get('boundary_price_cny'))
-    if boundary is not None:
-        scope='停止这套加仓计划，重新考虑现有持仓的处理' if path.get('exit_scope')=='plan' else '处理当前这批持仓，后续是否加仓需要重新分析'
-        lines.append(f'风险退出参考价{boundary:g}元/克：{scope}。未挂单时不会自动卖出。')
-    coverage=path.get('coverage') or {}
-    if coverage.get('additional_buy_grams'):
-        lines.append('新增买入成交后，先更新账户再决定下一步；原止盈止损单不会自动包含新增克数。')
+    conditions=[c for c in value.get('review_conditions',[]) if not c.get('checks')]
+    exit_condition=None
+    if boundary is not None and not any(c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key') for c in conditions):
+        exit_condition={'condition':'at_or_below','price_cny':boundary}
+    if exit_condition:conditions=conditions[:3]+[exit_condition]
+    lines=[]
+    for c in conditions[:4]:
+        direction='涨到' if c['condition']=='at_or_above' else '跌到'
+        if c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key'):
+            scope='现有' if path.get('exit_scope')=='plan' else '本批'
+            reason=f'暂停加仓，核对挂单后按退出方案处理{scope}持仓'
+        else:
+            raw=c.get('reason') or ''
+            holding=re.match(r'^(?:比较|评估)保留(约?\d+(?:\.\d+)?)%与放弃追增',raw)
+            entry=any(s.get('price_cny')==c['price_cny'] and s.get('price_role')=='entry_reference'
+                      and s.get('preferred_action')=='reassess' and not s.get('checks') for s in value.get('downside_scenarios',[]))
+            if holding:reason=f'重新评估是否维持{holding[1]}%仓位'
+            elif entry and not c.get('order_key'):reason='重新评估是否加仓'
+            else:reason=brief(raw,36).replace('…（详见账户页）','…').replace('比较','评估') or '重新分析，再决定是否买卖'
+        scope='（指定挂单）' if c.get('order_key') else ''
+        lines.append(f"• {direction}{c['price_cny']:g}元/克{scope}：{reason}")
+    if not lines:lines.append('下一次操作前，先更新账户并重新分析。')
     if path.get('manual_resolution_required'):
         lines.append('先确认旧买单已撤销或修改，再考虑新买单。')
+    lines.append('到价只重新分析，不自动买卖；成交后更新账户并核对止盈止损数量。')
     return '之后怎么做：\n'+'\n'.join(lines) if lines else ''
 
 
@@ -112,6 +128,7 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
             lines.append(f"买入后的参考目标价{review['target_price_cny']:g}元/克；风险退出参考价{review['risk_exit_cny']:g}元/克（不是已挂止损）。")
     if proposal_withdrawn:
         lines.append('本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。')
+    path_text=''
     if not partial:
         path_text=follow_up(value)
         if path_text:lines.append(path_text)
@@ -122,7 +139,7 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         if explanation:
             lines.append('关键依据：\n'+'\n'.join('**'+item['label']+'**\n'+item['text'] for item in explanation))
     conditions=value.get('review_conditions',[])
-    if conditions:
+    if conditions and not path_text:
         observations=[]
         for c in conditions:
             symbol={'at_or_above':'≥','at_or_below':'≤'}[c['condition']]
