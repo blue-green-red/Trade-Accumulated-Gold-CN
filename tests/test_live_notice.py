@@ -138,3 +138,4 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.assertIn('收益率降至5%',text)
         self.assertNotIn('保留5%',text)
         self.assertEqual(self.value['position_path']['target_position_pct'],20)
+        self.assertIn('即保留约10%，不是卖出约10%',brief('若回调同时走弱，比较减至约10%。',1000))
