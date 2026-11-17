@@ -195,7 +195,8 @@ class Monitor:
         for name,analyst in self.enabled_analysts().items():
             if force:due[name]="手动"
             elif ready(self.store.conn,self.settings,name):
-                due[name]=TRIGGER if snap.get("market_open") and execution_quote(snap) else None
+                # Read-only real advice uses its own bank preflight, not the simulated execution feed.
+                due[name]=TRIGGER if self.settings.ai_trading_mode=='live_only' or (snap.get("market_open") and execution_quote(snap)) else None
             else:due[name]=analyst.due()
         due = {name: trigger for name, trigger in due.items() if trigger}
         if self.portfolios:

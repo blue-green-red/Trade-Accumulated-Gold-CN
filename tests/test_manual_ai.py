@@ -103,3 +103,34 @@ class ManualTests(unittest.TestCase):
             a,b=post(**good),post(**good)
             self.assertEqual(a[0],202);self.assertEqual(json.loads(a[1])['id'],json.loads(b[1])['id'])
         finally:server.shutdown();server.server_close()
+
+    def test_live_manual_uses_bank_inputs_without_simulation_execution_quote(self):
+        from monitor.ai import ClaudeCodeResult
+        from monitor.jd_live_readonly import parse_account,record_success,model_input,set_enabled_banks
+        from test_jd_live import payload
+        f=self.f;now=fixtures.utc_now()
+        data=parse_account('zheshang',payload())
+        data.update(cash_cny=20000,cash_source='jd_electronic_account_api',pending_order_count=0,
+            quote={'buy_price_cny':850,'sell_price_cny':850,'quoted_at':now.isoformat()},
+            pending_orders={'records':[],'total_count':0,'complete':True},
+            coverage={'pending_orders':'available','cash_balance':'available'},
+            component_times={'pending_orders':now.isoformat(),'cash_balance':now.isoformat()})
+        record_success(f.store.conn,'zheshang',data,now.isoformat())
+        set_enabled_banks(f.store.conn,['zheshang'])
+        settings=replace(f.settings,ai_trading_mode='live_only');f.m.settings=settings;f.a.settings=settings
+        f.m.portfolios=None;f.m.accounts=None
+        before=[tuple(r) for r in f.store.conn.execute('SELECT * FROM ai_portfolio_fills ORDER BY id')]
+        context={'snapshot_at':now.isoformat(),'xauusd':4000,'live_readonly_accounts':model_input(f.store.conn,now)}
+        f.m.ai_context=Mock(return_value=context)
+        value=fixtures.response().model_dump();value.pop('account_decisions')
+        f.a._run_codex=Mock(return_value=('notes',[],ClaudeCodeResult.model_validate(value)))
+        request(f.store.conn,settings,'codex')
+        snap=fixtures.snapshot();snap.pop('execution_quote');snap['market_open']=False
+        f.m.run_ai_if_due(snap);f.m.wait_for_ai()
+        self.assertEqual(f.a._run_codex.call_count,1)
+        self.assertEqual(status(f.store.conn,'codex')['status'],'completed')
+        actual=f.a._run_codex.call_args.args[0]
+        self.assertNotIn('trading_accounts',actual)
+        self.assertEqual(actual['live_readonly_accounts']['accounts']['zheshang']['status'],'fresh')
+        self.assertEqual(f.store.get_state('jd_live_preflight')['status'],'ready')
+        self.assertEqual([tuple(r) for r in f.store.conn.execute('SELECT * FROM ai_portfolio_fills ORDER BY id')],before)
