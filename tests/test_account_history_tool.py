@@ -96,6 +96,7 @@ class AccountHistoryTests(unittest.TestCase):
             subprocess.run([spec['command'],*spec['args']],input=json.dumps(packet)+'\n',text=True,capture_output=True,check=True,timeout=5)
         self.assertEqual(usage['performance']['history_queries'],1)
         self.assertEqual(usage['performance']['history_rows'],1)
+
         self.assertEqual(usage['history_queries'][0]['result']['model'],'codex')
         cancelled={}
         with session(f.a,f.context(),cancelled) as binding:
@@ -113,6 +114,22 @@ class AccountHistoryTests(unittest.TestCase):
             return SimpleNamespace(returncode=0,stdout=json.dumps({'subtype':'success','structured_output':fixtures.response().model_dump()}),stderr='')
         f.a._run_process=process
         f.a._run_claude_code(f.context(),{})
+
+
+    def test_live_page_tool_initializes_with_cold_start_budget_and_no_simulation_history(self):
+        f=self.f;usage={}
+        f.a.settings=replace(f.settings,ai_trading_mode='live_only',ai_max_searches=1,ai_page_fetch_max_calls=1)
+        with session(f.a,{'snapshot_at':self.asof},usage) as binding:
+            self.assertEqual([t['name'] for t in binding['definitions']],['fetch_public_page'])
+            self.assertIn('mcp_servers.account_history.startup_timeout_sec=30',binding['codex'])
+            spec=binding['claude']['mcpServers']['account_history']
+            packets=[{'jsonrpc':'2.0','id':1,'method':'initialize','params':{}},
+                     {'jsonrpc':'2.0','id':2,'method':'tools/list'}]
+            result=subprocess.run([spec['command'],*spec['args']],input='\n'.join(json.dumps(p) for p in packets)+'\n',
+                text=True,capture_output=True,check=True,timeout=30)
+            replies=[json.loads(line) for line in result.stdout.splitlines()]
+            self.assertIn('serverInfo',replies[0]['result'])
+            self.assertEqual([t['name'] for t in replies[1]['result']['tools']],['fetch_public_page'])
 
     def test_api_queries_history_then_submits_and_archives_exact_response(self):
         f=self.f

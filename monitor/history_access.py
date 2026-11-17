@@ -35,7 +35,7 @@ def session(analyst,context,usage):
         from .history_tool import TOOL
         definitions=([TOOL] if history_on else [])+([PAGE_TOOL] if page_max else [])
         codex=[]
-        for key,value in {**config,'enabled_tools':[t['name'] for t in definitions],'required':True,'startup_timeout_sec':5,'tool_timeout_sec':20 if page_max else 5,'default_tools_approval_mode':'approve'}.items():
+        for key,value in {**config,'enabled_tools':[t['name'] for t in definitions],'required':True,'startup_timeout_sec':30,'tool_timeout_sec':20 if page_max else 5,'default_tools_approval_mode':'approve'}.items():
             codex+=['-c','mcp_servers.account_history.'+key+'='+json.dumps(value)]
         from .analysis_archive import record
         for definition in definitions:record(usage,'tool_definition',definition)
