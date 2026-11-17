@@ -5,6 +5,7 @@ import json
 from .ai_events import read,write
 from .controls import control
 from .jd_live_feedback import plan_signature
+from .jd_live_semantics import plan_terms,same_plan
 
 
 def identity(value,revision):
@@ -34,9 +35,15 @@ def request_expiry_review(store,account,advice,now):
         rows=conn.execute('SELECT id,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND analyst=? AND id>? AND id<=? ORDER BY id',
                           (bank,model,watch.get('last_advice_id',0),advice['id'])).fetchall()
         for item in rows:
-            signature=identity(json.loads(item[2]),item[1])
-            if watch.get('signature')!=signature:
-                watch={'signature':signature,'origin_advice_id':item[0],'reviewed':False}
+            value=json.loads(item[2]);signature=identity(value,item[1]);terms=plan_terms(value)
+            if watch.get('origin_terms') is None and watch.get('origin_advice_id'):
+                old=conn.execute('SELECT advice_json,snapshot_revision FROM jd_live_advice WHERE id=?',(watch['origin_advice_id'],)).fetchone()
+                if old:
+                    old_value=json.loads(old[0])
+                    watch.update(origin_terms=plan_terms(old_value),revision=old[1],conditions=sorted(json.dumps({k:c.get(k) for k in ('condition','price_cny','quote_side','order_key')},sort_keys=True) for c in old_value.get('review_conditions',[])))
+            conditions=sorted(json.dumps({k:c.get(k) for k in ('condition','price_cny','quote_side','order_key')},sort_keys=True) for c in value.get('review_conditions',[]))
+            if watch.get('revision')!=item[1] or not same_plan(watch.get('origin_terms'),terms) or watch.get('conditions',conditions)!=conditions:
+                watch={'signature':signature,'origin_advice_id':item[0],'reviewed':False,'origin_terms':terms,'revision':item[1],'conditions':conditions}
             watch['last_advice_id']=item[0]
         actionable=advice['action'] in ('buy','sell') or advice.get('review_conditions') or any(
             o['action'] in ('cancel','replace') for o in advice.get('order_management',[]))

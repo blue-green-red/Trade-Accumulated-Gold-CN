@@ -154,7 +154,7 @@ class StructuredAdviceTests(unittest.TestCase):
         view=self.saved(self.value('cancel'));self.assertEqual(notification_events(self.s.conn,'codex',view),[])
         value=self.value('replace',review_conditions=[self.condition()]);value['order_management'][0]['replacement']={'price_cny':848.}
         view=self.saved(value);events=notification_events(self.s.conn,'codex',view)
-        self.assertIn('改单建议',events[0]['title']);self.assertIn('修改后',events[0]['body']);self.assertIn('价格复评',events[0]['body'])
+        self.assertIn('改单建议',events[0]['title']);self.assertIn('修改后',events[0]['body']);self.assertIn('什么时候重新分析',events[0]['body'])
         view=self.saved();events=notification_events(self.s.conn,'codex',view)
         self.assertIn('挂单处理建议更新',events[0]['title'])
 
@@ -203,7 +203,7 @@ class StructuredAdviceTests(unittest.TestCase):
         value['grams']=2.;value['order_management'][0]['replacement']={'grams':3.,'price_cny':848.}
         view=self.saved(value);events=notification_events(self.s.conn,'codex',view)
         self.assertEqual(len(events),1);self.assertIn('卖出建议＋改单建议',events[0]['title'])
-        self.assertIn('新增买卖建议：卖出 2克',events[0]['body'])
+        self.assertIn('这次怎么做：卖出 2克',events[0]['body'])
 
     def test_unrecognized_global_checks_keep_notifications_blocked_and_history_intact(self):
         value=self.value(grams=2.,price_condition='reference',price_cny=855.);value['action']='sell'

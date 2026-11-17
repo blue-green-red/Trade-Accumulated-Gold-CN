@@ -12,7 +12,7 @@ class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
     thesis_status:Literal['new','valid','weakened','invalidated']
     thesis:str=Field(min_length=1,max_length=180,description='当前交易假设、支持证据与推翻条件')
-    price_basis:str=Field(min_length=1,max_length=360,description='用完整中文句子解释目标价和退出价的依据、期限可达性与敏感性，含沿用/改动原因；假设标明，无价位写不适用')
+    price_basis:str=Field(min_length=1,max_length=1200,description='建议约200字，完整句收尾；解释目标价和退出价的依据、期限可达性与敏感性，含沿用/改动原因；假设标明，无价位写不适用')
 
 class ReplacementOrder(BaseModel):
     grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
@@ -93,6 +93,10 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         strict_entry='limit_buy_reviews' in raw
         strict_path='position_path' in raw
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
+        if inputs.get('text_contract')=='complete_sentences_v1':
+            from .jd_live_text import incomplete_fields
+            fields=incomplete_fields(value)
+            if fields:warnings.append('分析文字未完整结束，需复核：'+'、'.join(fields))
         if invalidation_note:warnings.append(invalidation_note)
         value['risk_profile']={**(inputs.get('risk_profile') or {}),'risk_budget_cny':(source.get('account_risk') or {}).get('risk_budget_cny')}
         value['input_account_risk']=source.get('account_risk')
@@ -155,6 +159,10 @@ def notification_events(conn,analyst,view_id):
                               (account['bank'],analyst,row[0])).fetchone()
         raw_old=json.loads(previous[0]) if previous else None
         old=notification_parts(raw_old) if raw_old else None
+        from .jd_live_semantics import plan_terms,same_plan
+        last_notice=conn.execute("SELECT a.advice_json,a.snapshot_revision FROM jd_live_advice a JOIN alerts n ON n.key='live-advice:'||a.id WHERE a.bank=? AND a.analyst=? AND a.id<? ORDER BY a.id DESC LIMIT 1",(account['bank'],analyst,row[0])).fetchone()
+        anchor=notification_parts(json.loads(last_notice[0])) if last_notice else old
+        anchor_revision=last_notice[1] if last_notice else previous[1] if previous else None
         validation_recovered=bool(raw_old and raw_old.get('checks') and not raw_old.get('validation_version') and raw_value.get('validation_version'))
         orders_changed=management_signature(old)!=management_signature(value)
         from .jd_live_entry import signature as entry_signature
@@ -166,7 +174,7 @@ def notification_events(conn,analyst,view_id):
         proposal_notice=(proposed_changed or renewed) and bool(old_drafts or value.get('suggested_orders'))
         manual_order_action=any(o['action'] in ('cancel','replace') for v in (old,value) if v for o in v.get('order_management',[]))
         order_notice=manual_order_action and (orders_changed or (previous and previous[1]!=row[2]))
-        if not notice_reasons and old and immediate_signature(old)==immediate_signature(value) and not orders_changed and not proposal_notice and not validation_recovered and previous[1]==row[2]:continue
+        if not notice_reasons and old and same_plan(plan_terms(anchor),plan_terms(value)) and not orders_changed and not proposal_notice and not validation_recovered and anchor_revision==row[2]:continue
         if not notice_reasons and not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
         key=f'live-advice:{row[0]}'
         if conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue

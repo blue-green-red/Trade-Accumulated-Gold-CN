@@ -272,6 +272,8 @@ class Monitor:
             finally:
                 coverage_store.conn.close()
             context = dict(self.ai_context(snap, base_plan, jin10_recent))
+            if context.get('live_readonly_accounts'):
+                context['live_readonly_accounts']['text_contract']='complete_sentences_v1'
             if live_preflight.get('status') == 'degraded':
                 for bank in live_preflight.get('missing', {}):
                     account = (context.get('live_readonly_accounts') or {}).get('accounts', {}).get(bank)
@@ -387,8 +389,16 @@ class Monitor:
             if event.get("country") != "US" or event.get("tier", 3) > 2:
                 continue
             age = age_seconds(event.get("time_utc"), now)
-            if not delay <= age <= 86400 or event.get("actual") is None or event.get("actual") == "":
+            if not delay <= age <= 86400:
                 continue
+            if event.get('title') in ('FOMC Minutes','Fed Beige Book') and event.get('actual') is None:
+                key=json.dumps([event['time_utc'],event['title'],'scheduled-review'],ensure_ascii=False)
+                for analyst in enabled.values():
+                    analyst.request_refresh(f"官方事件时点已过，待核实内容 {event['time_bj']} {event['title']}",min_gap_minutes=15,
+                        event_id='calendar:'+hashlib.sha256(key.encode()).hexdigest()[:24],
+                        payload={**event,'released':False,'publication_confirmed':False,'source':'官方日历；到时不代表已确认公布'})
+                continue
+            if event.get('actual') is None or event.get('actual')=='':continue
             try:
                 if isinstance(event["actual"], bool) or not math.isfinite(float(event["actual"])):
                     continue

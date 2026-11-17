@@ -61,7 +61,7 @@ function eventStatus(e) {
   return e.released
     ? "已公布"
     : minutes < 0
-      ? "已到时间 · 待更新"
+      ? ['FOMC Minutes', 'Fed Beige Book'].includes(e.title) ? "已到预定时间 · 正文待核实" : "已到时间 · 待更新"
       : minutes < 60
         ? Math.ceil(minutes) + " 分钟后"
         : "待公布";
@@ -140,7 +140,10 @@ onActivated(() => emit("ready"));
               {{ { US: "美国", CN: "中国" }[e.country] || e.country }}
               {{ eventName(e.title) }}
             </div>
-            <div class="event-values">
+            <div v-if="['FOMC Minutes', 'Fed Beige Book'].includes(e.title)" class="data-meta">
+              日程仅提供正文发布时间，无数值预期。
+            </div>
+            <div v-else class="event-values">
               <span
                 >实际 <strong>{{ e.actual ?? "—" }}</strong></span
               ><span>预期 {{ e.forecast ?? "—" }}</span

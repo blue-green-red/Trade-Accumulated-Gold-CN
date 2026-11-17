@@ -128,10 +128,12 @@ def calendar_data(conn, now):
             if isinstance(val, str): return val[:80]
             return number(val)
         rows.append({'at': at.isoformat(), 'country': row['country'], 'title': str(row.get('title', ''))[:160],
+                     'document_event': row.get('title') in ('FOMC Minutes', 'Fed Beige Book'),
                      'tier': row['tier'], 'released': released, 'actual': value('actual') if released else None,
                      'forecast': value('forecast'), 'previous': value('previous')})
     fetched = macro.get('calendar_fetched_at') or macro.get('fetched_at')
-    return {'schema_version': 1, 'source': 'TradingView 经济日历', 'items': rows, 'fetched_at': fetched,
+    official=any(e.get('source')=='Federal Reserve' or e.get('schedule_source')=='Federal Reserve' for e in window['events'])
+    return {'schema_version': 1, 'source': 'TradingView / 美联储官方日历' if official else 'TradingView 经济日历', 'items': rows, 'fetched_at': fetched,
             'status': freshness(fetched, now, 2100), 'days_ahead': 7}
 
 

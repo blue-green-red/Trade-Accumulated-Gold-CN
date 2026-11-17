@@ -1,4 +1,7 @@
 const EVENT_CN = {
+  "Fed Beige Book": "美联储经济褐皮书",
+  "Industrial Production MoM": "工业产出月率",
+  "Retail Sales Control Group": "零售销售控制组",
   "Inflation Rate YoY": "CPI 年率",
   "Inflation Rate MoM": "CPI 月率",
   "Core Inflation Rate YoY": "核心 CPI 年率",

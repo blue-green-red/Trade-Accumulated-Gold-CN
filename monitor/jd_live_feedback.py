@@ -77,9 +77,10 @@ def strategy_review(conn,account,model,now=None):
     current=price(quote.get('sell_price_cny')) if account.get('connected') and quote.get('status')=='fresh' else None
     current_at=stamp(quote.get('quoted_at'))
     if current_at is None or (anchor and current_at<stamp(anchor['quoted_at'])):current=None
+    from .jd_live_semantics import plan_terms,same_plan
     unchanged=[]
     for item in history:
-        if item.get('snapshot_revision')!=latest.get('snapshot_revision') or plan_signature(item)!=plan_signature(latest):break
+        if item.get('snapshot_revision')!=latest.get('snapshot_revision') or not same_plan(plan_terms(latest),plan_terms(item)):break
         unchanged.append(item)
     states=[(v.get('reassessment') or {}).get('thesis_status') for v in unchanged]
     weakened=sum(s in ('weakened','invalidated') for s in states)

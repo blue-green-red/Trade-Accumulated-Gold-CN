@@ -16,6 +16,7 @@ from monitor.ai import AIAnalyst
 
 class DataTests(unittest.TestCase):
     def setUp(self):
+        official=patch('monitor.official_calendar.supplement',return_value=([],[]));official.start();self.addCleanup(official.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "data.db"
         self.store = Store(self.path)
@@ -112,7 +113,8 @@ class DataTests(unittest.TestCase):
 
     def test_enabled_search_cli_flags_and_policy(self):
         analyst = AIAnalyst.__new__(AIAnalyst)
-        analyst.settings = replace(Settings(), ai_max_searches=2)
+        analyst.analyst = 'codex'
+        analyst.settings = replace(Settings(), ai_max_searches=2, db_path=self.path)
         analyst.model = "test"
         self.assertIn("最多搜索 2 次", analyst.research_system())
         self.assertIn("不必用满次数", analyst.research_system())

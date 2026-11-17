@@ -30,6 +30,7 @@ MACRO_TICKERS = {"TVC:DXY": "美元指数", "TVC:US10Y": "美国10年期国债�
 TIER1_PATTERNS = [r"Fed Interest Rate Decision", r"Fed Press Conference", r"FOMC Economic Projections",
                   r"Fed Chair .* Speech", r"Non Farm Payrolls", r"Unemployment Rate", r"^Inflation Rate",
                   r"^Core Inflation Rate", r"Core PCE Price Index"]
+TIER2_PATTERNS = [r"FOMC Minutes", r"Industrial Production MoM", r"Beige Book", r"Retail Sales Control Group"]
 
 
 def _get_json(url: str, data: Optional[bytes] = None, headers: Optional[Dict[str, str]] = None, timeout: float = 15):
@@ -41,6 +42,7 @@ def event_tier(event: Dict[str, Any]) -> int:
     """1 = 硬事件；2 = 其他重要数据；3 = 一般。"""
     if event.get("country") == "US" and any(re.search(p, event.get("title", "")) for p in TIER1_PATTERNS):
         return 1
+    if event.get('country')=='US' and any(re.search(p,event.get('title',''),re.I) for p in TIER2_PATTERNS):return 2
     return 2 if (event.get("importance") or 0) >= 1 else 3
 
 

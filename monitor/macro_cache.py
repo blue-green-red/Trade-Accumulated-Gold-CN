@@ -44,7 +44,13 @@ def refresh(store, now):
         cached[kind + "_checked_at"] = now.isoformat(timespec="seconds")
         changed = True
         try:
-            cached[kind] = fetch()
+            value=fetch()
+            if kind=='calendar':
+                from .official_calendar import supplement,merge
+                official,coverage=supplement(store,now)
+                value=merge(value,official)
+                cached['calendar_sources']=coverage
+            cached[kind] = value
             cached[kind + "_fetched_at"] = now.isoformat(timespec="seconds")
             errors.pop(kind, None)
             cached["fetched_at"] = now.isoformat(timespec="seconds")

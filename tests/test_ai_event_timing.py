@@ -121,6 +121,22 @@ class EventTimingTests(unittest.TestCase):
         finally:
             m.store.conn.close()
 
+    def test_document_schedule_triggers_one_review_without_claiming_publication(self):
+        m = self.monitor()
+        try:
+            self.save_calendar([self.event('FOMC Minutes', minutes_ago=0)])
+            m.request_ai_after_data_release()
+            self.assertFalse(read(self.store.conn, 'codex')['pending'])
+            self.save_calendar([self.event('FOMC Minutes', minutes_ago=15)])
+            m.request_ai_after_data_release();m.request_ai_after_data_release()
+            queue=read(self.store.conn, 'codex')['pending']
+            self.assertEqual(len(queue),1)
+            self.assertFalse(queue[0]['data']['released'])
+            self.assertFalse(queue[0]['data']['publication_confirmed'])
+            self.assertIn('待核实',queue[0]['reason'])
+        finally:
+            m.store.conn.close()
+
     def test_stale_calendar_and_invalid_actual_do_not_trigger(self):
         m = self.monitor()
         try:

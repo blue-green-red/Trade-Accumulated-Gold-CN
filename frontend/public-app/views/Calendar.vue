@@ -94,7 +94,10 @@ const next = computed(
             <span v-if="e.tier === 1" class="status-pill">重大</span>
           </div>
           <h3>{{ eventName(e.title) }}</h3>
-          <div class="event-values">
+          <div v-if="e.document_event" class="muted small">
+            {{ Date.parse(e.at) <= clock ? '已到预定时间，正文待核实。' : '按官方日程发布正文，无数值预期。' }}
+          </div>
+          <div v-else class="event-values">
             <span
               >实际
               <strong>{{
@@ -108,7 +111,7 @@ const next = computed(
             ><span>前值 {{ e.previous ?? "—" }}</span>
           </div>
           <div
-            v-if="!e.released && Date.parse(e.at) <= clock"
+            v-if="!e.document_event && !e.released && Date.parse(e.at) <= clock"
             class="muted small"
           >
             已到公布时间，等待数据更新。
