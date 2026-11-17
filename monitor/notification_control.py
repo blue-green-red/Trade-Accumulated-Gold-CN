@@ -13,7 +13,7 @@ LOGIN_TOPIC='jd:login'
 
 
 def topics_for_mode(mode,conn=None):
-    allowed = ('low','standard','high','analysis','live_zheshang','live_minsheng') if mode == DEFAULT_MODE else (
+    allowed = ('analysis','live_zheshang','live_minsheng') if mode == 'live_only' else ('low','standard','high','analysis','live_zheshang','live_minsheng') if mode == DEFAULT_MODE else (
         'short','medium','analysis','live_zheshang','live_minsheng') if mode == 'four_account' else (
         'short','medium','long','analysis','live_zheshang','live_minsheng')
     from .jd_live_readonly import enabled_banks

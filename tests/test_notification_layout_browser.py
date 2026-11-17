@@ -52,10 +52,9 @@ class NotificationLayoutBrowserTests(unittest.TestCase):
                         self.assertNotIn('置信',page.locator('body').inner_text())
                     if name=='real':
                         self.assertIn('卖出20克\n止盈 ≥ 900元/克\n止损 ≤ 840元/克\n截止11-13 21:00',page.locator('main').inner_text())
-                        expect(page.locator('main')).to_contain_text('本笔扣费盈亏：+728.00元')
-                        expect(page.locator('main')).to_contain_text('本笔扣费盈亏：-467.20元')
-                        expect(page.locator('main')).to_contain_text('整户相对分析时估值变化：-697.20元')
-                        expect(page.locator('main')).to_contain_text('未发现已挂组合止盈止损单')
+                        self.assertNotIn('整户相对分析时估值变化',page.locator('main').inner_text())
+                        self.assertNotIn('盈亏测算',page.locator('main').inner_text())
+                        expect(page.locator('main')).to_contain_text('目前没有已挂止盈止损单')
                         expect(page.locator('main')).to_contain_text('到价只触发重新分析')
                     for width in (360,390,1280):
                         page.set_viewport_size({'width':width,'height':900})

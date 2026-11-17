@@ -10,6 +10,7 @@ REMOVED_ACCOUNTS = ("dca", "dca_smart", "claude:dca_smart_ai", "codex:dca_smart_
 
 def daily_keys(settings) -> tuple:
     """Only model-owned legacy accounts; removed rule options cannot recreate accounts."""
+    if settings.ai_trading_mode=='live_only':return ()
     keys = []
     for model in (() if settings.ai_trading_mode in ("six_account","four_account","risk_six_account") else settings.ai_analysts):
         key = f"{model}:position_ai"
@@ -67,6 +68,7 @@ def identity(key: str):
 
 
 def short_labels(settings) -> dict:
+    if settings.ai_trading_mode=='live_only':return {}
     labels = {}
     if "short_ai" in settings.strategies and settings.ai_trading_mode not in ("six_account","four_account","risk_six_account"):
         labels.update({f"{m}:short_ai": f"{m.title()} · 短线" for m in settings.ai_analysts if m in MODELS})

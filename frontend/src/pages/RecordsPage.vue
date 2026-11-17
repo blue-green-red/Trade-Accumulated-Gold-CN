@@ -50,9 +50,6 @@ const visibleRows = computed(() => {
   });
 });
 const kinds = [
-  ["fills", "实际成交"],
-  ["plans", "AI 决策"],
-  ["cycles", "交易周期"],
   ["analysis", "分析历史"],
   ["alerts", "系统提醒"],
 ];
@@ -62,7 +59,7 @@ const descriptions = {
   plans:
     "AI 模拟盘决策，按时间倒序。包含买卖委托、持有、观望和撤单；决策条数不等于成交次数。",
   cycles: "从开仓到全部卖完算一个完整周期；部分卖出不算完成一个周期。",
-  analysis: "模型每轮分析的结果，一轮包含全部活动账户决策，不代表已经成交。",
+  analysis: "模型每轮分析的结果，包含行情研究与账户建议，不代表已经成交。",
   alerts:
     "系统事件与内部复评触发记录，不代表 AI 已下单；旧规则提醒仅保留历史记录，不再生成或推送。",
 };
@@ -116,7 +113,7 @@ function live() {
 </script>
 <template>
   <section id="panel-records" class="page-stack" data-page-ready="true">
-    <Card title="模拟盘操盘记录" class="record-controls"
+    <Card title="分析记录" class="record-controls"
       ><template #action
         ><button class="link-btn" @click="live">
           真实账户与建议 →
@@ -146,7 +143,7 @@ function live() {
         :aria-expanded="showFilters"
         @click="showFilters = !showFilters"
       >
-        筛选模型 / 时间 / 账户{{
+        筛选模型 / 时间{{
           filter.model !== "all" ||
           filter.account !== "all" ||
           filter.days !== "all"

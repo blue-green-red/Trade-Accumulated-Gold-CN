@@ -95,75 +95,38 @@ const current = (a) =>
         </article>
       </div></Card
     >
-    <Card title="模型运行与模拟成绩"
+    <Card title="模型运行"
       ><template #action
         ><button class="link-btn" @click="selectView('ai', 'control')">
           模型控制 →
         </button></template
       >
       <div class="grid-2">
-        <article v-for="m in data.comparison?.models || []" :key="m.key">
+        <article
+          v-for="m in (data.model_controls || []).filter((c) => c.enabled)"
+          :key="m.key"
+        >
           <div class="row">
             <strong class="grow">{{ m.name }}</strong
             ><span class="tag">{{
-              data.model_controls?.find((c) => c.key === m.key)?.runtime
-                ?.running
+              m.runtime?.running
                 ? "分析中"
-                : data.model_controls?.find((c) => c.key === m.key)?.runtime
-                      ?.queued
+                : m.runtime?.queued
                   ? "排队中"
                   : "已开启"
             }}</span>
           </div>
-          <div class="mini-stats">
-            <div>收益 {{ pct(m.return) }}</div>
-            <div>胜率 {{ rate(m.win_rate) }}</div>
-            <div>完整平仓 {{ m.trades }}</div>
-          </div>
           <p class="sub">
-            六户合计 · 今日分析
-            {{
-              data.model_controls?.find((c) => c.key === m.key)?.runs_today || 0
-            }}
-            /
-            {{
-              data.model_controls?.find((c) => c.key === m.key)?.daily_cap ||
-              120
-            }}
-            轮
+            今日分析 {{ m.runs_today || 0 }} / {{ m.daily_cap || 120 }} 轮
           </p>
         </article>
       </div>
-      <div v-if="!data.comparison?.models?.length" class="empty">
-        暂无已开启模型
-      </div>
       <div class="detail-actions">
-        <button
-          class="link-btn"
-          @click="selectView('strategies', 'simulation')"
-        >
-          模拟账户 →</button
-        ><button class="link-btn" @click="navigate('compare')">
-          成绩对比 →</button
-        ><button
-          class="link-btn"
-          @click="
-            navigate('records', {
-              kind: 'plans',
-              model: 'all',
-              account: 'all',
-              days: 'all',
-            })
-          "
-        >
-          待成交与决策记录 →
+        <button class="link-btn" @click="navigate('records')">
+          分析记录 →
         </button>
       </div>
-      <div class="sub">
-        模拟待成交 {{ data.pending_simulation_count || 0 }} 笔 ·
-        成交与完整委托在操作记录查看
-      </div></Card
-    >
+    </Card>
     <Card title="近期重要事件"
       ><template #action
         ><button class="link-btn" @click="selectView('market', 'calendar')">

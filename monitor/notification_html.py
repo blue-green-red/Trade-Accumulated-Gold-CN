@@ -19,14 +19,14 @@ def inline(text):
 def section(paragraph):
     plain=paragraph[2:-2] if paragraph.startswith('**') and paragraph.endswith('**') else paragraph
     label,colon,content=plain.partition('：')
-    known={'本轮结论','需要操作','提醒原因','低位买入','价格复评','简要依据','风险','委托查询','新增买卖建议','已有挂单',
+    known={'本轮结论','这次怎么做','已有持仓怎么处理','低价挂单','之后怎么做','为什么这样建议','注意事项','什么时候重新分析','需要操作','提醒原因','低位买入','价格复评','简要依据','风险','委托查询','新增买卖建议','已有挂单',
            '建仓路径','概率判断','关键变化','关键依据','下一次观察','当前保护查询','盈亏测算','时间与有效性','有效性提示'}
     if not colon or label not in known:
         label=next((name for prefix,name in (('建议撤单','挂单处理'),('建议改单','挂单处理'),
                    ('建议预挂','条件单建议'),('有效至','有效期与数据时间')) if plain.startswith(prefix)),None)
         content=paragraph
     if label:
-        background='#fff7e6' if label=='本轮结论' else '#f3f6fa' if label=='需要操作' else '#ffffff'
+        background='#fff7e6' if label=='本轮结论' else '#f3f6fa' if label in ('需要操作','这次怎么做') else '#ffffff'
         return ('<section style="margin:0 0 16px;padding:12px 14px;border:1px solid #e5e9ee;'
                 'border-radius:10px;background:'+background+'">'
                 '<h2 style="font-size:15px;line-height:1.5;margin:0 0 7px;font-weight:700;color:#25364a">'+escape(label)+'</h2>'

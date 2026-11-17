@@ -186,6 +186,7 @@ def enabled(settings):
 
 
 def keys(settings):
+    if settings.ai_trading_mode=='live_only':return {}
     return {f"{model}:{mode}": f"{model.title()} · {label}" for model in settings.ai_analysts if model in MODELS
             for mode, label in (RISK_LABELS if settings.ai_trading_mode==RISK_MODE else LABELS).items() if mode in active_modes(settings)}
 

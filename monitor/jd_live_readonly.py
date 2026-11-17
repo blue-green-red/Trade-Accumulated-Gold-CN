@@ -276,6 +276,7 @@ def model_input(conn,now=None):
             if counts[name]==1 or value['id'] in active_links:
                 brief={k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')}
                 if counts[name]==1:
+                    brief['sizing_context']={k:value.get(k) for k in ('input_position_pct','input_quote_cny','input_state','input_account_risk')}
                     reason=value.get('reason') or ''
                     brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
@@ -288,6 +289,18 @@ def model_input(conn,now=None):
                             ('decision','entry_price_cny','target_price_cny','risk_exit_cny','grams','expires_at','basis','reason'))} for s in value['limit_buy_reviews']]
                     from .jd_live_feedback import strategy_review
                     brief['strategy_review']=strategy_review(conn,row,name,now)
+                    if value.get('action') not in ('buy','sell'):
+                        # Waiting/data outages must not erase the last actual trade proposal.
+                        from .controls import control
+                        from .jd_live_semantics import blocking_checks
+                        cutoff=control(conn,name).get('changed_at') or ''
+                        for old in conn.execute("SELECT id,created_at,advice_json FROM jd_live_advice WHERE bank=? AND analyst=? AND id<? AND created_at>? AND json_extract(advice_json,'$.action') IN ('buy','sell') ORDER BY id DESC LIMIT 20",(row['bank'],name,value['id'],cutoff)):
+                            prior=json.loads(old[2])
+                            if blocking_checks(prior) or prior.get('input_quote_status')!='fresh':continue
+                            brief['last_trade_advice']={'id':old[0],'created_at':old[1],'historical_only':True,
+                                **{k:prior.get(k) for k in ('action','grams','price_condition','price_cny','input_position_pct','input_quote_cny','input_state','input_account_risk')},
+                                'reason':str(prior.get('reason') or '')[:420]}
+                            break
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
                 brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key','reason')} for o in value.get('review_conditions',[])] if counts[name]==1 else []
                 if value.get('suggested_orders'):
@@ -312,7 +325,7 @@ def model_input(conn,now=None):
     shared_profile.pop('risk_budget_cny',None)  # The amount belongs to each bank's account_risk, never a shared pot.
     return {'execution':'advice_only_user_submits','risk_profile':shared_profile,'accounts':values,
             'unknown':(['可用资金'] if any(r['cash_cny'] is None for r in rows) else [])+(['完整待成交委托列表'] if any(not (r.get('pending_orders') or {}).get('complete') for r in rows) else [])+['完整成交历史'],
-            'note':'仅包含启用的真实账户；现金来源为用户声明时不可冒充接口返回；不可借用模拟盘现金或执行任何真实交易。'}
+            'note':'仅包含启用的真实账户；现金来源为用户声明时不可冒充接口返回；不可借用其他账户现金或执行任何真实交易。'}
 
 
 def _review_status(conn,bank):

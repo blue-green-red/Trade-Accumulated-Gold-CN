@@ -46,19 +46,9 @@ const groups = computed(() =>
     },
     {
       title: "模型分析摘要",
-      description: "每轮成功分析的研究摘要，与真实建议和模拟成交独立。",
+      description: "每轮成功分析的研究摘要，与真实账户建议独立。",
       rows: (notices.value.subscriptions || []).filter((s) =>
         s.key.endsWith(":analysis"),
-      ),
-    },
-    {
-      title: "模拟盘成交与保护退出",
-      description: "每个风险档包含初始满仓和空仓两户，这些是模拟账户内的成交。",
-      rows: (notices.value.subscriptions || []).filter(
-        (s) =>
-          !s.key.includes(":live_") &&
-          !s.key.endsWith(":analysis") &&
-          s.key !== "jd:login",
       ),
     },
   ].filter((g) => g.rows.length),
@@ -81,7 +71,7 @@ onActivated(() => emit("ready"));
         }}
       </div>
       <p class="sub">
-        可订阅京东登录失效、真实账户建议、模型分析摘要和模拟盘成交。行情异动与复评事件只在内部调度，不发微信；通知开关与模型开关独立。
+        可订阅京东登录失效、真实账户建议和模型分析摘要。行情异动与复评事件只在内部调度，不发微信；通知开关与模型开关独立。
       </p>
       <div class="grid-2">
         <section v-for="g in groups" :key="g.title">

@@ -26,7 +26,7 @@ onActivated(() => emit("ready"));
 </script>
 <template>
   <div class="page-stack">
-    <Card title="AI 操盘控制" subtitle="模型独立分析，关闭后隐藏相关数据"
+    <Card title="AI 分析控制" subtitle="模型独立分析，关闭后隐藏相关数据"
       ><div class="grid-2">
         <div v-for="c in data.model_controls" :key="c.key">
           <div class="row">
@@ -36,7 +36,7 @@ onActivated(() => emit("ready"));
               class="chip-btn"
               type="button"
               role="switch"
-              :aria-label="c.name + ' 操盘'"
+              :aria-label="c.name + ' 分析'"
               :aria-checked="!!c.enabled"
               :disabled="pending['model:' + c.key]"
               @click="toggleModel(c.key, !c.enabled)"
@@ -47,7 +47,7 @@ onActivated(() => emit("ready"));
           <div v-if="c.enabled" class="row" style="margin-top: 10px">
             <button
               class="chip-btn"
-              :aria-label="c.name + ' 立即分析并操盘'"
+              :aria-label="c.name + ' 立即分析'"
               :disabled="manualDisabled(c)"
               @click="manualAnalysis(c.key)"
             >
@@ -57,8 +57,8 @@ onActivated(() => emit("ready"));
                     ? "手动分析中"
                     : "手动请求已排队"
                   : c.runtime?.running || c.runtime?.queued
-                    ? "排队分析并操盘"
-                    : "立即分析并操盘"
+                    ? "排队分析"
+                    : "立即分析"
               }}
             </button>
           </div>
@@ -100,7 +100,7 @@ onActivated(() => emit("ready"));
         </div>
       </div>
       <p class="sub">
-        手动触发一次活动账户分析并按条件操盘，不保证成交；休市或无有效报价时等待，不改变自动分析频率。
+        手动触发一次行情与真实账户分析，建议需本人确认操作；休市或无有效报价时等待，不改变自动分析频率。
       </p></Card
     >
     <Card title="分析节奏与执行规则">
@@ -116,13 +116,12 @@ onActivated(() => emit("ready"));
         }}小时兜底。重大事件另外排队，执行器每分钟检查。
       </p>
       <p class="sub">
-        模拟盘按数日至一两周波段运行；真实账户建议在账户页查看。
+        真实账户按数日至两周波段评估，建议在账户页查看；程序不会自动买卖或挂单。
       </p>
       <details class="more" data-detail-key="trading-policy">
         <summary>风险预算与执行规则</summary>
         <p class="sub">
-          三档风险：单次计划损失1%/2%/4%，阶段回撤线5%/10%/20%，触线暂停新增买入。计划风险参考不自动止损，实际损失可能超预算。短线按数日至一两周运行，每周约两次买卖操作为节奏参考，不要求凑次数。AI
-          自主决定数量与保护价，可设置、放宽或撤销止损止盈；不设置时不按固定亏损自动平仓。账户间不转账；初始满仓仅在开账时买入一次。未成交委托到期撤销，已有持仓保护继续有效。
+          真实账户采用高风险偏好，单次计划损失4%、阶段回撤20%为参考。预算不是必须用满的额度，也不保证损失上限。AI自主评估买卖数量与条件单，所有真实操作均由本人确认。新增买入后需更新账户并复核止盈止损数量。
         </p>
       </details></Card
     >

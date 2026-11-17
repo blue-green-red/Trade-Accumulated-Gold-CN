@@ -28,9 +28,7 @@ const needsLogin = computed(
   <Card title="京东真实账户" subtitle="账户资金独立 · 只读查询 · 人工执行"
     ><div class="live-toolbar">
       <div>
-        <div class="sub">
-          账户资金独立 · 与模拟账户分开 · 建议由你在官方页面确认
-        </div>
+        <div class="sub">账户只读同步 · 买卖与挂单由你在官方页面确认</div>
         <div class="sub" role="status">
           {{
             busy

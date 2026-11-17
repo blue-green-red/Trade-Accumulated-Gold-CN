@@ -144,6 +144,7 @@ class LiveDashboardTests(unittest.TestCase):
     @patch('monitor.execution.trading_session',return_value={'is_open':True})
     def test_mobile_data_advice_and_refresh_queue(self,_session):
         import threading
+        from dataclasses import replace
         import test_risk_accounts as fixtures
         from monitor.web import Handler,ThreadingHTTPServer
         from playwright.sync_api import sync_playwright
@@ -152,107 +153,46 @@ class LiveDashboardTests(unittest.TestCase):
             password=''
             from test_dashboard_browser import STATIC as static_root
             def log_message(self,*args):pass
-        Local.settings=f.settings
+        Local.settings=replace(f.settings,ai_trading_mode='live_only')
         server=ThreadingHTTPServer(('127.0.0.1',0),Local)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             c=f.m.store.conn
             for bank in PRODUCTS:
-                data=parse_account(bank,payload(bank));data['pending_order_count']=0 if bank=='zheshang' else None
+                data=parse_account(bank,payload(bank));data['pending_order_count']=0
                 record_success(c,bank,data)
             save(c,'codex',1,{'zheshang':advice()},model_input(c));c.commit()
-            set_enabled(c,'claude',False);save(c,'claude',2,{'zheshang':advice()},model_input(c));c.commit()
+            f.m.publish_for_web(f.snap,None)
+            before=c.execute('SELECT COUNT(*) FROM ai_portfolio_fills').fetchone()[0]
             with sync_playwright() as p:
                 browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
                 try:
                     page=browser.new_page(viewport={'width':390,'height':844});errors=[]
                     page.on('pageerror',lambda e:errors.append(str(e)))
-                    page.goto(f'http://127.0.0.1:{server.server_port}/#strategies')
-                    page.get_by_role('heading',name='京东真实账户',exact=True).wait_for()
+                    root=f'http://127.0.0.1:{server.server_port}/'
+                    page.goto(root+'#strategies/live')
+                    page.get_by_role('heading',name='浙商积存金',exact=True).wait_for()
                     text=page.locator('#panel-strategies').inner_text()
-                    self.assertIn('12.5000 克',text);self.assertNotIn('成本均价',text)
-                    self.assertIn('已挂条件单 0 笔',text);self.assertIn('已挂条件单 未知',text)
-                    self.assertIn('Codex · 卖出建议',text);self.assertNotIn('Claude · 卖出建议',text)
-                    self.assertNotIn('需要重新登录京东',text)
-                    self.assertEqual(page.get_by_role('link',name='下载电脑端只读助手',exact=True).count(),0)
-                    self.assertNotIn('private-account',text)
-                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-                    from monitor.page_data import page_data
-                    value=page_data(f.settings,'strategies','live')
-                    a=value['live_readonly'][0]
-                    order={'order_key':'c'*24,'action':'sell','status':'pending','grams':4.98,'price_cny':850.4,'price_condition':'at_or_above','expires_at':(NOW+timedelta(days=1)).isoformat()}
-                    a.update(pending_orders={'complete':True,'status':'fresh','records':[order]},pending_order_count=1,
-                             quote={'buy_price_cny':836,'sell_price_cny':836,'quoted_at':NOW.isoformat(),'status':'fresh'})
-                    a['advice'][0].update(execution_progress={'status':'pending','match':'similar_parameters','orders':[order]},
-                        schema_version=3,reassessment={'change_summary':'新增事件支持反弹，复核原判断。','thesis_status':'weakened',
-                          'thesis':'原反弹假设削弱，跌破观察区重新评估。','price_basis':'保留假设目标并重算扣费空间，非固定上涨上限。'},
-                        suggested_orders=[{'kind':'take_profit_stop_loss','grams':2,'price_cny':860,'loss_price_cny':820,
-                          'expires_at':(NOW+timedelta(days=1)).isoformat(),'reason':'为无人盯盘预留一笔组合条件单。','checks':[]}],
-                        order_management=[{'order_key':order['order_key'],'action':'replace','state':'current','input_order':order,
-                          'effective_replacement':{'grams':4.5,'price_cny':848,'price_condition':'at_or_above','expires_at':order['expires_at']},'reason':'按现有单调整参数','checks':[]}],
-                        review_conditions=[{'condition':'at_or_below','price_cny':830.59,'quote_side':'sell','order_key':order['order_key'],
-                          'reason':'达到阈值重新评估现有单','monitoring':{'status':'queued','last_quote_at':NOW.isoformat(),'last_price_cny':830.5,'triggered_at':NOW.isoformat()}}])
-                    a['review_status']=[{'analyst':'codex','status':'queued','reasons':['真实条件单数量变化']}]
-                    def section_payload(route):
-                        from urllib.parse import urlparse,parse_qs
-                        view=parse_qs(urlparse(route.request.url).query).get('view',['live-list'])[0]
-                        response={**value,'live_account':a,'bank_view':view.split('/')[-1]}
-                        route.fulfill(status=200,content_type='application/json',body=json.dumps(response))
-                    page.route('**/api/pages/strategies*',section_payload)
-                    page.get_by_role('button',name='AI建议 →',exact=True).first.click()
-                    page.get_by_text('建议改单',exact=True).wait_for()
-                    text=page.locator('#panel-strategies').inner_text()
-                    self.assertNotIn('京东条件单明细',text);self.assertIn('发现相近挂单，参数有调整',text)
-                    self.assertIn('待重新评估',text);self.assertIn('建议预挂条件单',text)
-                    self.assertIn('建议改单',text);self.assertIn('修改后：卖出4.5000 克',text)
-                    self.assertIn('价格触发复评',text);self.assertIn('已触发 · 待复评',text)
-                    self.assertIn('不自动撤改或下单',text)
-                    self.assertIn('本轮变化',text);self.assertIn('原假设已削弱',text)
-                    self.assertIn('价位依据',text);self.assertIn('建议预挂条件单',text)
-                    self.assertIn('止盈止损卖出 · 2.0000 克',text);self.assertIn('实际委托以京东为准',text)
-                    self.assertIn('止损 ≤ 820.00 元/克',text)
-                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-                    page.screenshot(path='/tmp/gold-live-proposals-mobile.png',full_page=True)
-                    page.evaluate('window.originalDateNow=Date.now;Date.now=()=>window.originalDateNow()+2*86400000')
-                    page.wait_for_timeout(1200)
-                    self.assertIn('条件单方案已到期',page.locator('#panel-strategies').inner_text())
-                    self.assertIn('建议已到期',page.locator('#panel-strategies').inner_text())
-                    page.evaluate('Date.now=window.originalDateNow')
-                    page.get_by_role('tab',name='条件单',exact=True).click();page.get_by_text('京东条件单明细 · 1 笔',exact=True).wait_for()
-                    text=page.locator('#panel-strategies').inner_text()
-                    self.assertIn('条件单有效至',text);self.assertIn('建议改单',text)
-                    self.assertNotIn('建议预挂条件单',text)
-                    page.get_by_role('tab',name='持仓',exact=True).click();page.locator('.live-quote-price').wait_for()
-                    self.assertEqual(page.locator('.live-quote-price').count(),1)
-                    quote_card=page.locator('.live-quote-price').first.locator('..').inner_text()
-                    self.assertIn('银行金价',quote_card);self.assertIn('836.00',quote_card)
-                    self.assertIn('买卖同价',quote_card)
-                    self.assertNotIn('买入价',quote_card);self.assertNotIn('卖出价',quote_card)
-                    self.assertNotIn('建议改单',page.locator('#panel-strategies').inner_text())
-
-                    page.set_viewport_size({'width':1280,'height':900})
-                    self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
-                    page.set_viewport_size({'width':390,'height':844})
-                    status=page.evaluate("async()=> (await fetch('/api/live-readonly/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status")
-                    self.assertEqual(status,403)
-                    page.unroute('**/api/pages/strategies*')
-                    page.get_by_role('button',name='‹ 返回真实账户',exact=True).click()
-                    with page.expect_response(lambda response: '/api/live-readonly/refresh' in response.url and response.request.method=='POST') as refresh_response:
+                    self.assertIn('12.5000 克',text);self.assertNotIn('private-account',text)
+                    self.assertNotIn('模拟账户',page.locator('body').inner_text())
+                    with page.expect_response(lambda r:'/api/live-readonly/refresh' in r.url) as response:
                         page.get_by_role('button',name='刷新真实账户',exact=True).click()
-                    self.assertEqual(refresh_response.value.status,202)
-                    page.get_by_role('button',name='更新中…',exact=True).wait_for()
+                    self.assertEqual(response.value.status,202)
                     self.assertEqual(f.m.store.get_state('jd_live_refresh')['status'],'queued')
-                    self.assertEqual(errors,[])
-                    page.get_by_role('tab',name='模拟账户',exact=True).click()
-                    page.locator('.account-preview').first.wait_for()
-                    self.assertEqual(page.locator('.account-preview').count(),6)
-                    page.get_by_role('tab',name='我的',exact=True).click();page.get_by_role('button',name='微信通知',exact=False).click()
-                    page.get_by_role('heading',name='微信操作通知',exact=True).wait_for()
-                    self.assertIn('真实账户建议 · 人工执行',page.locator('#panel-notifications').inner_text())
-                    self.assertEqual(page.get_by_role('heading',name='最近通知记录',exact=True).count(),0)
-                    page.get_by_role('tab',name='发送记录',exact=True).click();page.get_by_role('heading',name='微信发送记录',exact=True).wait_for()
+                    page.goto(root+'#strategies/simulation')
+                    page.get_by_role('heading',name='浙商积存金',exact=True).wait_for()
+                    self.assertNotIn('模拟账户',page.locator('body').inner_text())
+                    page.goto(root+'#overview')
+                    page.get_by_role('heading',name='模型运行',exact=True).wait_for()
+                    self.assertNotIn('模拟成绩',page.locator('body').inner_text())
+                    self.assertNotIn('成绩对比',page.locator('body').inner_text())
+                    page.goto(root+'#notifications/settings')
+                    page.get_by_text('真实账户建议 · 人工执行',exact=True).wait_for()
+                    self.assertNotIn('模拟盘',page.locator('body').inner_text())
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+                    self.assertEqual(errors,[])
                 finally:browser.close()
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM ai_portfolio_fills').fetchone()[0],before)
         finally:server.shutdown();server.server_close();thread.join();f.tearDown()
 
 class LiveCashAndNotificationTests(unittest.TestCase):

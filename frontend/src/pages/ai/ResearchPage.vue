@@ -136,12 +136,7 @@ onActivated(() => emit("ready"));
           >
         </div>
         <div class="asset-actions">
-          <button
-            class="link-btn"
-            @click="selectView('strategies', 'simulation')"
-          >
-            查看模拟账户决策 →</button
-          ><button v-if="v.live_advice_count" class="link-btn" @click="live">
+          <button v-if="v.live_advice_count" class="link-btn" @click="live">
             查看真实账户建议 →
           </button>
         </div></Card

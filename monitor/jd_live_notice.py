@@ -16,10 +16,37 @@ def brief(text,limit=160):
     text=re.sub(r'(?<![A-Za-z])[ETR](?![A-Za-z])',
                 lambda m:{'E':'入场价','T':'目标价','R':'风险参考价'}[m[0]],str(text or ''))
     text=re.sub(r'(?<![A-Za-z])MA(20|50)(?!\d)',lambda m:m[1]+'日均线',text)
+    for old,new in (('边界终止整套','到退出参考价时停止这套加仓计划'),('整套退出边界','停止加仓并重新考虑卖出的价格'),
+                    ('先人工撤改追加','先撤销或修改尚未成交的买单'),('宏观未同步走强','美元和美债收益率没有同时上升'),
+                    ('整仓损失','全部持仓可能亏损的金额'),('保护数量','止盈止损单的克数'),('本轮无已挂保护','目前没有已挂止盈止损单'),
+                    ('实物承接','实物买盘支撑'),('有限修复','一定幅度的反弹'),('流动性压力','市场资金紧张'),
+                    ('可比较补至','考虑是否加至'),('比较补至','考虑是否加至'),('比较降至','考虑是否减至'),('先刷新','先更新账户'),('再复评','再重新分析'),('刷新重评','更新账户后重新分析'),('自主风险边界','需要重新考虑退出的价格'),('总仓','黄金仓位'),('复评','重新分析'),('现仓','现有持仓'),
+                    ('宏观同步走强','美元和美债收益率同时上升'),('全仓风险','全部持仓可能亏损的金额'),
+                    ('整仓风险','全部持仓可能亏损的金额'),('本批','这批'),('后批','下一次买入'),
+                    ('不追增','不追着上涨继续买'),('新快照','更新后的账户数据')):
+        text=text.replace(old,new)
     text=' '.join(text.split())
     if len(text)<=limit:return text
     end=max(text.rfind(mark,0,limit) for mark in ('。','！','？','；'))
     return text[:end+1]+'…（详见账户页）' if end>=limit//2 else text[:limit]+'…（详见账户页）'
+
+
+def follow_up(value):
+    """Use the saved plan; do not turn a later target into today's trade size."""
+    path=value.get('position_path') or {}
+    if not path or path.get('checks'):return ''
+    lines=[]
+    if path.get('continuation'):lines.append(brief(path['continuation'],1000))
+    boundary=number(path.get('boundary_price_cny'))
+    if boundary is not None:
+        scope='停止这套加仓计划，重新考虑现有持仓的处理' if path.get('exit_scope')=='plan' else '处理当前这批持仓，后续是否加仓需要重新分析'
+        lines.append(f'风险退出参考价{boundary:g}元/克：{scope}。未挂单时不会自动卖出。')
+    coverage=path.get('coverage') or {}
+    if coverage.get('additional_buy_grams'):
+        lines.append('新增买入成交后，先更新账户再决定下一步；原止盈止损单不会自动包含新增克数。')
+    if path.get('manual_resolution_required'):
+        lines.append('先确认旧买单已撤销或修改，再考虑新买单。')
+    return '之后怎么做：\n'+'\n'.join(lines) if lines else ''
 
 
 def terms(order,*,multiline=False):
@@ -53,8 +80,7 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     for operation,label in (('cancel','撤单'),('replace','改单')):
         count=sum(o['action']==operation for o in manual)
         if count:tasks.append(f'{count}笔{label}建议')
-    lines.append('需要操作：请逐项核对并手动确认'+'、'.join(tasks)+'。' if tasks else
-                 '需要操作：暂无新增买卖、挂单或撤改建议。')
+    if not tasks:lines.append('这次怎么做：暂无新增买卖、挂单或撤改建议。')
     context=[]
     position=number(value.get('input_position_pct'));quote=number(value.get('input_quote_cny'))
     if position is not None:context.append(f'分析时黄金仓位{position:.1f}%')
@@ -66,7 +92,17 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         condition={'at_or_above':'价格≥','at_or_below':'价格≤','reference':'参考价','none':'未设价格条件'}[value['price_condition']]
         price=f"{value['price_cny']:g}元/克" if value.get('price_cny') is not None else ''
         note='（参考价，不是触发条件）' if value['price_condition']=='reference' else ''
-        lines.append('新增买卖建议：'+{'buy':'买入','sell':'卖出'}[action]+' '+quantity+'\n'+condition+price+note)
+        line='这次怎么做：'+{'buy':'买入','sell':'卖出'}[action]+' '+quantity+'\n'+condition+price+note
+        grams=number(value.get('grams'));entry=number(value.get('price_cny'))
+        if action=='buy' and grams is not None and entry is not None:
+            line+=f'\n按上述价格估算，需{grams*entry:,.0f}元。'
+            held=number((value.get('input_state') or {}).get('total_grams'))
+            assets=number((value.get('input_account_risk') or {}).get('gross_assets_cny'))
+            if held is not None:
+                line+=f'\n这次成交后，持仓约{held+grams:g}克'
+                if assets and quote is not None:line+=f'，按分析参考价估算黄金仓位约{(held+grams)*quote/assets*100:.1f}%'
+                line+='。'
+        lines.append(line)
     for item in manual:
         original=item.get('input_order') or {}
         label={'cancel':'建议撤单','replace':'建议改单'}[item['action']]
@@ -74,59 +110,55 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
         if item['action']=='replace':line+='\n→ 修改后'+terms(item.get('effective_replacement') or {},multiline=True)
         if item.get('reason'):line+='\n'+brief(item['reason'],80)
         lines.append(line)
-    if manual:lines.append('撤改前请核对剩余量及成交状态；尚未操作，不视为释放资金或克数。')
+    if manual:lines.append('撤改前核对还未成交的数量；撤改成功前，原单占用的资金或黄金仍不可重复使用。')
     keep=sum(o['action']=='keep' for o in management)
     if keep:lines.append(f'已有挂单：建议保留{keep}笔，原参数不变。')
     if any(o['kind']=='take_profit_stop_loss' for o in drafts):
         protection=account.get('protection_state') or {}
         state=protection.get('status')
-        lines.append('当前保护查询：'+('未发现已挂组合止盈止损单；以下为新挂建议。' if state=='none' else
-            f"已读取{protection.get('count',0)}笔组合止盈止损单，不代表覆盖全部持仓；以下方案需核对。" if state=='present' else
-            '挂单明细不足以确认是否已有保护；请先核对，以下仅为建议。'))
+        lines.append('已有持仓怎么处理：'+('目前没有已挂止盈止损单，建议按下面参数新挂。' if state=='none' else
+            f"已读取{protection.get('count',0)}笔止盈止损单，需核对适用克数，避免重复挂单。" if state=='present' else
+            '暂不能确认是否已有止盈止损单，请先核对，避免重复挂单。'))
     for order in drafts:
         kind=order['kind']
         side='buy' if kind=='limit_buy' else 'sell'
         line='建议预挂（尚未提交京东）：'+terms({**order,'action':side},multiline=True)
-        if order.get('reason'):line+='\n依据：'+brief(order['reason'],80)
         lines.append(line)
-        valuation=[]
-        for leg,label in (('trigger','止盈成交' if kind=='take_profit_stop_loss' else '卖出成交'),('stop_loss','止损成交')):
-            effect=(order.get('account_effects') or {}).get(leg) or {}
-            if kind!='limit_buy' and effect:
-                pnl=(f"{effect['position_pnl_cny']:+.2f}元（按买入均价估算）" if effect.get('position_pnl_cny') is not None
-                     else '成本未知，暂无法估算')
-                valuation.append(f"{label}：\n本笔扣费盈亏：{pnl}\n整户相对分析时估值变化：{effect['account_change_cny']:+.2f}元")
-        if valuation:lines.append('盈亏测算：\n'+'\n'.join(valuation))
         for review in value.get('limit_buy_reviews',[]):
             if review.get('checks') or review['decision']!='recommend' or not same_order(review,order):continue
-            lines.append(f"评估目标{review['target_price_cny']:g}元/克 · 新增退出参考{review['risk_exit_cny']:g}元/克（仅风险参考，不是已挂止损）。")
+            lines.append(f"买入后的参考目标价{review['target_price_cny']:g}元/克；风险退出参考价{review['risk_exit_cny']:g}元/克（不是已挂止损）。")
     if proposal_withdrawn:
         lines.append('本轮不再建议新挂上一轮条件单；已挂到京东的单以本轮挂单处理建议为准。')
     for review in value.get('limit_buy_reviews',[]):
         if review.get('checks') or review['decision']=='recommend':continue
-        label={'needs_review':'仅待复评，暂不建议提前挂单；候选价格不代表买入指令',
-               'not_worthwhile':'本轮不建议参与该候选方案','unavailable':'信息不足，暂未形成可挂单方案'}[review['decision']]
-        lines.append('低位买入：'+label+'。\n'+brief(review.get('reason'),100))
+        label={'needs_review':'需要重新分析后再决定，暂不建议提前挂低价买单',
+               'not_worthwhile':'这轮暂不建议提前挂低价买单，不影响上面的买卖建议',
+               'unavailable':'信息不足，暂不能确定低价买单的价格和数量'}[review['decision']]
+        lines.append('低价挂单：'+label+'。')
+        break
     if not partial:
-        from .jd_live_path import format_path
-        path_text=format_path(value)
+        path_text=follow_up(value)
         if path_text:lines.append(path_text)
     if partial:
         lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
     else:
-        reason=value.get('reason') if action in ('buy','sell') else (value.get('reassessment') or {}).get('thesis') or value.get('reason')
-        if reason:lines.append('关键依据：'+brief(reason))
-        if value.get('risk_note'):lines.append('风险：'+brief(value['risk_note'],90))
+        reason=(value.get('reassessment') or {}).get('thesis') or value.get('reason')
+        if reason:lines.append('为什么这样建议：'+brief(reason))
+        if value.get('risk_note'):lines.append('注意事项：'+brief(value['risk_note'],160))
     conditions=value.get('review_conditions',[])
     if conditions:
         observations=[]
         for c in conditions:
             symbol={'at_or_above':'≥','at_or_below':'≤'}[c['condition']]
             scope='（仅针对指定挂单）' if c.get('order_key') else ''
-            observations.append(f"银行报价 {symbol} {c['price_cny']:g}元/克{scope}")
-        lines.append('价格复评：\n'+'\n'.join(observations)+'。\n到价只触发重新分析，不执行交易；受交易时段、数据状态及本条建议有效期限制。')
+            reason=brief(c.get('reason'),70)
+            observations.append(f"银行报价 {symbol} {c['price_cny']:g}元/克{scope}"+('：'+reason if reason else ''))
+        lines.append('什么时候重新分析：\n'+'\n'.join(observations)+'\n到价只触发重新分析，不执行交易；受交易时段、数据状态及本条建议有效期限制。')
     orders=account.get('pending_orders') or {}
-    order_note=f"已读取{len(orders.get('records',[]))}笔待成交明细" if orders.get('status')=='fresh' else '条件单明细待更新'
+    count=orders.get('total_count')
+    complete=orders.get('complete')
+    order_note=(f'当前有{count}笔待成交挂单' if complete and count is not None else
+                f"已读取{len(orders.get('records',[]))}笔待成交明细，尚不能确认是否完整") if orders.get('status')=='fresh' else '条件单明细待更新'
     tracking=(current.get('execution_progress') or {}).get('status')
     progress={'pending':'发现对应或相近挂单，仍待成交','partially_filled':'对应或相近条件单已有部分成交','filled':'对应或相近条件单已成交'}.get(tracking)
     lines.append('委托查询：'+order_note+('；'+progress if progress else '')+'。')

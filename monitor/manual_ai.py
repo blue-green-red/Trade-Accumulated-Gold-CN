@@ -28,7 +28,7 @@ def request(conn,settings,model):
         if not read(conn,'ai_status:'+model).get('available',False):raise RequestError('该模型分析后端暂不可用')
         if not allowed(settings,conn,model,utc_now()):raise RequestError('今日普通分析额度已用完，紧急事件预留额度不用于手动触发',429)
         item={'id':str(uuid.uuid4()),'status':'queued','requested_at':utc_now().isoformat(),
-              'generation':control(conn,model)['generation'],'message':'已排队，等待监控使用最新行情分析并操盘'}
+              'generation':control(conn,model)['generation'],'message':'已排队，等待使用最新行情生成分析和账户建议'}
         save(conn,'ai_manual:'+model,item)
         return item
 
@@ -46,7 +46,7 @@ def claim(conn,model,run_id):
         conn.execute('BEGIN IMMEDIATE')
         item=status(conn,model)
         if item.get('status')!='queued':return None
-        item.update(status='running',started_at=utc_now().isoformat(),run_id=run_id,message='正在分析并提交活动账户决策')
+        item.update(status='running',started_at=utc_now().isoformat(),run_id=run_id,message='正在分析并生成账户建议')
         save(conn,'ai_manual:'+model,item)
         return item
 
@@ -59,7 +59,7 @@ def finish(conn,model,item,result):
         if not active(conn,model,item['generation']):state,message='cancelled','模型已关闭或重新开启，本次请求已取消'
         elif result is None:state,message='failed','本次分析未完成，请查看分析记录；不会自动重复本次手动请求'
         elif (result.get('_price_guard') or {}).get('invalidated_at'):state,message='completed','分析已完成但行情异动导致决策失效，已排队复查'
-        else:state,message='completed','分析已完成，活动账户决策按条件执行；不代表必然成交'
+        else:state,message='completed','分析已完成；真实账户建议需本人确认操作'
         current.update(status=state,message=message,finished_at=utc_now().isoformat(),view_id=(result or {}).get('_view_id'))
         save(conn,'ai_manual:'+model,current)
 

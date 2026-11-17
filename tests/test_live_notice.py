@@ -29,7 +29,7 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.value['review_conditions']=[{'condition':'at_or_below','price_cny':840,'quote_side':'buy'}]
         text=self.render()
         self.assertTrue(text.startswith('**本轮结论：继续持有'))
-        self.assertIn('仅待复评，暂不建议提前挂单',text)
+        self.assertIn('需要重新分析后再决定，暂不建议提前挂低价买单',text)
         self.assertIn('到价只触发重新分析，不执行交易',text)
         self.assertIn('银行报价 ≤ 840元/克',text)
         for misleading in ('入场≤','建议预挂','2克','新增退出参考810'):
@@ -42,16 +42,16 @@ class LiveNoticeFormatTests(unittest.TestCase):
             'target_price_cny':900,'risk_exit_cny':810,'grams':2,'expires_at':draft['expires_at'],'checks':[]}]
         text=self.render()
         for required in ('尚未提交京东','买入2克','≤ 840元/克','截止11-10 21:00',
-                         '评估目标900元/克','新增退出参考810元/克','不是已挂止损'):
+                         '参考目标价900元/克','风险退出参考价810元/克','不是已挂止损'):
             self.assertIn(required,text)
         self.assertNotIn('暂无新增买卖',text)
 
-    def test_order_estimates_stay_separate_and_unknown_cost_is_not_presented_as_zero(self):
+    def test_detailed_pnl_math_stays_on_account_page(self):
         self.value['suggested_orders']=[self.draft(kind='limit_sell',price_cny=880,
             account_effects={'trigger':{'account_change_cny':12.5}})]
         text=self.render()
-        self.assertIn('本笔扣费盈亏：成本未知，暂无法估算',text)
-        self.assertIn('整户相对分析时估值变化：+12.50元',text)
+        self.assertNotIn('整户相对分析时估值变化',text)
+        self.assertNotIn('盈亏测算',text)
         self.assertNotIn('盈亏：+0.00',text)
 
     def test_limit_sell_direction_is_derived_from_draft_kind_without_extra_fields(self):
@@ -68,7 +68,7 @@ class LiveNoticeFormatTests(unittest.TestCase):
             'effective_replacement':{**original,'expires_at':'2026-11-11T13:00:00Z'},'reason':'调整期限。'}]
         text=self.render()
         for required in ('原单卖出5克','剩余量待核对','止盈 ≥ 880','止损 ≤ 820',
-                         '截止11-10 21:00','修改后卖出5克','截止11-11 21:00','不视为释放资金或克数'):
+                         '截止11-10 21:00','修改后卖出5克','截止11-11 21:00','仍不可重复使用'):
             self.assertIn(required,text)
 
     def test_cancel_and_keep_are_distinct_from_new_trade(self):
@@ -108,3 +108,20 @@ class LiveNoticeFormatTests(unittest.TestCase):
         self.assertEqual(text.count('提醒原因：'),1)
         self.assertIn('当日首次真实账户分析',text);self.assertIn('仓位或确认资金变化',text)
         self.assertIn('已挂到京东的单以本轮挂单处理建议为准',text)
+
+    def test_trade_size_is_separate_from_later_target_and_math_is_not_the_main_reason(self):
+        self.value.update(action='buy',grams=69,price_condition='at_or_below',price_cny=830,
+            input_position_pct=8.9,input_quote_cny=830,
+            input_state={'total_grams':100,'cash_cny':852932},
+            input_account_risk={'gross_assets_cny':935932},
+            reason='E830/T858/R804：不加+2000/-2500，加本批+4500/-4600。',
+            reassessment={'thesis':'实物需求提供支撑，高利率限制规模。'},
+            position_path={'target_position_pct':20,'exit_scope':'plan','boundary_price_cny':804,
+                'continuation':'回落823且美元与收益率未同步走强，再比较加至20%。',
+                'coverage':{'additional_buy_grams':69,'after_all_buys_grams':169},'checks':[]})
+        before=copy.deepcopy(self.value);text=self.render()
+        for required in ('57,270元','持仓约169克','黄金仓位约15.0%','实物需求提供支撑','不会自动包含新增克数','未挂单时不会自动卖出'):
+            self.assertIn(required,text)
+        for jargon in ('不加+2000','整套建仓结束','条件成立时目标黄金仓位20%','本轮不建议参与该候选方案'):
+            self.assertNotIn(jargon,text)
+        self.assertEqual(before,self.value)

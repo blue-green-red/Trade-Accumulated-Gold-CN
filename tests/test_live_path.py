@@ -145,12 +145,12 @@ class LivePathTests(unittest.TestCase):
         v=self.saved()
         a=accounts(self.f.s.conn,fixtures.NOW)[0]
         text=body(a,v,notification_parts(v))
-        self.assertIn('建仓路径：条件成立时目标黄金仓位100%，非本轮追加指令',text)
-        self.assertIn('当前这批退出',text);self.assertIn('刷新账户再复评',text)
+        self.assertIn('之后怎么做：',text);self.assertNotIn('目标黄金仓位100%',text)
+        self.assertIn('处理当前这批持仓',text);self.assertIn('更新后的账户数据',text)
         bad=self.candidate(810)
         v=self.saved(limit_buy_reviews=[bad],suggested_orders=[self.value()['suggested_orders'][0],self.buy_order(bad)])
         text=body(a,v,notification_parts(v))
-        self.assertIn('已通过独立校验',text);self.assertNotIn('建仓路径：',text)
+        self.assertIn('已通过独立校验',text);self.assertNotIn('之后怎么做：',text)
 
     def test_queued_notice_is_cancelled_if_its_buy_path_crosses_boundary_before_retry(self):
         from monitor.notification_control import set_subscription

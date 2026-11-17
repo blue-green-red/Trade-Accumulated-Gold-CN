@@ -10,7 +10,7 @@ from .store import utc_now
 CLAUDE_NAME='mcp__account_history__'+NAME
 
 
-def enabled(analyst,context):return bool(context.get('trading_accounts') and analyst.settings.ai_history_max_queries>0)
+def enabled(analyst,context):return bool(analyst.settings.ai_trading_mode!='live_only' and context.get('trading_accounts') and analyst.settings.ai_history_max_queries>0)
 
 
 def instructions(settings):

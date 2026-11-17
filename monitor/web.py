@@ -409,7 +409,9 @@ _auth_lock = threading.Lock()
 
 def history_page(settings, query):
     """Read paged history, applying model/date/account filters before pagination."""
-    kind=query.get("kind",["fills"])[0]
+    kind=query.get("kind",["analysis" if settings.ai_trading_mode=='live_only' else "fills"])[0]
+    if settings.ai_trading_mode=='live_only' and kind in ('fills','plans','cycles'):
+        return {'items':[],'offset':0,'limit':0,'has_more':False}
     offset=max(0,int(query.get("offset",["0"])[0]))
     limit=min(100,max(1,int(query.get("limit",["50"])[0])))
     model=query.get("model",["all"])[0]
@@ -434,7 +436,9 @@ def history_page(settings, query):
             if portfolios_exist(conn): sources.append(("SELECT account,COALESCE(closed_at,opened_at) AS stamp,* FROM ai_portfolio_cycles",[]))
             keys=list(short_labels(settings))
             if keys and table_exists(conn,"paper_trades"): sources.append(("SELECT strategy AS account,COALESCE(closed_at,opened_at) AS stamp,* FROM paper_trades WHERE strategy IN ("+','.join('?' for _ in keys)+")",keys))
-        elif kind=="alerts": sources.append(("SELECT '' AS account,ts AS stamp,rowid AS id,* FROM alerts",[]))
+        elif kind=="alerts":
+            archive_filter=" WHERE key NOT LIKE 'autonomous:%' AND key NOT LIKE 'paper:%' AND key NOT LIKE 'acct:%'" if settings.ai_trading_mode=='live_only' else ''
+            sources.append(("SELECT '' AS account,ts AS stamp,rowid AS id,* FROM alerts"+archive_filter,[]))
         else: raise ValueError("unknown history kind")
         rows=[]
         for sql,params in sources:
@@ -470,6 +474,9 @@ def history_page(settings, query):
                     r["decision"]={"analyst":r["account"].split(':')[0],"version":view.get("_trading_version","autonomous-six-v1"),"view":{"summary":r["reason"],"_view_id":r["view_id"],"_run_id":v["run_id"] if v else None},"order":(view.get("account_decisions") or {}).get(r["account"].split(':')[1]),"execution_quote":json.loads(r["quote_json"])}
             if kind=="analysis":
                 r["view"]=json.loads(r["view_json"]) if r.get("view_json") else {}
+                if settings.ai_trading_mode=='live_only':
+                    for key in ('account_decisions','_account_inputs','_trading_version'):r['view'].pop(key,None)
+                    r.pop('view_json',None)
                 r["outcomes"]=outcomes.get((r["analyst"],r.get("completed_at") or r["ts"]))
         if query.get('compact',['0'])[0]=='1':
             for row in page:

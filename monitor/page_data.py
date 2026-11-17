@@ -21,6 +21,8 @@ LIVE_VIEWS = frozenset(f'live/{bank}/{section}' for bank in ('zheshang','minshen
 
 
 def validate_page(page,view,settings=None):
+    if settings is not None and settings.ai_trading_mode=='live_only' and (page=='compare' or (page=='strategies' and 'simulation' in view)):
+        raise ValueError('模拟账户已停用')
     if page == 'strategies' and settings is not None and view.startswith('simulation/'):
         if view.removeprefix('simulation/') in portfolio_keys(settings):return
     allowed = (MARKET_VIEWS if page == 'market' else AI_VIEWS if page == 'ai'
@@ -204,7 +206,7 @@ def page_data(settings: Settings, page, view='auto'):
                     'advice':[{**{k:v.get(k) for k in ('analyst','action','status','expires_at')},
                                'suggested_order_count':len(v.get('suggested_orders',[]))} for v in a.get('advice',[])]} for a in live]
             else:
-                result['account_view'] = ('live' if any(a.get('fetched_at') for a in live) else 'simulation') if view == 'auto' else view
+                result['account_view'] = ('live' if settings.ai_trading_mode=='live_only' or any(a.get('fetched_at') for a in live) else 'simulation') if view == 'auto' else view
                 if result['account_view'] == 'live':
                     result.update(live_readonly=live,live_readonly_sync=get_state(conn,'jd_live_sync_status') or {},
                                   live_readonly_refresh=get_state(conn,'jd_live_refresh') or {})

@@ -40,7 +40,7 @@ defineProps({ data: Object });
           ><span>›</span>
         </button>
         <button @click="navigate('records')">
-          <span>操作记录<span class="sub">模拟成交、决策与分析历史</span></span
+          <span>分析记录<span class="sub">历次模型分析与系统事件</span></span
           ><span>›</span>
         </button>
       </div></Card

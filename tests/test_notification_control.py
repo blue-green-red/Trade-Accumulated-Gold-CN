@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 import tempfile
 import unittest
 from datetime import timedelta
@@ -37,7 +38,7 @@ class NotificationTests(unittest.TestCase):
         set_subscription(self.store.conn,'codex:low',True)
         events=[{'key':str(i),'notification_topic':topic,'title':topic,'body':topic}
                 for i,topic in enumerate(('codex:low','codex:high','claude:low','system'))]
-        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=replace(Settings(),ai_trading_mode="risk_six_account");m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         m.notifier.send.assert_called_once()
         self.assertNotIn('codex:high',m.notifier.send.call_args.args[1])
@@ -108,7 +109,7 @@ class NotificationTests(unittest.TestCase):
                 {'key':'touch:R1','title':'点位','body':'level'},{'key':'gate:allow','title':'门控','body':'gate'},
                 {'key':'autonomous:1','notification_topic':'codex:high','title':'买入','body':'fill'}]
         self.assertEqual(selected_events(self.store.conn,events),events[:1])
-        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=replace(Settings(),ai_trading_mode="risk_six_account");m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         self.assertEqual(m.notifier.send.call_args.args,('Codex摘要','codex'))
         self.assertEqual(self.store.conn.execute('select count(*) from alerts').fetchone()[0],5)
@@ -122,7 +123,7 @@ class NotificationTests(unittest.TestCase):
         class Local(Handler):
             password='test-notify'
             def log_message(self,*args):pass
-        Local.settings=replace(Settings(),db_path=Path(self.tmp.name)/'test.db')
+        Local.settings=replace(Settings(),ai_trading_mode='risk_six_account',db_path=Path(self.tmp.name)/'test.db')
         server=ThreadingHTTPServer(('127.0.0.1',0),Local)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         good={'Authorization':'Basic '+base64.b64encode(b'user:test-notify').decode(),
@@ -148,7 +149,7 @@ class NotificationTests(unittest.TestCase):
         events=[{'key':'autonomous:fake','notification_topic':'codex:high','title':'模拟买入','body':'simulation'},
                 {'key':'ai:fake','notification_topic':'codex:analysis','title':'Codex摘要','body':'research'},
                 {'key':'live-advice:fake','notification_topic':'codex:live_zheshang','title':'真实账户·浙商卖出建议','body':'需手动确认'}]
-        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock()
+        m=object.__new__(Monitor);m.settings=replace(Settings(),ai_trading_mode="risk_six_account");m.store=self.store;m.notifier=Mock()
         m.notifier.send.side_effect=[False,True]
         m.dispatch(events)
         self.assertEqual(m.notifier.send.call_count,2)
@@ -165,7 +166,7 @@ class NotificationTests(unittest.TestCase):
         events=[{'key':f'live-advice:{bank}','notification_topic':f'codex:live_{bank}','title':bank,'body':bank}
                 for bank in ('zheshang','minsheng')]
         events.append({'key':'sim:disabled','notification_topic':'codex:high','title':'模拟买入','body':'disabled'})
-        m=object.__new__(Monitor);m.settings=Settings();m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
+        m=object.__new__(Monitor);m.settings=replace(Settings(),ai_trading_mode="risk_six_account");m.store=self.store;m.notifier=Mock();m.notifier.send.return_value=True
         m.dispatch(events)
         m.notifier.send.assert_called_once()
         title,body=m.notifier.send.call_args.args

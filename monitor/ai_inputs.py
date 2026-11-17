@@ -18,7 +18,7 @@ def fill_cause(reason):
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
-    if out.get('trading_accounts'):
+    if out.get('trading_accounts') or out.get('live_readonly_accounts'):
         signals=out.get('signals_tradingview')
         if isinstance(signals,dict):
             daily_weekly={'日线','周线','日','周','1d','1D','d','D','1w','1W','w','W'}

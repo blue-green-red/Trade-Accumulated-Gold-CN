@@ -52,8 +52,14 @@ class Monitor:
         if settings.ai_trading_mode=="risk_six_account":
             from .risk_profiles import reset_experiment
             reset_experiment(self.store.conn)
-        from .rule_accounts import remove_rule_accounts
-        remove_rule_accounts(self.store.conn)
+        if settings.ai_trading_mode!='live_only':
+            from .rule_accounts import remove_rule_accounts
+            remove_rule_accounts(self.store.conn)
+        else:
+            from .ai_events import read,acknowledge
+            with self.store.conn:
+                for model in settings.ai_analysts:
+                    acknowledge(self.store.conn,model,[e['id'] for e in read(self.store.conn,model)['pending'] if e['id'].startswith(('portfolio-fill:','portfolio-init:'))])
         from .notification_control import retire_subscriptions
         retire_subscriptions(self.store.conn, settings.ai_trading_mode)
         from .jd_live_readonly import ensure_schema as ensure_live_readonly
@@ -65,10 +71,10 @@ class Monitor:
                             for key, label in short_labels(settings).items()}
         # Retire the previous shared AI book without abandoning its open position.
         self.legacy_short = (PaperBook(settings, self.store, "short_ai", "旧实验 · 短线 AI")
-                             if self.store.open_trade(settings.paper_bank, "short_ai") else None)
+                             if settings.ai_trading_mode!='live_only' and self.store.open_trade(settings.paper_bank, "short_ai") else None)
         from .controls import daily_keys
         daily = list(daily_keys(settings))
-        self.accounts = Accounts(settings, self.store, daily)
+        self.accounts = Accounts(settings, self.store, daily) if settings.ai_trading_mode!='live_only' else None
         self.portfolios = AutonomousPortfolio(settings,self.store) if autonomous_enabled(settings) else None
         self.retired_short_books = {f"{m}:short_ai": PaperBook(settings,self.store,f"{m}:short_ai",f"旧实验 · {m.title()}")
             for m in settings.ai_analysts if self.portfolios and self.store.open_trade(settings.paper_bank,f"{m}:short_ai")}
@@ -481,6 +487,12 @@ class Monitor:
         # JD direct quotes drive execution and conversion; no bank Chromium in the daemon.
 
         self.store.add_tick(snap)
+        if self.settings.ai_trading_mode=='live_only':
+            from .price_guard import observe,request_refresh
+            with self.store.conn:
+                self.store.conn.execute('BEGIN IMMEDIATE')
+                invalid=observe(self.store.conn,snap,self.settings)
+            for model,state in invalid:request_refresh(self.store.conn,model,state)
         self.poll_jin10_if_due(snap["market_open"])
         if not snap["market_open"]:
             self.publish_for_web(snap, None)
@@ -490,16 +502,15 @@ class Monitor:
         if self.portfolios:
             events += self.portfolios.on_tick(snap)
         self.request_ai_after_data_release()
-        if self.portfolios:
-            from .cadence import request_periodic
-            request_periodic(self.settings,self.store,self.enabled_analysts(),snap,utc_now())
+        from .cadence import request_periodic
+        request_periodic(self.settings,self.store,self.enabled_analysts(),snap,utc_now())
         from .jd_live_review import request_reviews
         request_reviews(self.store,utc_now(),settings=self.settings)
         events += self.run_ai_if_due(snap, force=force_ai)
         cost = {"spread_cny": self.settings.spread_cny, "sell_fee_rate": self.settings.sell_fee_rate,
                 "ratio_bank": self.settings.paper_bank}
         base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, **cost)
-        views = {name: a.latest(self.settings.ai_view_max_age_hours) for name, a in self.analysts.items()} if not self.portfolios else {}
+        views = {name: a.latest(self.settings.ai_view_max_age_hours) for name, a in self.analysts.items()} if not self.portfolios and self.settings.ai_trading_mode!='live_only' else {}
         ai_plans = {name: self.build_ai_led_plan(snap, view, cost) for name, view in views.items() if view}
         plan = base_plan  # Technical levels remain available without rule trading accounts.
         alert_events = self.alerts.check(snap)
@@ -516,7 +527,7 @@ class Monitor:
             events += book.on_tick(snap, {"ok": False})
         if self.legacy_short:
             events += self.legacy_short.on_tick(snap, {"ok": False})
-        events += self.accounts.run_daily(snap, daily_views)
+        if self.accounts:events += self.accounts.run_daily(snap, daily_views)
         self.publish_for_web(snap, plan, base_plan, "base", ai_plans)
         return snap, plan, events
 
@@ -525,9 +536,9 @@ class Monitor:
         price = quote["price"] if quote else None
         short = {label: self.store.trade_stats(self.settings.paper_bank, key)
                  for key, label in short_labels(self.settings).items() if key in self.short_books}
-        body = format_leaderboard(self.accounts.leaderboard(price), price, short)
+        body = format_leaderboard(self.accounts.leaderboard(price) if self.accounts else [], price, short)
         from .web import dashboard
-        for model in dashboard(self.settings)["comparison"]["models"]:
+        for model in dashboard(self.settings).get("comparison",{}).get("models",[]):
             rate = f"{model['win_rate']:.0%}" if model["win_rate"] is not None else "—"
             ret = f"{model['return']:+.2%}" if model["return"] is not None else "—"
             body += f"\n\n**{model['name']} 独立操盘**：收益 {ret}，完整平仓 {model['trades']} 次，胜率 {rate}"
@@ -563,6 +574,9 @@ class Monitor:
 
 
 def print_stats(monitor: Monitor) -> None:
+    if monitor.accounts is None:
+        print("模拟实验已停用；历史记录保留在数据库，供离线复盘。")
+        return
     bank = monitor.settings.paper_bank
     snap = monitor.market.snapshot()
     print(monitor.leaderboard_text(snap))

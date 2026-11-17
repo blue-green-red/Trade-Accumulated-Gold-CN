@@ -37,6 +37,11 @@ def message_history(conn,settings):
     for raw in conn.execute('SELECT * FROM notification_deliveries ORDER BY id DESC LIMIT 100'):
         row=dict(raw)
         keys=json.loads(row.get('event_keys_json') or '[]')
+        if settings.ai_trading_mode=='live_only':
+            from .notification_control import event_topic,topics_for_mode
+            allowed=topics_for_mode('live_only',conn)
+            saved=[r[0] for r in conn.execute('SELECT event_json FROM notification_outbox WHERE event_key IN ('+','.join('?' for _ in keys)+')',keys)] if keys else []
+            if not saved or any(event_topic(json.loads(event)) not in allowed for event in saved):continue
         events=[dict(r) for r in conn.execute('SELECT key,title,ts FROM alerts WHERE key IN ('+','.join('?' for _ in keys)+')',keys)] if keys else []
         if any(m in (row['title']+' '+ ' '.join(keys)+' '+' '.join(e['title'] for e in events)).lower() for m in hidden):continue
         group=(row['category'],tuple(sorted(keys)) or (str(row['id']),))
@@ -101,7 +106,7 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
                 a['participation_review']=simulation(conn,a,quote,datetime.now(timezone.utc).isoformat(),settings.sell_fee_rate,settings.spread_cny)
             return True
         rows=live_accounts(conn) if view!='simulation-list' else []
-        mode=('live' if any(a.get('fetched_at') for a in rows) else 'simulation') if view=='auto-list' else view.removesuffix('-list')
+        mode=('live' if settings.ai_trading_mode=='live_only' or any(a.get('fetched_at') for a in rows) else 'simulation') if view=='auto-list' else view.removesuffix('-list')
         result['account_view']=mode
         if mode=='live':
             result.update(live_readonly=[live_summary(a) for a in rows],live_readonly_sync=get_state(conn,'jd_live_sync_status') or {},
@@ -122,7 +127,7 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
         for original in data['analysts']:
             value={k:original.get(k) for k in fields}
             if view=='research':
-                value['action_counts']=dict(Counter(d.get('action') for d in (original.get('account_decisions') or {}).values()))
+                value['action_counts']=dict(Counter(d.get('action') for d in (original.get('account_decisions') or {}).values())) if settings.ai_trading_mode!='live_only' else {}
                 value['live_advice_count']=sum(v is not None for v in (original.get('live_account_advice') or {}).values())
             analysts.append(value)
         result['ai']={'enabled':data['enabled'],'analysts':analysts}

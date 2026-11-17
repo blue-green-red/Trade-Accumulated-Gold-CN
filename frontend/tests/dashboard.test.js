@@ -176,3 +176,19 @@ test("market navigation retains a separate scroll position for each view", () =>
   assert.equal(marketView.value, "prices");
   globalThis.window.scrollY = 0;
 });
+
+test("retired simulation routes return to live accounts and comparisons have no entry", async () => {
+  const { selectView, accountView, pageNames } =
+    await import("../src/composables/dashboard.js");
+  globalThis.fetch = () =>
+    Promise.resolve(
+      response({
+        page: "strategies",
+        trading_mode: "live_only",
+        account_view: "live",
+      }),
+    );
+  selectView("strategies", "simulation/codex:high_empty");
+  assert.equal(accountView.value, "auto");
+  assert.equal(Object.hasOwn(pageNames, "compare"), false);
+});

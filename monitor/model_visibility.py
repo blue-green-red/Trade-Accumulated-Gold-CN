@@ -22,5 +22,10 @@ def dashboard_visible(conn,data):
     hidden=hidden_models(conn)
     controls=data.pop('model_controls',[])
     result=clean(data,hidden)
+    if data.get('trading_mode')=='live_only':
+        for key in ('autonomous','comparison','equity','leaderboard','short','fills','pending_simulation_count'):
+            result.pop(key,None)
+        for analyst in (result.get('ai') or {}).get('analysts',[]):
+            for key in ('account_decisions','_account_inputs','_trading_version','action_counts'):analyst.pop(key,None)
     result['model_controls']=[c if c['key'] not in hidden else {'key':c['key'],'name':c['name'],'enabled':False} for c in controls]
     return result

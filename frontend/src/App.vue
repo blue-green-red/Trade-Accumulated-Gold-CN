@@ -41,7 +41,6 @@ import { clock } from "./clock";
 const pages = {
   overview: lazy(() => import("./pages/OverviewPage.vue")),
   strategies: lazy(() => import("./pages/AccountsPage.vue")),
-  compare: lazy(() => import("./pages/ComparePage.vue")),
   ai: lazy(() => import("./pages/AIPage.vue")),
   market: lazy(() => import("./pages/MarketPage.vue")),
   records: lazy(() => import("./pages/RecordsPage.vue")),
@@ -188,7 +187,7 @@ onUnmounted(() => {
           : "正在加载" + (pageNames[currentPage] || "页面") + "…"
       }}
     </div>
-    <div class="foot">模拟盘为虚拟交易 · 真实建议需自行确认 · 每分钟更新</div>
+    <div class="foot">AI分析与账户建议 · 真实操作需本人确认 · 每分钟更新</div>
   </main>
   <nav class="tabbar" role="tablist" aria-label="页面">
     <button

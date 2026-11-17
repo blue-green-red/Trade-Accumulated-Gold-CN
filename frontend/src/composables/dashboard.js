@@ -15,7 +15,6 @@ export const tabs = [
 ];
 export const pageNames = Object.fromEntries([
   ...tabs,
-  ["compare", "成绩对比"],
   ["records", "操作记录"],
   ["notifications", "通知"],
   ["diagnostics", "系统状态"],
@@ -41,10 +40,7 @@ export const marketViews = [
   ["calendar", "经济日历"],
   ["reference", "市场参考"],
 ];
-export const accountViews = [
-  ["live", "真实账户"],
-  ["simulation", "模拟账户"],
-];
+export const accountViews = [["live", "真实账户"]];
 export const aiViews = [
   ["research", "最新研究"],
   ["control", "模型控制"],
@@ -57,11 +53,8 @@ export const notificationViews = [
 const pick = (choices, value, fallback) =>
   choices.some(([key]) => key === value) ? value : fallback;
 const validAccountView = (v) =>
-  ["auto", "live", "simulation"].includes(v) ||
-  /^live\/(zheshang|minsheng)\/(holdings|advice|orders|records)$/.test(
-    v || "",
-  ) ||
-  /^simulation\/(codex|claude):[a-z_]+$/.test(v || "")
+  ["auto", "live"].includes(v) ||
+  /^live\/(zheshang|minsheng)\/(holdings|advice|orders|records)$/.test(v || "")
     ? v
     : "auto";
 const parseHash = () => {
@@ -175,7 +168,7 @@ export const openPortfolio = (key) =>
   selectView("strategies", "simulation/" + key);
 export const header = shallowRef(null);
 export const historyFilters = reactive({
-  kind: "fills",
+  kind: "analysis",
   model: "all",
   account: "all",
   days: "all",
