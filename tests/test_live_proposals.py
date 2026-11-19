@@ -65,6 +65,33 @@ class LiveProposalTests(unittest.TestCase):
         self.saved(self.value(action='buy',grams=None,suggested_orders=[self.proposal(kind='limit_buy',grams=2,price_cny=840)]))
         self.assertTrue(any('即时买入预算未明确' in x for x in self.latest()['checks']))
 
+    def test_configured_buy_floor_stops_small_advice_without_rounding_or_limiting_sells(self):
+        from monitor.jd_live_readonly import BUY_MINIMUMS_KEY
+        buy = self.value(action='buy', grams=3, price_condition='at_or_below', price_cny=850, suggested_orders=[])
+        view = self.saved(buy)
+        self.s.set_state(BUY_MINIMUMS_KEY, {'zheshang': 10})
+        self.assertEqual(model_input(self.s.conn,NOW)['accounts']['zheshang']['minimum_buy_grams'],10)
+        self.assertEqual(self.latest()['action_status'],'review_required')
+        self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+        raw = json.loads(self.s.conn.execute('SELECT advice_json FROM jd_live_advice WHERE view_id=?',(view,)).fetchone()[0])
+        self.assertEqual(raw['checks'],[])
+
+        for grams in (3,9.99,None):
+            view = self.saved({**buy,'grams':grams})
+            self.assertEqual(self.latest()['grams'],grams)
+            self.assertTrue(any('单笔至少10克' in check for check in self.latest()['checks']))
+            self.assertEqual(notification_events(self.s.conn,'codex',view),[])
+        view = self.saved({**buy,'grams':10})
+        self.assertEqual(self.latest()['checks'],[])
+        self.assertEqual(len(notification_events(self.s.conn,'codex',view)),1)
+
+        self.saved(self.value(suggested_orders=[self.proposal(kind='limit_buy',grams=3,price_cny=840)]))
+        self.assertEqual(self.latest()['action_status'],'review_required')
+        self.saved(self.value(suggested_orders=[self.proposal(kind='limit_buy',grams=10,price_cny=840)]))
+        self.assertEqual(self.latest()['checks'],[])
+        self.saved(self.value(action='sell',grams=3,suggested_orders=[]))
+        self.assertEqual(self.latest()['checks'],[])
+
     def test_new_orders_share_resources_with_existing_and_immediate_actions(self):
         old={'order_key':'a'*24,'kind':'limit_sell','action':'sell','status':'pending',
              'grams':5,'filled_grams':None,'price_cny':870,'price_condition':'at_or_above','expires_at':(NOW+timedelta(days=1)).isoformat()}

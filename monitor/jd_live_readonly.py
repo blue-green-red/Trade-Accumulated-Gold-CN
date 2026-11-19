@@ -9,6 +9,17 @@ from .jd_readonly_probe import BANKS
 PRODUCTS={'zheshang':('1961543816','浙商积存金','indexDataStd'),'minsheng':('21001001000001','民生积存金','indexData')}
 STALE_SECONDS=1800
 CONTROL_KEY='jd_live_banks'
+BUY_MINIMUMS_KEY = 'jd_live_buy_minimums'
+
+
+def buy_minimums(conn):
+    row = conn.execute('SELECT value FROM state WHERE key=?', (BUY_MINIMUMS_KEY,)).fetchone()
+    from .trade_costs import number
+    configured = json.loads(row[0]) if row else {}
+    if not isinstance(configured, dict):
+        return {}
+    return {bank: minimum for bank in PRODUCTS
+            if (minimum := number(configured.get(bank)))}
 
 
 def enabled_banks(conn):
@@ -159,6 +170,7 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
     if not banks:return []
     placeholders=','.join('?' for _ in banks)
     tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    minimums = buy_minimums(conn) if 'state' in tables else {}
     records={r[0]:{'checked_at':r[1],'public_status':r[2]} for r in conn.execute(f'SELECT bank,checked_at,public_status FROM jd_live_readonly WHERE bank IN ({placeholders})',banks)} if 'jd_live_readonly' in tables else {}
     snapshots={r[0]:{'fetched_at':r[1],'revision':r[2],**json.loads(r[3])} for r in conn.execute(f'SELECT * FROM jd_live_snapshots WHERE bank IN ({placeholders})',banks)} if 'jd_live_snapshots' in tables else {}
     declarations={r[0]:r for r in conn.execute(f'SELECT bank,cash_cny,declared_at,anchor,invalidated_at FROM jd_live_cash_declarations WHERE bank IN ({placeholders})',banks)} if 'jd_live_cash_declarations' in tables else {}
@@ -182,6 +194,8 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
             row['holding_pnl_cny']=round((row['quote']['sell_price_cny']-row['average_cost_cny'])*row['total_grams'],2)
         row['holding_pnl_basis']='bank_sell_quote_minus_average_cost_before_sell_fee'
         row['advice']=[];row['advice_history']=[]
+        if bank in minimums:
+            row['minimum_buy_grams'] = minimums[bank]
         row['risk_profile']=risk_profile()
         pending=row.get('pending_orders')
         if pending:
@@ -229,8 +243,12 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 if seen.get(r[1],0)>=3 and r[0] not in pinned:continue
                 value=json.loads(r[5])
                 lifecycle='expired' if age(r[3],now)>=0 else 'account_changed' if r[4]!=row.get('revision') else 'data_unavailable' if not fresh else 'current'
+                from .jd_live_semantics import blocking_checks, minimum_buy_checks
+                if lifecycle == 'current':
+                    for warning in minimum_buy_checks(value, minimums.get(bank)):
+                        if warning not in value.get('checks', []):
+                            value.setdefault('checks', []).append(warning)
                 state='review_required' if lifecycle=='current' and value.get('checks') else lifecycle
-                from .jd_live_semantics import blocking_checks
                 action_state='review_required' if lifecycle=='current' and blocking_checks(value) else lifecycle
                 execution=progress(value,r[2],row['order_history'])
                 target=row['advice'] if not seen.get(r[1]) else row['advice_history']
@@ -264,6 +282,8 @@ def model_input(conn,now=None):
             'average_cost_cny','holding_pnl_cny','holding_pnl_basis','cash_cny','cash_balance_cny','cash_scope','cash_source','cash_declared_at','position_pct','account_risk','quote','pending_order_count','pending_orders','recent_trade','sell_fee_rate','coverage','component_times')
     values={r['bank']:{k:r.get(k) for k in fields} for r in rows}
     for row in rows:
+        if 'minimum_buy_grams' in row:
+            values[row['bank']]['minimum_buy_grams'] = row['minimum_buy_grams']
         from .trade_costs import position_comparison
         quote=row.get('quote') or {}
         if row['connected'] and quote.get('status')=='fresh':

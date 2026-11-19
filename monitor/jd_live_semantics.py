@@ -3,6 +3,26 @@ from copy import deepcopy
 import json
 
 
+def minimum_buy_checks(value, minimum):
+    """Validate proposed new exposure, including replacements, without changing quantities."""
+    if minimum is None:
+        return []
+    quantities = []
+    if value.get('action') == 'buy':
+        quantities.append(value.get('grams'))
+    quantities.extend(order.get('grams') for order in value.get('suggested_orders', [])
+                      if order.get('kind') == 'limit_buy')
+    quantities.extend(review.get('grams') for review in value.get('limit_buy_reviews', [])
+                      if review.get('decision') == 'recommend')
+    for item in value.get('order_management', []):
+        replacement = item.get('effective_replacement') or {}
+        if item.get('action') == 'replace' and replacement.get('action') == 'buy':
+            quantities.append(replacement.get('grams'))
+    if any(grams is None or grams < minimum for grams in quantities):
+        return [f'买入建议须明确数量且单笔至少{minimum:g}克，本轮建议不满足该要求']
+    return []
+
+
 def immediate_signature(value):
     value=value or {}
     result={'action':value.get('action')}

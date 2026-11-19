@@ -4,7 +4,7 @@ from datetime import datetime,timedelta,timezone
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature
-from .jd_live_semantics import immediate_signature,management_signature,notification_parts
+from .jd_live_semantics import immediate_signature,management_signature,notification_parts,minimum_buy_checks
 from .jd_live_entry import LimitBuyReview
 from .jd_live_path import PositionPath
 
@@ -65,6 +65,7 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给启用真实账户人工建议，不执行交易；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
+- 本户若有minimum_buy_grams，即时买入、条件买单及后续每批建议均须达到该克数。只支持更小数量时持有或等待，不凑量；旧小额方案仅供复盘。
 - 按本户仓位及共用规则比较，已有首笔不单独否决追加。reassessment结合previous_advice.strategy_review复核假设与候选变化；reason/price_basis用完整中文句子解释依据、数量取舍和测算，不用E/T/R或斜线串联。continuation分开写触发条件、买卖动作和操作后保留的总仓位；旧条件未触不能独立支持持有。
 - position_path写有条件目标和分步路径、0起的退出情景索引（无价格边界null）、整套(plan)或当前批次(tranche)退出及理由；自选损失边界非假设失效。路径不替代本轮action或条件单。保护仅覆盖确认现仓；买入或保护退出后刷新重评，旧追加不沿用，独立京东单不保证先后，边界内买单先复评及人工撤改确认。
 - account_risk为本户黄金+现金的扣卖费估值及风险参考，预算约束净值损失，不直接等于金价折扣或退出幅度，也非必须用满。downside_scenarios比较候选下跌价的加仓、持有、退出：压力价不自动成为止损或买点；低仓位不自动买也不默认再卖，拒绝现价不替代较低价比较，无依据可留空。
@@ -83,8 +84,9 @@ def prompt_for(context):
 def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
-    from .jd_live_readonly import enabled_banks
+    from .jd_live_readonly import enabled_banks,buy_minimums
     enabled=set(enabled_banks(conn))
+    minimums=buy_minimums(conn)
     for bank,raw in advice.items():
         if bank not in enabled:continue
         source=(inputs.get('accounts') or {}).get(bank)
@@ -124,6 +126,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         if value['action'] in ('buy','sell') and value['price_condition']!='none' and value['price_cny'] is None:warnings.append('价格条件缺少价格')
         from .jd_live_conditions import validate_structure
         warnings.extend(validate_structure(value,source,now))
+        warnings.extend(minimum_buy_checks(value,minimums.get(bank)))
         warnings.extend(validate_proposals(value,source,now))
         from .jd_live_risk import validate_downside,annotate,protection_state
         warnings.extend(validate_downside(value,source,require=strict_downside))
