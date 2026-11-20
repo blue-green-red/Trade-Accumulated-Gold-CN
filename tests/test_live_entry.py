@@ -117,4 +117,4 @@ class EntryValidationTests(unittest.TestCase):
         r['risk_exit_cny']=815
         v=self.f.saved(self.f.value(limit_buy_reviews=[r],suggested_orders=[self.candidate_draft(r)]))
         events=notification_events(self.f.s.conn,'codex',v)
-        self.assertEqual(len(events),1);self.assertIn('新增退出参考815',events[0]['body'])
+        self.assertEqual(len(events),1);self.assertIn('风险退出参考价815',events[0]['body'])

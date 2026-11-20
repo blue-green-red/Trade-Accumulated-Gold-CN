@@ -84,9 +84,10 @@ CREATE TABLE IF NOT EXISTS jd_live_cash_declarations (
 
 
 def ensure_schema(conn):
+    from .jd_live_buy_watch import QUOTE_SCHEMA
     from .jd_live_orders import SCHEMA as order_schema
     with conn:
-        conn.executescript(SCHEMA+order_schema)
+        conn.executescript(SCHEMA+order_schema+QUOTE_SCHEMA)
         for bank in BANKS:conn.execute('INSERT OR IGNORE INTO jd_live_readonly(bank) VALUES(?)',(bank,))
 
 

@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from .config import BJ, Settings
 from .store import Store, iso, utc_now
 from .controls import control, active
-from .ai_events import enqueue, read as read_events, acknowledge
+from .ai_events import enqueue, acknowledge
 from .autonomous import PortfolioDecisions, FourPortfolioDecisions, RiskPortfolioDecisions, decision_type, policy_version, trading_prompt, TRADING_PROMPT, VERSION as TRADING_VERSION
 from .jd_live_advice import LiveAdviceSet, prompt_for as live_advice_prompt
 from .public_ai import PublicContent, PROMPT as PUBLIC_PROMPT, SCHEMA as PUBLIC_SCHEMA
@@ -283,7 +283,8 @@ class AIAnalyst:
         if not active(self.store.conn, self.analyst):
             return None
         from .cadence import allowed
-        pending = read_events(self.store.conn, self.analyst)["pending"]
+        from .jd_live_buy_watch import pending_events
+        pending = pending_events(self.store.conn, self.analyst, utc_now())
         if not allowed(self.settings,self.store.conn,self.analyst,utc_now(),[e["id"] for e in pending]):
             return None
         switch = control(self.store.conn, self.analyst)
@@ -297,7 +298,6 @@ class AIAnalyst:
         last = self.store.conn.execute("SELECT MAX(ts) t FROM ai_views WHERE error IS NULL AND analyst=?",
                                        (self.analyst,)).fetchone()["t"]
         last_dt = datetime.fromisoformat(last) if last else None
-        pending = read_events(self.store.conn, self.analyst)["pending"]
         if pending:
             gap = min(e["min_gap_minutes"] for e in pending)
             if last_dt is None or utc_now() - last_dt >= timedelta(minutes=gap):

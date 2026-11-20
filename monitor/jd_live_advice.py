@@ -73,14 +73,14 @@ PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 仅给启用真实账户人工建议，不执行交易；按risk_profile争取扣费净值增长，允许有依据地提前布局、逆势或分批参与，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏不等于峰值回撤。
 - 本户若有minimum_buy_grams，即时买入、条件买单及后续每批建议均须达到该克数。只支持更小数量时持有或等待，不凑量；旧小额方案仅供复盘。
-- 按本户仓位及共用规则比较，已有首笔不单独否决追加。reassessment结合previous_advice.strategy_review复核假设与候选变化；reason/price_basis用完整中文句子解释依据、数量取舍和测算，不用E/T/R或斜线串联。continuation分开写触发条件、买卖动作和操作后保留的总仓位；旧条件未触不能独立支持持有。
+- 分开评估首笔（含本户最小克数）与后续追加：首笔可用有依据的较弱反弹检验扣费收益与失守损失；追加须用最新报价、仓位和独立依据。reassessment参考previous_advice.strategy_review；reason/price_basis用完整中文说明依据、数量和测算。continuation写清触发、动作和保留总仓位。
 - position_path写有条件目标、分步路径和整套或本批退出。退出索引只引用明确倾向卖出的风险限制或假设失效情景；只有压力测试或观察价时填null。保护仅覆盖确认现仓，成交后刷新重评，独立京东单不保证先后，边界内买单先复评及人工撤改确认。
 - account_risk为本户黄金+现金的扣卖费估值及风险参考，预算约束净值损失，不直接等于金价折扣或退出幅度，也非必须用满。downside_scenarios比较候选下跌价的加仓、持有、退出：压力价不自动成为止损或买点；低仓位不自动买也不默认再卖，拒绝现价不替代较低价比较，无依据可留空。
 - 废弃旧候选只在reassessment说明，不替代本轮新增评估；limit_buy_reviews仅写本轮低位方案，分别说明入场、目标、新增退出、规模及期限依据；百分比假设可用，但须说明适用性，不能仅按每轮现价固定折价滚动下移或把压力价换名作入场。候选保留、改动或废弃须结合新增事实，已触及旧候选却继续等待需解释；退出可为假设失效或自选损失限制，无需独立技术位确认。适合现价参与用buy，适合提前挂买单用recommend并给同参数买单；已知不值得用not_worthwhile，needs_review只用于影响决定的具体待核验前提，给截止及不同结果对应行动；未知参数null，不凑单、不重复评估表。
 - suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。已挂保护以本轮pending_orders为准，旧建议不等于已挂；无实际保护须说建议新挂。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
-- review_conditions用本行报价触发复评。凡后续路径写可买，须有对应buy_review：克数、守住的本行买价和分钟数、按弱反弹扣费测出的最高买价；reason写失守或超价后的动作。参数描述未来判据，无须已观察到企稳；单笔触价不能确认。无法设合理参数则只观察，后续路径也只写复评。suggested_orders是人工挂单建议，期限独立；无账户输入填null。"""
+- 后续可买须有buy_review：回调触价后回收并守住更高价，或突破后回踩至突破价以内，再守住观察价；给克数、守住分钟和按弱反弹扣费测出的买价上限。达到企稳才复评，报价超限放弃，复评时仍须检查现价、仓位和收益空间。无合理参数只观察；人工挂单期限独立，无账户输入填null。"""
 
 
 def prompt_for(context):
@@ -111,6 +111,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         value['input_account_risk']=source.get('account_risk')
         value['input_position_pct']=source.get('position_pct')
         value['input_quote_status']=(source.get('quote') or {}).get('status')
+        value['input_sell_fee_rate']=source.get('sell_fee_rate')
+        value['input_minimum_buy_grams']=minimums.get(bank)
         value['input_quote_at']=(source.get('quote') or {}).get('quoted_at')
         from .jd_live_feedback import price
         value['input_quote_cny']=price((source.get('quote') or {}).get('sell_price_cny')) if value['input_quote_status']=='fresh' else None

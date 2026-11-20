@@ -252,7 +252,7 @@ class Monitor:
         run_id = utc_now().isoformat(timespec="seconds")
         log.info("AI 消息面分析开始（%s，后台串行）", " → ".join(f"{n}:{t}" for n, t in due.items()))
         try:
-            from .ai_events import read as read_events
+            from .jd_live_buy_watch import pending_events
             from .jd_live_preflight import prepare as prepare_live
             coverage_store = Store(self.settings.db_path)
             try:
@@ -267,7 +267,7 @@ class Monitor:
                                            sell_fee_rate=self.settings.sell_fee_rate, ratio_bank=self.settings.paper_bank)
                 from .research_evidence import select_news
                 jin10_recent=select_news(coverage_store.get_state('jin10_flash',jin10_recent or []),snap.get('ts') or utc_now())
-                pending = {name: read_events(coverage_store.conn, name)["pending"] for name in due}
+                pending = {name: pending_events(coverage_store.conn, name, utc_now()) for name in due}
                 portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
             finally:
@@ -492,6 +492,9 @@ class Monitor:
                 enqueue(self.store.conn,name,"京东开盘报价恢复",0,event_id="jd-open:"+utc_now().date().isoformat())
             self.store.set_state("jd_session_closed", False)
         if snap.get("xauusd") is None:
+            if snap["market_open"]:
+                from .jd_live_review import request_reviews
+                request_reviews(self.store,utc_now(),settings=self.settings)
             log.warning("本轮取价全部失败: %s", snap["errors"])
             return snap, None, events
 

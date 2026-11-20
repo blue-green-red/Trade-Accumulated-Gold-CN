@@ -15,8 +15,12 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
     if not trading_session(now)['is_open']:return
     sync=store.get_state('jd_live_sync_status',{})
     if not after_sync and sync.get('status')=='running' and age(sync.get('at'),now)<180:return
+    from .jd_live_buy_watch import record, request as request_buy_review, sample
     for account in accounts(store.conn,now):
         bank=account['bank']
+        point=sample(account,now)
+        if point:
+            record(store.conn,bank,point)
         for model in MODELS:
             if not active(store.conn,model) or not store.get_state('ai_status:'+model,{}).get('available'):continue
             watch_key=f'live-data-ready:{model}:{bank}'
@@ -66,6 +70,8 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
                 request_bank_move(store,account,advice,threshold,now,config.ai_short_review_minutes)
                 from .jd_live_conditions import monitor_prices
                 monitor_prices(store,account,advice,now)
+                if point:
+                    request_buy_review(store,account,advice,now,point)
 
 
 def request_bank_move(store,account,advice,threshold,now,interval=0):

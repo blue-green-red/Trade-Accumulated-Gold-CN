@@ -219,12 +219,11 @@ class BankMoveReviewTests(unittest.TestCase):
     def test_prompt_reuses_existing_fields_instead_of_forcing_trade_or_new_schema(self):
         from monitor.trade_costs import PROMPT as COMPARISON_PROMPT
         self.assertEqual(PROMPT.count('previous_advice.strategy_review'),1)
-        self.assertIn('price_basis给当前证据与目标可达依据',PROMPT)
-        self.assertIn('和共用比较规则选择规模与时机',PROMPT)
-        self.assertIn('扣费收益、计划损失、情景可能性及依据',COMPARISON_PROMPT)
-        self.assertIn('选等待说明信息优势、买贵/踏空代价',COMPARISON_PROMPT)
+        self.assertIn('分开评估首笔（含本户最小克数）与后续追加',PROMPT)
+        self.assertIn('追加须用最新报价、仓位和独立依据',PROMPT)
+        self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
-        self.assertIn('情景标明假设，无法估计直说，不编造价位',PROMPT)
+        self.assertIn('无合理参数只观察',PROMPT)
         self.assertIn('不强制交易',PROMPT)
 
     def test_international_and_two_bank_triggers_are_covered_by_one_model_call(self):

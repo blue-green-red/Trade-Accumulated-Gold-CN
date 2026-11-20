@@ -75,6 +75,11 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                 checks.append('企稳观察时长须短于本轮有效期')
             if minimum_buy_grams is not None and buy_review['grams'] < minimum_buy_grams:
                 checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
+            trigger=condition['price_cny'];recovery=buy_review['recovery_price_cny']
+            if condition['condition']=='at_or_below' and trigger>=recovery:
+                checks.append('回调触价须低于企稳价')
+            if condition['condition']=='at_or_above' and not recovery<=trigger<=buy_review['max_buy_price_cny']:
+                checks.append('突破触价须介于回踩守住价与买价上限之间')
         if key and (key not in orders or orders[key].get('status') not in ('pending','partially_filled')):checks.append('复评条件关联的挂单不在有效输入中')
         fingerprint=condition_key(condition)
         if sum(condition_key(c)==fingerprint for c in value['review_conditions'])>1:checks.append('重复的价格复评条件')
@@ -129,6 +134,18 @@ def condition_state(conn,account,advice,condition,now):
             result['status']='order_inactive';return result
     from .ai_events import read
     pending=read(conn,advice['analyst'])['pending']
+    if condition.get('buy_review'):
+        from .jd_live_buy_watch import valid_route
+        current=read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}')
+        stage=current.get('routes',{}).get(result['condition_key'],{}) if current.get('advice_id')==advice['id'] else {}
+        event_id=f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{advice["id"]}'
+        status='monitoring' if valid_route(condition,account.get('minimum_buy_grams')) else 'review_required'
+        if stage.get('stage')=='above_cap':status='price_limit_exceeded'
+        if stage.get('stage')=='confirmed':
+            status='queued' if any(e['id']==event_id for e in pending) else 'reviewed'
+        return {**result,'status':status,'confirmation_stage':stage.get('stage'),
+                'triggered_at':stage.get('confirmed_at'),'last_quote_at':stage.get('last_at'),
+                'last_price_cny':stage.get('last_price_cny'),'event_id':event_id if stage.get('confirmed_at') else None}
     if watch.get('event_id') and any(e['id']==watch['event_id'] for e in pending):result['status']='queued'
     elif watch.get('advice_id')==advice['id']:result['status']='reviewed'
     elif watch.get('latched'):result['status']='latched'
@@ -151,6 +168,7 @@ def monitor_prices(store,account,advice,now):
     from .controls import active,control
     from .jd_live_readonly import PRODUCTS
     for condition in advice.get('review_conditions',[]):
+        if condition.get('buy_review'):continue
         state=condition_state(store.conn,account,advice,condition,now)
         if state['status'] not in ('monitoring','latched','queued','reviewed'):continue
         quote=account['quote'];price=quote.get(condition['quote_side']+'_price_cny')
@@ -168,12 +186,10 @@ def monitor_prices(store,account,advice,now):
                 reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
                 events=read(store.conn,advice['analyst'])
                 if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
-                    buy_review = condition.get('buy_review')
                     events['pending'].append({'id':event_id,'reason':reason,'min_gap_minutes':0,'observed_at':now.isoformat(),
                         'data':{'bank':account['bank'],'advice_id':advice['id'],'condition_key':condition_key(condition),
                                 'quote_side':condition['quote_side'],'price_cny':price,'threshold_cny':condition['price_cny'],
-                                'quoted_at':quote['quoted_at'],'order_key':condition.get('order_key'),'reason':condition['reason'],
-                                **({'buy_review':buy_review} if buy_review else {})}})
+                                'quoted_at':quote['quoted_at'],'order_key':condition.get('order_key'),'reason':condition['reason']}})
                     write(store.conn,advice['analyst'],events)
                     watch.update(triggered_at=now.isoformat(),event_id=event_id,advice_id=advice['id'])
             watch.update(latched=met,last_quote_at=quote['quoted_at'],last_price_cny=price)

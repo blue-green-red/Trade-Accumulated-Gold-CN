@@ -1,0 +1,1 @@
+import{E as e,T as t,ut as n}from"./index-C3buodIA.js";var r=r=>n({loader:r,loadingComponent:e,errorComponent:t,delay:100,timeout:15e3});export{r as t};

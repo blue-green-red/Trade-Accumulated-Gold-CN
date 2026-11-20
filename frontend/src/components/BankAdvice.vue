@@ -40,12 +40,18 @@ const monitorStates = {
   queued: "已触发 · 待复评",
   reviewed: "已触发 · 已纳入复评",
   latched: "持续满足 · 不重复触发",
+  price_limit_exceeded: "已超过买价上限 · 本轮放弃",
   market_closed: "休市暂停",
   expired: "已到期",
   account_changed: "账户或委托变化 · 已失效",
   data_unavailable: "等待新鲜报价或挂单明细",
   order_inactive: "目标挂单已结束或待更新",
   review_required: "需核对",
+};
+const confirmationStages = {
+  touched: "已触价 · 等待回升或回踩",
+  retest: "已回踩 · 等待收复观察价",
+  holding: "已达到观察价 · 正在计时",
 };
 const state = computed(() =>
   pastDeadline(props.advice)
@@ -408,6 +414,9 @@ const proposalState = (order) => {
             >{{ account.name }}金价 {{ symbol[c.condition] }}
             {{ num(c.price_cny) }} 元/克</strong
           ><span class="sub">{{
+            (conditionState(c) === "monitoring"
+              ? confirmationStages[c.monitoring?.confirmation_stage]
+              : null) ||
             monitorStates[conditionState(c)] ||
             states[conditionState(c)] ||
             "等待监控同步"
@@ -422,10 +431,11 @@ const proposalState = (order) => {
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
         <div v-if="c.buy_review && !c.checks?.length" class="sub">
-          买价回到 {{ num(c.buy_review.recovery_price_cny) }} 元/克并守住
-          {{ c.buy_review.hold_minutes }} 分钟，确认当时买价不超过
-          {{ num(c.buy_review.max_buy_price_cny) }} 元/克后，再评估买入
-          {{ quantity(c.buy_review.grams) }}。至少核对两笔带时间的报价。
+          {{ c.condition === "at_or_above" ? "突破后等回踩" : "回调触价后等回升" }}，
+          买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
+          {{ c.buy_review.hold_minutes }} 分钟，再评估买入
+          {{ quantity(c.buy_review.grams) }}。触价后若超过
+          {{ num(c.buy_review.max_buy_price_cny) }} 元/克，本轮放弃。
         </div>
         <div v-if="c.monitoring?.last_quote_at" class="live-quote-time">
           最近监测 {{ num(c.monitoring.last_price_cny) }} 元/克 ·
