@@ -77,6 +77,40 @@ class LivePathTests(unittest.TestCase):
         v=self.saved(position_path=path(boundary_scenario_index=1))
         self.assertTrue(v['position_path']['checks']);self.assertIsNotNone(notification_parts(v))
 
+    def test_stress_only_wait_keeps_comparison_without_installing_an_exit_or_trigger(self):
+        low={'condition':'at_or_below','price_cny':830,'quote_side':'buy','reason':'低位回收后复评。'}
+        pressure={**low,'price_cny':800,'reason':'下破损失测算。'}
+        changes={'suggested_orders':[],'downside_scenarios':[scenario(830,'entry_reference','reassess'),
+                    scenario(800,'stress_test','reassess')], 'review_conditions':[low,pressure],
+                 'position_path':path(boundary_scenario_index=1)}
+        v=self.saved(action='wait',**changes)
+        self.assertEqual(v['checks'],[])
+        self.assertIsNone(v['position_path']['boundary_price_cny'])
+        self.assertEqual([c['price_cny'] for c in v['review_conditions']],[830])
+        self.assertEqual(v['downside_scenarios'][1]['price_cny'],800)
+        v=self.saved(action='buy',grams=10,price_cny=850,**changes)
+        self.assertIsNone(v['position_path']['boundary_price_cny'])
+        self.assertIsNone(notification_parts(v))
+
+    def test_buy_review_preserves_cap_and_confirmation_and_rejects_impossible_band(self):
+        from monitor.jd_live_readonly import BUY_MINIMUMS_KEY
+        from monitor.jd_live_notice import follow_up
+        self.f.s.set_state(BUY_MINIMUMS_KEY,{'zheshang':10})
+        review={'grams':10,'recovery_price_cny':838,'hold_minutes':4,'max_buy_price_cny':845}
+        condition={'condition':'at_or_below','price_cny':835,'quote_side':'buy','reason':'失守继续等待。','buy_review':review}
+        v=self.saved(review_conditions=[condition],valid_for_minutes=15)
+        self.assertEqual(v['action'],'hold')
+        self.assertEqual(v['checks'],[])
+        self.assertEqual(v['review_conditions'][0]['buy_review'],review)
+        model_previous=model_input(self.f.s.conn,fixtures.NOW)['accounts']['zheshang']['previous_advice'][0]
+        self.assertEqual(model_previous['review_conditions'][0]['buy_review'],review)
+        self.assertIn('买价≤845元/克时复评10克',follow_up(v))
+        for changes in ({'max_buy_price_cny':837},{'hold_minutes':15},{'grams':9}):
+            bad={**condition,'buy_review':{**review,**changes}}
+            v=self.saved(review_conditions=[bad],valid_for_minutes=15)
+            self.assertTrue(v['review_conditions'][0]['checks'])
+            self.assertEqual([c['price_cny'] for c in notification_parts(v)['review_conditions']],[820])
+
     def test_cancel_proposal_does_not_confirm_old_buy_is_gone_or_authorize_new_adds(self):
         old=self.pending_buy();self.f.data['pending_orders'].update(records=[old],total_count=1)
         self.f.data['pending_order_count']=1;self.f.snapshot()

@@ -296,7 +296,7 @@ def model_input(conn,now=None):
             if counts[name]==1 or value['id'] in active_links:
                 brief={k:value.get(k) for k in ('id','analyst','action','grams','price_condition','price_cny','created_at','expires_at','status','execution_progress')}
                 if counts[name]==1:
-                    brief['sizing_context']={k:value.get(k) for k in ('input_position_pct','input_quote_cny','input_state','input_account_risk')}
+                    brief['sizing_context']={k:value.get(k) for k in ('input_position_pct','input_quote_cny','input_quote_at','input_state','input_account_risk')}
                     reason=value.get('reason') or ''
                     brief['reason']=reason if len(reason)<=420 else reason[:419]+'…'
                     if value.get('reassessment'):brief['reassessment']=value['reassessment']
@@ -322,7 +322,7 @@ def model_input(conn,now=None):
                                 'reason':str(prior.get('reason') or '')[:420]}
                             break
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
-                brief['review_conditions']=[{k:o.get(k) for k in ('condition','price_cny','quote_side','order_key','reason')} for o in value.get('review_conditions',[])] if counts[name]==1 else []
+                brief['review_conditions']=[{k:o[k] for k in ('condition','price_cny','quote_side','order_key','reason','buy_review') if k in o and (k!='buy_review' or o[k] is not None)} for o in value.get('review_conditions',[]) if not o.get('checks')] if counts[name]==1 else []
                 if value.get('suggested_orders'):
                     brief['suggested_orders']=[{k:o.get(k) for k in ('kind','grams','price_cny','loss_price_cny','expires_at','reason','execution_progress')} for o in value['suggested_orders']]
                 previous.append(brief)

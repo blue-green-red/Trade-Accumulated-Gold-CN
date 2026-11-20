@@ -421,6 +421,12 @@ const proposalState = (order) => {
           }}
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
+        <div v-if="c.buy_review && !c.checks?.length" class="sub">
+          买价回到 {{ num(c.buy_review.recovery_price_cny) }} 元/克并守住
+          {{ c.buy_review.hold_minutes }} 分钟，确认当时买价不超过
+          {{ num(c.buy_review.max_buy_price_cny) }} 元/克后，再评估买入
+          {{ quantity(c.buy_review.grams) }}。至少核对两笔带时间的报价。
+        </div>
         <div v-if="c.monitoring?.last_quote_at" class="live-quote-time">
           最近监测 {{ num(c.monitoring.last_price_cny) }} 元/克 ·
           {{ fmtTs(c.monitoring.last_quote_at) }}

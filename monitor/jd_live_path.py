@@ -4,10 +4,13 @@ from pydantic import BaseModel,Field
 from .trade_costs import number
 from .jd_live_conditions import stamp
 
+EXIT_ROLES = ('risk_limit', 'thesis_invalidation')
+OBSERVATION_ROLES = ('stress_test', 'entry_reference')
+
 
 class PositionPath(BaseModel):
     target_position_pct:Optional[float]=Field(ge=0,le=100,allow_inf_nan=False,description='路径条件成立后的目标总仓位，非本轮成交量；可至满仓，未知null')
-    boundary_scenario_index:Optional[int]=Field(ge=0,le=1,strict=True,description='暂停追加/退出边界引用downside_scenarios的0起索引；无价格边界null')
+    boundary_scenario_index:Optional[int]=Field(ge=0,le=1,strict=True,description='引用有效且preferred_action=sell的risk_limit或thesis_invalidation的0起索引；仅有压力测试、入场观察或无退出边界填null')
     exit_scope:Literal['tranche','plan']=Field(description='边界终止当前这批仓位或整套建仓；均须成交后刷新重评，非自动续买')
     continuation:str=Field(min_length=1,max_length=1200,description='建议约180字，完整句收尾；分开写上涨/回调时的条件、动作及操作后保留仓位，含截止与退出范围；事件未知也给条件，不重复算式或强制交易')
 
@@ -50,14 +53,26 @@ def validate(value,source,now,require=False):
     checks=[];warnings=[];scenarios=value.get('downside_scenarios',[])
     index=path.get('boundary_scenario_index');scenario=scenarios[index] if index is not None and index<len(scenarios) else None
     if index is not None and not scenario:checks.append('建仓边界引用的下跌情景不存在')
-    if scenario and (scenario.get('checks') or scenario.get('price_role') not in ('risk_limit','thesis_invalidation') or scenario.get('preferred_action')!='sell'):
-        checks.append('建仓退出边界须引用有效且倾向退出的风险限制或假设失效情景')
-    path['boundary_price_cny']=scenario.get('price_cny') if scenario else None
-    path['boundary_role']=scenario.get('price_role') if scenario else None
-    path['input_grams']=source.get('total_grams')
     orders=pending_orders(source,now)
     protections=[o for o in orders if o.get('kind')=='take_profit_stop_loss']+[
         o for o in value.get('suggested_orders',[]) if o['kind']=='take_profit_stop_loss' and not o.get('checks')]
+    discarded_observation = False
+    if scenario and (scenario.get('checks') or scenario.get('price_role') not in EXIT_ROLES or scenario.get('preferred_action')!='sell'):
+        has_entry = value['action']=='buy' or any(o['kind']=='limit_buy' for o in value.get('suggested_orders',[]))
+        if scenario.get('price_role') in OBSERVATION_ROLES:
+            discarded_observation = True
+            path['boundary_scenario_index'] = None
+            if scenario['price_role']=='stress_test':
+                value['review_conditions'] = [c for c in value.get('review_conditions',[])
+                    if not (c['condition']=='at_or_below' and c['price_cny']==scenario['price_cny']
+                            and not c.get('order_key') and not c.get('buy_review') and not c.get('checks'))]
+        if has_entry or protections or not discarded_observation:
+            checks.append('建仓退出边界须引用有效且倾向退出的风险限制或假设失效情景')
+        if scenario.get('price_role') not in EXIT_ROLES or scenario.get('preferred_action')!='sell':
+            scenario = None
+    path['boundary_price_cny']=scenario.get('price_cny') if scenario else None
+    path['boundary_role']=scenario.get('price_role') if scenario else None
+    path['input_grams']=source.get('total_grams')
     if protections and not scenario:checks.append('存在退出保护，须明确对应的建仓边界及退出范围')
     boundary=path.get('boundary_price_cny')
     levels=[o.get('loss_price_cny') for o in protections]+([boundary] if boundary is not None else [])
@@ -67,8 +82,15 @@ def validate(value,source,now,require=False):
         checks.append('建仓边界与可见退出保护不一致，需先说明并确认撤改后的方案')
     # Even an entry above a stop can overlap it on a gap; bank price-only orders have no lower bound.
     path['execution_note']='到边界或任一保护退出后，暂停旧追加方案，先核对成交、撤改旧买单并刷新账户再复评；独立京东委托不保证成交先后。'
+    if discarded_observation:
+        path['execution_note']='原引用价保留为测算或观察，本轮未设置该退出边界。'+path['execution_note']
     def local(item,text,prefix):
         item.setdefault('checks',[]).append(text);warnings.append(prefix+text)
+    if barrier is not None:
+        for condition in value.get('review_conditions',[]):
+            review=condition.get('buy_review')
+            if review and review['recovery_price_cny']<=barrier:
+                local(condition,'企稳观察价须高于退出保护或建仓边界','复评条件：')
     if value['action']=='buy' and barrier is not None:
         quote=number((source.get('quote') or {}).get('buy_price_cny'))
         entry=number(value.get('price_cny'))
@@ -140,7 +162,7 @@ def current_state(advice,account,conn=None):
     if not path:return
     lifecycle=advice.get('lifecycle_status',advice.get('status'))
     path['state']=lifecycle
-    if lifecycle!='current':return
+    if lifecycle!='current' or path.get('boundary_role') not in EXIT_ROLES:return
     boundary=number(path.get('boundary_price_cny'));quote=account.get('quote') or {}
     current=number(quote.get('sell_price_cny'))
     if account.get('status')!='fresh' or quote.get('status')!='fresh' or boundary is None or current is None:return

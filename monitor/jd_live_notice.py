@@ -31,6 +31,9 @@ def follow_up(value):
         if c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key'):
             scope='现有' if path.get('exit_scope')=='plan' else '本批'
             reason=f'暂停加仓，核对挂单后按退出方案处理{scope}持仓'
+        elif review := c.get('buy_review'):
+            reason=(f"守住{review['recovery_price_cny']:g}元/克满{review['hold_minutes']}分钟，"
+                    f"买价≤{review['max_buy_price_cny']:g}元/克时复评{review['grams']:g}克")
         else:
             raw=c.get('reason') or ''
             holding=re.match(r'^(?:比较|评估)保留(约?\d+(?:\.\d+)?)%与放弃追增',raw)

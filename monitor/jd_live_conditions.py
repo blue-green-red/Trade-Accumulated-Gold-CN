@@ -12,7 +12,7 @@ def stamp(value):
     except (ValueError,TypeError):return None
 
 
-def validate_structure(value,source,now):
+def validate_structure(value,source,now,minimum_buy_grams=None):
     warnings=[]
     part=source.get('pending_orders') or {}
     orders={o['order_key']:o for o in part.get('records',[])}
@@ -65,6 +65,16 @@ def validate_structure(value,source,now):
         if not part.get('complete') and (value['action'] in ('buy','sell') or any(o['action']=='replace' for o in value['order_management'])):warnings.append('委托明细不完整，需核对其他挂单的数量和资金占用')
     for condition in value['review_conditions']:
         checks=[];key=condition.get('order_key')
+        buy_review = condition.get('buy_review')
+        if buy_review:
+            if key or condition['quote_side'] != 'buy':
+                checks.append('买入复评须使用本行买价，且不关联已有挂单')
+            if buy_review['max_buy_price_cny'] < buy_review['recovery_price_cny']:
+                checks.append('买价上限不能低于企稳观察价')
+            if buy_review['hold_minutes'] >= value['valid_for_minutes']:
+                checks.append('企稳观察时长须短于本轮有效期')
+            if minimum_buy_grams is not None and buy_review['grams'] < minimum_buy_grams:
+                checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
         if key and (key not in orders or orders[key].get('status') not in ('pending','partially_filled')):checks.append('复评条件关联的挂单不在有效输入中')
         fingerprint=condition_key(condition)
         if sum(condition_key(c)==fingerprint for c in value['review_conditions'])>1:checks.append('重复的价格复评条件')
@@ -97,6 +107,10 @@ def condition_state(conn,account,advice,condition,now):
             'last_quote_at':watch.get('last_quote_at'),'last_price_cny':watch.get('last_price_cny'),
             'event_id':watch.get('event_id')}
     path_boundary=(advice.get('position_path') or {}).get('boundary_price_cny')
+    path_role=(advice.get('position_path') or {}).get('boundary_role')
+    if (path_role=='stress_test' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary
+            and not condition.get('order_key') and not condition.get('buy_review')):
+        result['status']='review_required';return result
     boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
     if advice.get('action_status',advice['status'])!='current' and not boundary_review:result['status']=advice.get('action_status',advice['status']);return result
     if condition.get('checks'):result['status']='review_required';return result
@@ -154,10 +168,12 @@ def monitor_prices(store,account,advice,now):
                 reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
                 events=read(store.conn,advice['analyst'])
                 if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
+                    buy_review = condition.get('buy_review')
                     events['pending'].append({'id':event_id,'reason':reason,'min_gap_minutes':0,'observed_at':now.isoformat(),
                         'data':{'bank':account['bank'],'advice_id':advice['id'],'condition_key':condition_key(condition),
                                 'quote_side':condition['quote_side'],'price_cny':price,'threshold_cny':condition['price_cny'],
-                                'quoted_at':quote['quoted_at'],'order_key':condition.get('order_key'),'reason':condition['reason']}})
+                                'quoted_at':quote['quoted_at'],'order_key':condition.get('order_key'),'reason':condition['reason'],
+                                **({'buy_review':buy_review} if buy_review else {})}})
                     write(store.conn,advice['analyst'],events)
                     watch.update(triggered_at=now.isoformat(),event_id=event_id,advice_id=advice['id'])
             watch.update(latched=met,last_quote_at=quote['quoted_at'],last_price_cny=price)
