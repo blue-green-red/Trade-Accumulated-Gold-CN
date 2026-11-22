@@ -4,7 +4,7 @@ import json
 import threading
 import unittest
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import test_autonomous as fixtures
 from monitor.manual_ai import request,status,ready,claim,finish,recover,RequestError,TRIGGER
 from monitor.controls import set_enabled
@@ -13,6 +13,9 @@ from monitor.web import Handler,ThreadingHTTPServer
 
 class ManualTests(unittest.TestCase):
     def setUp(self):
+        market = patch('monitor.execution.trading_session', return_value={'is_open': True})
+        market.start()
+        self.addCleanup(market.stop)
         self.f=fixtures.AutonomousTests();self.f.setUp()
     def tearDown(self):self.f.tearDown()
 
@@ -125,9 +128,17 @@ class ManualTests(unittest.TestCase):
         value=fixtures.response().model_dump();value.pop('account_decisions')
         f.a._run_codex=Mock(return_value=('notes',[],ClaudeCodeResult.model_validate(value)))
         request(f.store.conn,settings,'codex')
-        snap=fixtures.snapshot();snap.pop('execution_quote');snap['market_open']=False
-        f.m.run_ai_if_due(snap);f.m.wait_for_ai()
+        snap=fixtures.snapshot();snap.pop('execution_quote')
+        f.m.market=Mock()
+        f.m.market.snapshot.return_value=snap
+        f.m.publish_for_web=Mock()
+        f.m.poll_jin10_if_due=Mock()
+        f.a.due=Mock(return_value='自动触发')
+        with patch('monitor.__main__.trading_session',return_value={'is_open':False}):
+            f.m.tick();f.m.wait_for_ai()
+            f.m.tick()
         self.assertEqual(f.a._run_codex.call_count,1)
+        f.a.due.assert_not_called()
         self.assertEqual(status(f.store.conn,'codex')['status'],'completed')
         actual=f.a._run_codex.call_args.args[0]
         self.assertNotIn('trading_accounts',actual)

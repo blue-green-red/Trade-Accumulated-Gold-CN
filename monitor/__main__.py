@@ -178,7 +178,7 @@ class Monitor:
             audit.conn.close()
         return ctx
 
-    def run_ai_if_due(self, snap, force: bool = False) -> List[Dict[str, str]]:
+    def run_ai_if_due(self, snap, force: bool = False, *, manual_only: bool = False) -> List[Dict[str, str]]:
         """AI 分析在后台线程跑（一次 2-3 分钟），监控主循环不等待；完成后的推送在下一轮取出。"""
         if not self.enabled_analysts():
             self._jin10_pending.clear()
@@ -186,7 +186,7 @@ class Monitor:
         events: List[Dict[str, str]] = []
         while not self._ai_results.empty():
             events.append(self._ai_results.get_nowait())
-        if self._jin10_pending:
+        if self._jin10_pending and not manual_only:
             self.start_jin10_triage(snap)
         if self.ai_running():
             return events
@@ -197,7 +197,7 @@ class Monitor:
             elif ready(self.store.conn,self.settings,name):
                 # Read-only real advice uses its own bank preflight, not the simulated execution feed.
                 due[name]=TRIGGER if self.settings.ai_trading_mode=='live_only' or (snap.get("market_open") and execution_quote(snap)) else None
-            else:due[name]=analyst.due()
+            elif not manual_only:due[name]=analyst.due()
         due = {name: trigger for name, trigger in due.items() if trigger}
         if self.portfolios:
             due = {name:trigger for name,trigger in due.items() if self.store.conn.execute(
@@ -510,6 +510,8 @@ class Monitor:
         self.poll_jin10_if_due(snap["market_open"])
         if not snap["market_open"]:
             self.publish_for_web(snap, None)
+            if self.settings.ai_trading_mode=='live_only':
+                events += self.run_ai_if_due(snap, force=force_ai, manual_only=True)
             return snap, None, events
 
         self.refresh_macro_if_due()
