@@ -343,6 +343,9 @@ class BuyGuardTests(unittest.TestCase):
         breakout, = event['data']['routes']
         self.assertEqual(breakout['confirmation_mode'], 'continuation')
         self.assertEqual(breakout['signal_expires_at'], advice['buy_watch']['expires_at'])
+        previous = model_input(self.conn, START + timedelta(minutes=9))['accounts']['zheshang']['previous_advice'][0]
+        self.assertEqual(previous['review_conditions'][0]['monitoring'],
+                         {'status': 'expired', 'confirmation_stage': 'confirmed', 'expires_at': cutoff.isoformat()})
 
     def test_reissued_low_entry_after_its_deadline_requires_new_recovery(self):
         self.update_quote(0, 801)

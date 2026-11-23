@@ -683,6 +683,27 @@ def pending_events(conn, model, now):
     return pending
 
 
+def retain_expired_progress(current, advice, now):
+    expired={}
+    for condition in advice.get('review_conditions', []):
+        if not condition.get('buy_review') or not (deadline:=watch_deadline(advice,condition)) or now<deadline:
+            continue
+        key=watch_route_key(condition)
+        step=current['routes'].get(key,{})
+        last=stamp(step.get('last_at'))
+        original=stamp(step.get('observation_expires_at'))
+        if step.get('stage') and last and last<deadline and original in (None,deadline):
+            expired[key]={'stage':step['stage'],'expires_at':utc_text(deadline)}
+        else:
+            prior=current.get('expired_routes',{}).get(key,{})
+            if stamp(prior.get('expires_at'))==deadline:
+                expired[key]=prior
+    if expired:
+        current['expired_routes']=expired
+    else:
+        current.pop('expired_routes',None)
+
+
 def request(store, account, advice, now, point):
     from .ai_events import read, write
     from .controls import active, control
@@ -731,6 +752,8 @@ def request(store, account, advice, now, point):
         if at <= cursor:
             return
         tape = quote_tape(conn, bank, cursor, point)
+        if watch:
+            retain_expired_progress(current,advice,observed)
         current['last_quote_at'] = utc_text(at)
         if watch and boundary is not None and (hit := next((when for when, _, price in tape if price <= boundary), None)):
             current['invalidated_at'] = utc_text(hit)

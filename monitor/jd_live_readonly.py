@@ -323,8 +323,13 @@ def review_condition_input(conn, account, advice, condition, watch_end):
         from .jd_live_buy_watch import watch_id,watch_progress,watch_route_key
         current=watch_progress(read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}'))
         if current.get('plan_id',current.get('advice_id'))==watch_id(advice):
-            step=current.get('routes',{}).get(watch_route_key(condition),{})
-            if (last:=stamp(step.get('last_at'))) and last<deadline and step.get('stage'):
+            key=watch_route_key(condition)
+            record=current.get('expired_routes',{}).get(key,{})
+            step=current.get('routes',{}).get(key,{})
+            if stamp(record.get('expires_at'))==deadline:
+                state_info['confirmation_stage']=record['stage']
+            elif ((last:=stamp(step.get('last_at'))) and last<deadline and step.get('stage')
+                  and stamp(step.get('observation_expires_at')) in (None,deadline)):
                 state_info['confirmation_stage']=step['stage']
     if state_info:
         item['monitoring']=state_info
