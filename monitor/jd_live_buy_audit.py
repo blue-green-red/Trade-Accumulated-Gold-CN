@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance_watch, eligible, utc_text, watch_deadline, watch_routes
-from .jd_live_conditions import archived_bank_quotes, pullback_depth, stamp, zoned_pullback
+from .jd_live_conditions import archived_bank_quotes, condition_key, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, stored_price_condition
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
@@ -237,25 +237,78 @@ def shallow_level_sensitivity(value, condition, archived_quotes, published, expi
             'replay': replay_one_branch(value, candidate, None, published, min(expires, cutoff), quotes, now, grams)}
 
 
-def independent_branch_replay(value, published, expires, quotes, now, *, archived_quotes=None, grams=GRAMS):
+def trim_observation_windows(windows, cutoff):
+    while windows and windows[-1][1] >= cutoff:
+        windows.pop()
+    if windows and windows[-1][2] > cutoff:
+        owner, start, _ = windows[-1]
+        windows[-1] = owner, start, cutoff
+
+
+def pullback_observation_windows(history):
+    """Split renewed conditions into disjoint windows within each bank watch."""
+    result = defaultdict(dict)
+    plan_id = None
+    active = {}
+
+    def save():
+        for key, windows in active.items():
+            for owner, start, end in windows:
+                result[owner][key] = start, end
+
+    for advice_id, published, expires, value, _ in history:
+        watch = value.get('buy_watch') or {}
+        if watch.get('id') != plan_id:
+            for windows in active.values():
+                trim_observation_windows(windows, published)
+            save()
+            active = {}
+            plan_id = watch.get('id')
+        if not plan_id:
+            continue
+        advice = {**value, 'expires_at': utc_text(expires)}
+        for condition in value.get('review_conditions', []):
+            if not zoned_pullback(condition) or not (end := watch_deadline(advice, condition)):
+                continue
+            windows = active.setdefault(condition_key(condition), [])
+            trim_observation_windows(windows, max(published, end))
+            start = max(published, windows[-1][2]) if windows else published
+            if start < end:
+                windows.append((advice_id, start, end))
+    save()
+    return result
+
+
+def independent_branch_replay(value, published, expires, quotes, now, *, archived_quotes=None, grams=GRAMS,
+                              pullback_windows=None):
     """Use each condition alone and preserve the original observation window."""
     watch = value.get('buy_watch')
-    if watch and stamp(watch.get('starts_at')) != published:
-        return []
+    reused = watch and stamp(watch.get('starts_at')) != published
     minimum = number(value.get('input_minimum_buy_grams'))
     cases = []
     for condition in value.get('review_conditions', []):
         if not eligible(condition, minimum):
+            continue
+        start, replay_value = published, value
+        if watch and pullback_windows is not None and zoned_pullback(condition):
+            window = pullback_windows.get(condition_key(condition))
+            if not window:
+                continue
+            start, end = window
+            replay_value = {**value, 'buy_watch': {**watch, 'expires_at': utc_text(end)}}
+        elif reused:
             continue
         if archived_quotes and 'pullback_depth' not in condition and (depth := pullback_depth(
                 condition, archived_quotes, value.get('input_quote_at'), published)):
             condition = {**condition, 'pullback_depth': depth}
         modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
         for mode in modes:
-            result = replay_one_branch(value, condition, mode, published, expires, quotes, now, grams)
+            result = replay_one_branch(replay_value, condition, mode, start, expires, quotes, now, grams)
+            if replay_value is not value:
+                result.update(observation_starts_at=utc_text(start), observation_ends_at=utc_text(end))
             if zoned_pullback(condition) and archived_quotes is not None:
-                result['sampled_low_sensitivity'] = shallow_level_sensitivity(value, condition, archived_quotes,
-                                                                             published, expires, quotes, now, grams)
+                result['sampled_low_sensitivity'] = shallow_level_sensitivity(replay_value, condition, archived_quotes,
+                                                                             start, expires, quotes, now, grams)
             cases.append(result)
     return cases
 
@@ -646,17 +699,16 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
     cases = []
     recent = conn.execute('SELECT id,created_at,expires_at,advice_json,view_id FROM jd_live_advice '
                           'WHERE bank=? AND analyst=? AND julianday(created_at)<=julianday(?) '
-                          'ORDER BY id DESC LIMIT ?', (bank, model, utc_text(now), limit)).fetchall()
+                          'ORDER BY id DESC LIMIT ?', (bank, model, utc_text(now), limit + 1)).fetchall()
+    history = [(advice_id, published, end, json.loads(raw), view_id) for advice_id, created, expires, raw, view_id in recent
+               if (published := stamp(created)) and (end := stamp(expires)) and published <= now]
+    windows = pullback_observation_windows(reversed(history))
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
-    for advice_id, created, expires, raw, view_id in recent:
-        published, end = stamp(created), stamp(expires)
-        if not published or not end or published > now:
-            continue
+    for advice_id, published, end, value, view_id in history[:limit]:
         rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
                             'WHERE bank=? AND quoted_at>=? AND observed_at>=quoted_at AND observed_at<=? ORDER BY quoted_at',
                             (bank, utc_text(published), utc_text(now))).fetchall()
         points = [(stamp(q), stamp(o), buy, sell) for q, o, buy, sell in rows]
-        value = json.loads(raw)
         watch = value.get('buy_watch')
         if watch:
             replacement = conn.execute("SELECT created_at FROM jd_live_advice WHERE bank=? AND analyst=? "
@@ -674,7 +726,8 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
-                                                                            archived_quotes=archived_quotes, grams=grams)})
+                                                                            archived_quotes=archived_quotes, grams=grams,
+                                                                            pullback_windows=windows.get(advice_id, {}))})
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': grams, 'cases': cases,
             'observed_reviews': observed_reviews(conn, bank, model, limit, now, grams=grams)}
 

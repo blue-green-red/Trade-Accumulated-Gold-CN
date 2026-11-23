@@ -487,6 +487,53 @@ class BuyAuditTests(unittest.TestCase):
                 if phase == 'confirmed':
                     self.assertEqual(datetime.fromisoformat(row['confirmation']['quoted_at']), point(8, 804)[0])
 
+    def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'renewed-windows.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+
+            def at(minute):
+                return START + timedelta(minutes=minute)
+
+            value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                     'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                     'buy_watch': {'id': 'first-watch', 'starts_at': at(0).isoformat(), 'expires_at': at(30).isoformat()},
+                     'review_conditions': [zoned_route(), {'condition': 'at_or_above', 'quote_side': 'buy',
+                         'price_cny': 810, 'bank_breakout': {'retest_ceiling_cny': 812, 'hold_minutes': 3}}]}
+            with store.conn:
+                for i, published, deadline in ((1, 0, 8), (2, 3, 15), (3, 4, 15), (4, 6, 13), (5, 11, 20), (6, 16, None)):
+                    advice = {**value, 'limit_buy_reviews': [{'decision': 'needs_review', 'entry_price_cny': 804,
+                        'grams': 10, 'expires_at': at(deadline).isoformat()}]} if deadline else {}
+                    store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                        (i, 'zheshang', 'codex', i, at(published).isoformat(), at(30).isoformat(), 'v1', json.dumps(advice)))
+            for minute, price in ((2, 799), (3, 803), (5, 804), (7.5, 799), (8.5, 803.5), (9.5, 804),
+                                  (10, 799.5), (10.5, 803), (12.75, 804), (14, 799), (15, 803), (17, 804)):
+                record(store.conn, 'zheshang', point(minute, price))
+
+            result = report(store.conn, 'zheshang', 'codex', 6, at(21))
+            by_advice = {c['advice_id']:c['independent_branch_replay'] for c in result['cases']}
+            self.assertEqual({c['branch'] for c in by_advice[1]},
+                             {'zoned_pullback', 'breakout_continuation', 'breakout_retest'})
+            self.assertEqual(by_advice[3], [])
+            self.assertEqual(by_advice[4], [])
+            for i, start, end, confirmed in ((1, 0, 8, 5), (2, 8, 13, 12.75), (5, 13, 16, None)):
+                window, = [r for r in by_advice[i] if r['branch'] == 'zoned_pullback']
+                self.assertEqual(datetime.fromisoformat(window['observation_starts_at']), at(start))
+                self.assertEqual(datetime.fromisoformat(window['observation_ends_at']), at(end))
+                if confirmed:
+                    self.assertEqual(datetime.fromisoformat(window['confirmation']['quoted_at']), at(confirmed))
+                else:
+                    self.assertNotEqual(window['confirmation']['status'], 'confirmed')
+
+            historical = report(store.conn, 'zheshang', 'codex', 1, at(12))
+            only, = historical['cases']
+            self.assertEqual(only['advice_id'], 5)
+            window, = only['independent_branch_replay']
+            self.assertEqual(datetime.fromisoformat(window['observation_starts_at']), at(13))
+            self.assertEqual(datetime.fromisoformat(window['observation_ends_at']), at(20))
+            self.assertEqual(window['confirmation']['status'], 'pending')
+
     def test_independent_replay_keeps_the_later_retest_and_shallow_pullback(self):
         breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
