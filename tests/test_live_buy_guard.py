@@ -1351,7 +1351,9 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=now)), 1)
         self.assertEqual(pending_events(self.conn, 'codex', now), [])
 
-    def test_paused_buy_retry_keeps_independent_protection_and_buy_cancellation(self):
+    def test_paused_buy_keeps_protection_and_sends_one_buy_only_notice_on_recovery(self):
+        from monitor.jd_live_advice import resumed_buy_notice
+
         until = (START + timedelta(hours=1)).isoformat()
         orders = [{'kind': 'limit_buy', 'grams': 10, 'price_cny': 805, 'expires_at': until, 'reason': '等待回调。'},
                   {'kind': 'take_profit_stop_loss', 'grams': 2, 'price_cny': 820, 'loss_price_cny': 790,
@@ -1365,7 +1367,7 @@ class BuyGuardTests(unittest.TestCase):
         self.save_advice(condition='reference', orders=orders, routes=[retest], basis='retest', management=management)
         set_subscription(self.conn, 'codex:live_zheshang', True)
         notifier = Mock()
-        notifier.send.side_effect = [False, True]
+        notifier.send.side_effect = [False, True, True]
         notifier.last_receipt = {'status': 'failed'}
         dispatch(self.store, notifier, notification_events(self.conn, 'codex', 1, now=START), START)
         self.assertIn('买入 10克', notifier.send.call_args.args[1])
@@ -1383,6 +1385,25 @@ class BuyGuardTests(unittest.TestCase):
         self.assertNotIn('买入 10克', text)
         self.assertNotIn('买入10克', text)
         self.assertNotIn('买入40克', text)
+
+        dispatch(self.store, notifier, [], at)
+        self.assertEqual(notifier.send.call_count, 2)
+        self.update_quote(2, 805.9, pending=[old])
+        at = START + timedelta(minutes=2)
+        dispatch(self.store, notifier, [], at)
+        dispatch(self.store, notifier, [], at)
+        self.assertEqual(notifier.send.call_count, 3)
+        text = notifier.send.call_args.args[1]
+        self.assertIn('买入条件恢复', text)
+        self.assertIn('买入 10克', text)
+        self.assertNotIn('止损 ≤ 790元/克', text)
+        self.assertNotIn('建议撤单', text)
+        self.assertEqual([tuple(r) for r in self.conn.execute('SELECT event_key,status FROM notification_outbox ORDER BY event_key')],
+                         [('live-advice:1','accepted'), ('live-advice:1:buy-resumed','accepted')])
+        self.update_quote(3, 805.9, pending=[old])
+        at = START + timedelta(minutes=3)
+        self.save_advice(action='hold', condition='none', view=2, now=at)
+        self.assertIsNone(resumed_buy_notice(self.conn, 1, at))
 
     def test_retest_band_does_not_override_an_explicit_limit_or_broader_basis(self):
         rule = {'hold_minutes': 3, 'retest_ceiling_cny': 805.9}

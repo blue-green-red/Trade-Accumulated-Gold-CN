@@ -243,5 +243,39 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
         body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders')
                                and not value.get('immediate_buy_paused'))
         events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
-                       'title':f"💡{analyst.title()}账户建议｜{account['name'].removesuffix('积存金')}｜{action}",'body':body})
+                       'title':f"💡{analyst.title()}账户建议｜{account['name'].removesuffix('积存金')}｜{action}",'body':body,
+                       **({'live_buy_paused': True} if value.get('immediate_buy_paused') else {})})
     return events
+
+
+def resumed_buy_notice(conn, advice_id, now):
+    """Send the buy portion once when an earlier delivered notice only contained protection."""
+    from .jd_live_notice import body
+    from .jd_live_readonly import accounts
+    row = conn.execute("""SELECT a.bank,a.analyst,n.expires_at FROM notification_outbox n
+        JOIN jd_live_advice a ON a.id=? WHERE n.event_key='live-advice:'||a.id AND n.status='accepted'
+        AND json_extract(n.event_json,'$.live_buy_paused')=1 AND julianday(n.expires_at)>julianday(?)""",
+                       (advice_id, now.isoformat())).fetchone()
+    if not row:
+        return None
+    bank, model, expires_at = row
+    account = next(iter(accounts(conn,now,selected_bank=bank)),{})
+    advice = next((v for v in account.get('advice',[]) if v['id']==advice_id),None)
+    if (not advice or advice['action']!='buy' or advice.get('action_status')!='current'
+            or (advice.get('position_path') or {}).get('state')=='boundary_reached'
+            or not (value := notification_parts(advice))):
+        return None
+    value.update(immediate_buy_resumed=True, notification_partial=True, suggested_orders=[], order_management=[], review_conditions=[])
+    return {'key':f'live-advice:{advice_id}:buy-resumed','live_advice_id':advice_id,'live_buy_resumed':True,
+            'entry_expires_at':expires_at,'notification_topic':f'{model}:live_{bank}',
+            'title':f"💡{model.title()}账户建议｜{account['name'].removesuffix('积存金')}｜买入条件恢复",
+            'body':body(account,advice,value)}
+
+
+def resumed_buy_notices(conn, now):
+    rows = conn.execute("""SELECT json_extract(n.event_json,'$.live_advice_id') FROM notification_outbox n
+        WHERE n.status='accepted' AND n.event_key LIKE 'live-advice:%' AND julianday(n.expires_at)>julianday(?)
+        AND json_extract(n.event_json,'$.live_buy_paused')=1 AND NOT EXISTS (
+            SELECT 1 FROM alerts WHERE key='live-advice:'||json_extract(n.event_json,'$.live_advice_id')||':buy-resumed')""",
+                        (now.isoformat(),)).fetchall()
+    return [event for advice_id, in rows if (event:=resumed_buy_notice(conn,advice_id,now))]

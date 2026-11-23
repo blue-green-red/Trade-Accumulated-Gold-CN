@@ -24,6 +24,9 @@ def refreshed_advice(conn, event, now):
     advice_id = event.get('live_advice_id')
     if not advice_id:
         return event
+    if event.get('live_buy_resumed'):
+        from .jd_live_advice import resumed_buy_notice
+        return resumed_buy_notice(conn,advice_id,now)
     row = conn.execute('SELECT bank,analyst,view_id FROM jd_live_advice WHERE id=?', (advice_id,)).fetchone()
     if not row:
         return None
@@ -37,6 +40,8 @@ def refreshed_advice(conn, event, now):
 def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
     now = now or utc_now()
     stamp = now.isoformat()
+    from .jd_live_advice import resumed_buy_notices
+    events = [*events, *resumed_buy_notices(store.conn,now)]
     selected = selected_events(store.conn, events, mode, now=now)
     with store.conn:
         # A process that died during HTTP may already have delivered the message.

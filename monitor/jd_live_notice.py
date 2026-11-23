@@ -87,7 +87,9 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     management=value.get('order_management',[])
     manual=[o for o in management if o['action'] in ('cancel','replace')]
     conclusions={'buy':'建议买入','sell':'建议卖出','hold':'继续持有，本轮不立即买卖','wait':'继续观望，本轮不立即买卖'}
-    conclusion='即时买入建议已暂停' if value.get('immediate_buy_paused') else conclusions[action]
+    conclusion=conclusions[action]
+    if value.get('immediate_buy_paused'):conclusion='即时买入建议已暂停'
+    if value.get('immediate_buy_resumed'):conclusion='买入条件恢复，请按原建议核对'
     lines=['**本轮结论：'+conclusion+'。**']
     tasks=[conclusions[action]] if action in ('buy','sell') else []
     if drafts:tasks.append(f'{len(drafts)}笔新条件单建议')
@@ -147,9 +149,9 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     if not partial:
         path_text=follow_up(value)
         if path_text:lines.append(path_text)
-    if partial:
+    if partial and not value.get('immediate_buy_resumed'):
         lines.append('仅推送已通过独立校验的部分；其余建议需核对，请查看账户页明细。')
-    else:
+    if not partial:
         explanation=basis(value)
         if explanation:
             lines.append('关键依据：\n'+'\n'.join('**'+item['label']+'**\n'+item['text'] for item in explanation))
