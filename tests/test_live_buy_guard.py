@@ -239,6 +239,52 @@ class BuyGuardTests(unittest.TestCase):
         queue(2,2,high,807.6)
         self.assertEqual(pending_events(self.conn,'codex',START+timedelta(minutes=2)),[])
 
+    def test_superseded_price_review_does_not_consume_the_new_advice_quote(self):
+        from monitor.jd_live_conditions import monitor_prices, watch_key
+
+        at = START + timedelta(minutes=1)
+        self.update_quote(1,806)
+        revision = accounts(self.conn,at,include_advice=False)[0]['revision']
+        condition = {'condition':'at_or_above','quote_side':'buy','price_cny':805,'reason':'买价上穿后复评。'}
+        value = json.dumps({'action':'hold','review_conditions':[condition]})
+        end = (at+timedelta(minutes=15)).isoformat()
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                (1,'zheshang','codex',1,START.isoformat(),end,revision,value))
+        old_account = accounts(self.conn,at)[0]
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                (2,'zheshang','codex',2,at.isoformat(),end,revision,value))
+
+        monitor_prices(self.store,old_account,old_account['advice'][0],at)
+        self.assertEqual(read(self.conn,'codex')['pending'], [])
+        self.assertFalse(read_watch(self.conn,watch_key(self.conn,'codex','zheshang',condition)))
+        current = accounts(self.conn,at)[0]
+        monitor_prices(self.store,current,current['advice'][0],at)
+        event, = read(self.conn,'codex')['pending']
+        self.assertEqual(event['data']['advice_id'], 2)
+        self.assertEqual(datetime.fromisoformat(event['data']['quoted_at']), at)
+
+    def test_price_review_uses_the_same_verified_account_revision_under_write_lock(self):
+        from monitor.jd_live_conditions import monitor_prices, watch_key
+
+        self.update_quote(0,806)
+        revision = accounts(self.conn,START,include_advice=False)[0]['revision']
+        condition = {'condition':'at_or_above','quote_side':'buy','price_cny':805,'reason':'买价上穿后复评。'}
+        value = json.dumps({'action':'hold','review_conditions':[condition]})
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (1,'zheshang','codex',1,
+                START.isoformat(),(START+timedelta(minutes=15)).isoformat(),revision,value))
+        old_account = accounts(self.conn,START)[0]
+        snapshot = json.loads(self.conn.execute("SELECT data_json FROM jd_live_snapshots WHERE bank='zheshang'").fetchone()[0])
+        snapshot['cash_cny'] += 100
+        at = START + timedelta(seconds=1)
+        record_success(self.conn,'zheshang',snapshot,at.isoformat())
+
+        monitor_prices(self.store,old_account,old_account['advice'][0],at)
+        self.assertEqual(read(self.conn,'codex')['pending'], [])
+        self.assertFalse(read_watch(self.conn,watch_key(self.conn,'codex','zheshang',condition)))
+
     def test_plain_buy_records_initial_suppression_once_then_allows_a_new_crossing(self):
         from monitor.jd_live_conditions import monitor_prices
 

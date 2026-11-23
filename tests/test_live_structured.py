@@ -149,7 +149,7 @@ class StructuredAdviceTests(unittest.TestCase):
         self.saved(self.value(review_conditions=[buy]))
         self.price(855.1, 10)
         now = NOW + timedelta(seconds=10)
-        with patch('monitor.jd_live_conditions.buy_observation_latched', return_value=False):
+        with patch('monitor.jd_live_conditions.buy_observation_latch_reason', return_value=None):
             request_reviews(self.s, now)
         self.assertEqual(len(self.price_events()), 1)
         self.assertFalse(any(e['id'].startswith('live-price:') for e in pending_events(self.s.conn, 'codex', now)))

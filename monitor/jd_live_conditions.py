@@ -375,7 +375,8 @@ def monitor_prices(store,account,advice,now):
     from .jd_live_buy_guard import plain_buy_observation
     from .jd_live_buy_watch import PRICE_SUPPRESSION_KEY, append_price_review_records
     from .jd_live_path import observed_exit_touch
-    from .jd_live_readonly import PRODUCTS
+    from .jd_live_readonly import PRODUCTS, enabled_banks
+    bank, model = account['bank'], advice['analyst']
     for condition in advice.get('review_conditions',[]):
         if condition.get('buy_review') or condition.get('bank_breakout'):continue
         state=condition_state(store.conn,account,advice,condition,now)
@@ -386,8 +387,15 @@ def monitor_prices(store,account,advice,now):
         # The collector and monitor can observe the same tick. Commit event + latch atomically.
         with store.conn:
             store.conn.execute('BEGIN IMMEDIATE')
-            switch=control(store.conn,advice['analyst'])
-            if not active(store.conn,advice['analyst']) or (switch.get('changed_at') and advice['created_at']<=switch['changed_at']):continue
+            switch=control(store.conn,model)
+            if not active(store.conn,model) or (switch.get('changed_at') and advice['created_at']<=switch['changed_at']):continue
+            latest = store.conn.execute('''SELECT a.id,a.snapshot_revision,s.revision
+                FROM jd_live_advice a JOIN jd_live_snapshots s ON s.bank=a.bank
+                JOIN jd_live_readonly r ON r.bank=a.bank AND r.public_status='fresh'
+                WHERE a.bank=? AND a.analyst=? ORDER BY a.id DESC LIMIT 1''', (bank,model)).fetchone()
+            if (not latest or latest[0]!=advice['id'] or latest[1]!=latest[2]
+                    or latest[2]!=account.get('revision') or bank not in enabled_banks(store.conn)):
+                return
             key=watch_key(store.conn,advice['analyst'],account['bank'],condition);watch=read_watch(store.conn,key)
             if watch.get('last_quote_at') and stamp(quote['quoted_at'])<=stamp(watch['last_quote_at']):continue
             latched = watch.get('latched')
