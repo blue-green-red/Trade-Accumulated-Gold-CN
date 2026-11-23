@@ -581,7 +581,8 @@ class BuyAuditTests(unittest.TestCase):
                         'VALUES(?,?,?,?,?,?,?)', ('codex', started.isoformat(), 'fixture', run, 'completed', two.isoformat(), i))
                     store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
                         two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1',
-                        json.dumps({'action': action, 'input_sell_fee_rate': .005})))
+                        json.dumps({'action': action, 'input_sell_fee_rate': .005,
+                                    'input_participation_cash_cny': 15_000})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
                         {'id': event_id, 'data': {'bank': 'zheshang', 'advice_id': 3, 'routes': paths}}]}
                     if not covered:
@@ -678,6 +679,26 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual((renewed['trigger_kind'], renewed['threshold_cny']), ('price_touch', 807))
             self.assertEqual(renewed['quote_followups'][0]['status'], 'observed')
 
+            context['live_readonly_accounts'] = {'accounts': {'zheshang': {
+                'status': 'fresh', 'quote': {'status': 'fresh'}, 'minimum_buy_grams': 10,
+                'new_buy_capacity_at_input': {'cash_after_buy_orders_cny': 16_130}}}}
+            store.set_state(key, context)
+            sized = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65), grams=20)
+            lower_readout = next(x for x in sized['cases'] if x['event_id'] == lower_id)['paths'][0]
+            after_15 = lower_readout['quote_followups'][0]
+            self.assertEqual(after_15['hypothetical_20g_net_cny'], {
+                'at_confirmation': round(20 * (805.25 * .995 - 806), 2), 'after_analysis': None, 'wait': 0.0})
+            self.assertEqual(after_15['after_analysis_20g']['status'], 'insufficient_input_cash')
+            below_minimum = observed_reviews(store.conn, 'zheshang', 'codex', 4,
+                                             START + timedelta(minutes=65), grams=5)
+            lower_readout = next(x for x in below_minimum['cases'] if x['event_id'] == lower_id)['paths'][0]
+            self.assertEqual(lower_readout['quote_followups'][0]['at_confirmation_5g']['status'], 'below_bank_minimum')
+            context['live_readonly_accounts']['accounts']['zheshang']['new_buy_capacity_at_input']['cash_after_buy_orders_cny'] = None
+            store.set_state(key, context)
+            unknown = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
+            lower_readout = next(x for x in unknown['cases'] if x['event_id'] == lower_id)['paths'][0]
+            self.assertEqual(lower_readout['quote_followups'][0]['after_analysis_10g']['status'], 'cash_unknown')
+
     def test_same_horizon_only_post_publication_quotes_with_observed_fee(self):
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
                  'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
@@ -693,6 +714,11 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(row['wait']['net_cny'], 0.)
             self.assertIsNone(row['confirmed_10g']['sampled_adverse_excursion_cny'])
             self.assertIsNone(row['confirmed_10g']['sampled_max_drawdown_cny'])
+        larger = evaluate({**value, 'input_participation_cash_cny': 15_000}, START, end, samples,
+                          START + timedelta(days=4), grams=17.5)[0]
+        self.assertEqual(larger['confirmed_17.5g']['net_cny'], round(17.5 * (812 * .995 - 805), 2))
+        unfunded = evaluate(value, START, end, samples, START + timedelta(days=4), grams=17.5)[0]
+        self.assertEqual(unfunded['immediate_17.5g']['status'], 'insufficient_input_cash')
         self.assertGreater(rows[0]['confirmed_10g']['missed_gain_by_waiting_cny'], 0)
         self.assertGreater(rows[1]['confirmed_10g']['loss_avoided_by_waiting_cny'], 0)
 
