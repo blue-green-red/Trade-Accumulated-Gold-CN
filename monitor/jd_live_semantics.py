@@ -84,6 +84,12 @@ def notification_parts(value, *, ignored_warning=None):
     return result
 
 
+def retest_buy_waiting(value):
+    pause = value.get('entry_pause_reason')
+    return bool(value.get('retest_reprice_needed') and value.get('action')=='buy'
+                and value.get('lifecycle_status')=='current' and pause and blocking_checks(value)==[pause])
+
+
 def live_notification_parts(value, account, now):
     """Keep independently validated protection when an immediate buy is paused."""
     if value.get('action_status',value['status']) == 'current':

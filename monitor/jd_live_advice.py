@@ -4,7 +4,8 @@ from datetime import datetime,timedelta,timezone
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature
-from .jd_live_semantics import immediate_signature,live_notification_parts,management_signature,notification_parts,minimum_buy_checks
+from .jd_live_semantics import (immediate_signature, live_notification_parts, management_signature,
+                                minimum_buy_checks, notification_parts, retest_buy_waiting)
 from .jd_live_entry import LimitBuyReview
 from .jd_live_path import PositionPath
 
@@ -200,17 +201,25 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
         current=next((a for a in account['advice'] if a['id']==row[0]),None)
         if not current:continue
         raw_value=json.loads(row[1]);value=live_notification_parts(current,account,current_time)
+        deferred=value is None and retest_buy_waiting(current)
+        if deferred:value=notification_parts(raw_value)
         if value is None:continue
         if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
         from .jd_live_notice_rules import reasons
         notice_reasons=reasons(conn,analyst,account['bank'],row[0],current['created_at'],raw_value)
-        previous=conn.execute('SELECT advice_json,snapshot_revision,created_at FROM jd_live_advice WHERE bank=? AND analyst=? AND id<? ORDER BY id DESC LIMIT 1',
+        previous=conn.execute("""SELECT a.advice_json,a.snapshot_revision,a.created_at,json_extract(o.event_json,'$.live_buy_deferred')
+            FROM jd_live_advice a LEFT JOIN notification_outbox o ON o.event_key='live-advice:'||a.id
+            WHERE a.bank=? AND a.analyst=? AND a.id<? ORDER BY a.id DESC LIMIT 1""",
                               (account['bank'],analyst,row[0])).fetchone()
         raw_old=json.loads(previous[0]) if previous else None
         old=notification_parts(raw_old) if raw_old else None
         from .jd_live_semantics import plan_terms,same_plan
-        last_notice=conn.execute("SELECT a.advice_json,a.snapshot_revision FROM jd_live_advice a JOIN alerts n ON n.key='live-advice:'||a.id WHERE a.bank=? AND a.analyst=? AND a.id<? ORDER BY a.id DESC LIMIT 1",(account['bank'],analyst,row[0])).fetchone()
-        anchor=notification_parts(json.loads(last_notice[0])) if last_notice else old
+        last_notice=conn.execute("""SELECT a.advice_json,a.snapshot_revision FROM jd_live_advice a
+            JOIN alerts n ON n.key='live-advice:'||a.id LEFT JOIN notification_outbox o ON o.event_key=n.key
+            WHERE a.bank=? AND a.analyst=? AND a.id<? AND COALESCE(json_extract(o.event_json,'$.live_buy_deferred'),0)=0
+            ORDER BY a.id DESC LIMIT 1""",(account['bank'],analyst,row[0])).fetchone()
+        previous_deferred=previous and previous[3]
+        anchor=notification_parts(json.loads(last_notice[0])) if last_notice else (None if previous_deferred else old)
         anchor_revision=last_notice[1] if last_notice else previous[1] if previous else None
         validation_recovered=bool(raw_old and raw_old.get('checks') and not raw_old.get('validation_version') and raw_value.get('validation_version'))
         orders_changed=management_signature(old)!=management_signature(value)
@@ -240,11 +249,16 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
         if value['action'] in ('hold','wait') and action not in ('持有','观望') and not value.get('immediate_buy_paused'):
             action={'hold':'持有','wait':'观望'}[value['action']]+'·'+action
         from .jd_live_notice import body as notification_body
-        body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders')
-                               and not value.get('immediate_buy_paused'))
+        if deferred:
+            action='买入提醒待确认'
+            body='当前报价已涨出本轮分析的回踩区。建议在有效期内恢复可执行后，才会发送买入提醒。'
+        else:
+            body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders')
+                                   and not value.get('immediate_buy_paused'))
         events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡{analyst.title()}账户建议｜{account['name'].removesuffix('积存金')}｜{action}",'body':body,
-                       **({'live_buy_paused': True} if value.get('immediate_buy_paused') else {})})
+                       **({'live_buy_paused': True} if value.get('immediate_buy_paused') else {}),
+                       **({'live_buy_deferred': True} if deferred else {})})
     return events
 
 

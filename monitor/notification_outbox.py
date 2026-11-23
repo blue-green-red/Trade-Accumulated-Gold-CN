@@ -43,10 +43,13 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
     from .jd_live_advice import resumed_buy_notices
     events = [*events, *resumed_buy_notices(store.conn,now)]
     selected = selected_events(store.conn, events, mode, now=now)
+    selected_keys = {event['key'] for event in selected}
     with store.conn:
         # A process that died during HTTP may already have delivered the message.
         store.conn.execute("UPDATE notification_outbox SET status='uncertain',updated_at=? WHERE status='sending'", (stamp,))
         for event in events:
+            if event.get('live_buy_deferred') and event['key'] not in selected_keys:
+                continue
             if not store.conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1', (event['key'],)).fetchone():
                 store.conn.execute('INSERT INTO alerts(ts,key,title,body,delivered) VALUES(?,?,?,?,0)',
                                    (stamp,event['key'],event['title'],event['body']))
@@ -75,7 +78,12 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
                                        (json.dumps(current,ensure_ascii=False),row[0]))
                     store.conn.execute('UPDATE alerts SET title=?,body=? WHERE key=? AND delivered=0',
                                        (current['title'],current['body'],row[0]))
-            due.append((current,row[2]))
+            if current.get('live_buy_deferred'):
+                next_check = min(now+timedelta(seconds=30),datetime.fromisoformat(row[3]))
+                with store.conn:store.conn.execute('UPDATE notification_outbox SET next_attempt_at=?,updated_at=? WHERE event_key=?',
+                                                  (next_check.isoformat(),stamp,row[0]))
+            else:
+                due.append((current,row[2]))
     def category_for(e):
         return 'account_login' if event_topic(e)=='jd:login' else 'real_advice' if ':live_' in event_topic(e) else 'other'
     for category in ('real_advice','account_login','other'):

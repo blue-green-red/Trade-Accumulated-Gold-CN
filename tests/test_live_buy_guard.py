@@ -1337,7 +1337,8 @@ class BuyGuardTests(unittest.TestCase):
         view = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
         self.assertEqual(view['action_status'], 'review_required')
         self.assertIn('涨出本轮分析的回踩区', view['entry_pause_reason'])
-        self.assertEqual(notification_events(self.conn, 'codex', 1, now=now), [])
+        waiting, = notification_events(self.conn, 'codex', 1, now=now)
+        self.assertTrue(waiting['live_buy_deferred'])
         self.store.set_state('ai_status:codex', {'available': True})
         request_reviews(self.store, now, settings=self.settings)
         request_reviews(self.store, now, settings=self.settings)
@@ -1350,6 +1351,74 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(view['action_status'], 'current')
         self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=now)), 1)
         self.assertEqual(pending_events(self.conn, 'codex', now), [])
+
+    def test_retest_pause_defers_an_unsent_notice_and_resumes_inside_the_original_band(self):
+        retest = self.route(condition_key='retest', bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 806},
+                            confirmation_mode='retest')
+        self.update_quote(0, 805.8)
+        self.save_advice(condition='reference', routes=[retest], basis='retest')
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.return_value = True
+        self.update_quote(1, 806.1)
+        at = START + timedelta(minutes=1)
+        dispatch(self.store, notifier, notification_events(self.conn, 'codex', 1, now=at), at)
+        notifier.send.assert_not_called()
+        self.assertEqual(tuple(self.conn.execute('SELECT status,attempts FROM notification_outbox').fetchone()), ('pending',0))
+
+        self.update_quote(2, 805.9)
+        dispatch(self.store, notifier, [], START + timedelta(minutes=2))
+        notifier.send.assert_called_once()
+        self.assertIn('买入 10克', notifier.send.call_args.args[1])
+        self.assertEqual(tuple(self.conn.execute('SELECT status,attempts FROM notification_outbox').fetchone()), ('accepted',1))
+
+    def test_retest_pause_does_not_consume_retry_budget_or_extend_expiry(self):
+        retest = self.route(condition_key='retest', bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 806},
+                            confirmation_mode='retest')
+        self.update_quote(0, 805.8)
+        self.save_advice(condition='reference', routes=[retest], basis='retest')
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.return_value = False
+        notifier.last_receipt = {'status': 'failed'}
+        dispatch(self.store, notifier, notification_events(self.conn, 'codex', 1, now=START), START)
+        self.update_quote(1, 806.1)
+        dispatch(self.store, notifier, [], START + timedelta(minutes=1))
+        notifier.send.assert_called_once()
+        status, attempts, expires = self.conn.execute('SELECT status,attempts,expires_at FROM notification_outbox').fetchone()
+        self.assertEqual((status,attempts), ('retry',1))
+        self.assertEqual(datetime.fromisoformat(expires), START + timedelta(minutes=15))
+
+        for minute in range(2,15):
+            self.update_quote(minute, 806.1)
+        dispatch(self.store, notifier, [], START + timedelta(minutes=14))
+        self.assertEqual(self.conn.execute('SELECT status FROM notification_outbox').fetchone()[0], 'retry')
+        self.update_quote(15, 805.9)
+        dispatch(self.store, notifier, [], START + timedelta(minutes=15))
+        notifier.send.assert_called_once()
+        self.assertEqual(tuple(self.conn.execute('SELECT status,attempts FROM notification_outbox').fetchone()), ('cancelled',1))
+
+    def test_deferred_notice_does_not_suppress_a_new_review_at_the_same_terms(self):
+        retest = self.route(condition_key='retest', bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 806},
+                            confirmation_mode='retest')
+        self.update_quote(0, 805.8)
+        self.save_advice(condition='reference', routes=[retest], basis='retest')
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.return_value = True
+        self.update_quote(1, 806.1)
+        at = START + timedelta(minutes=1)
+        dispatch(self.store, notifier, notification_events(self.conn,'codex',1,now=at), at)
+        notifier.send.assert_not_called()
+
+        self.update_quote(2, 806.2)
+        at = START + timedelta(minutes=2)
+        self.save_advice(condition='reference', routes=[retest], basis='retest', now=at, view=2)
+        new, = notification_events(self.conn,'codex',2,now=at)
+        dispatch(self.store, notifier, [new], at)
+        notifier.send.assert_called_once()
+        self.assertEqual([tuple(r) for r in self.conn.execute('SELECT event_key,status FROM notification_outbox ORDER BY event_key')],
+                         [('live-advice:1','cancelled'),('live-advice:2','accepted')])
 
     def test_paused_buy_keeps_protection_and_sends_one_buy_only_notice_on_recovery(self):
         from monitor.jd_live_advice import resumed_buy_notice
