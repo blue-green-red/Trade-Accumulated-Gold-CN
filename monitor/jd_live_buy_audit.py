@@ -1,11 +1,13 @@
 """Read-only replay of a 10g bank-gold purchase at publication, after confirmation, or never."""
 import argparse
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance, extended, utc_text, valid_route
 from .jd_live_conditions import stamp
+from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
 from .participation_audit import horizon_at, readonly
 from .trade_costs import number
 from .trading_hours import trading_session
@@ -128,6 +130,100 @@ def evaluate(value, published, expires, quotes, now):
     return horizons
 
 
+def review_branch(route):
+    if route.get('bank_breakout'):
+        mode = route.get('confirmation_mode')
+        return 'breakout_continuation' if mode == 'continuation' else (
+            'breakout_retest' if mode == 'retest' else 'breakout_observation')
+    if route.get('buy_review'):
+        if route.get('condition') == 'at_or_above':
+            return 'breakout_entry_retest'
+        return 'shallow_pullback' if route['buy_review'].get('zone') else 'pullback_recovery'
+    return 'unclassified'
+
+
+def advice_outcome(run_status, event_id, covered, value):
+    from .jd_live_semantics import blocking_checks
+    if run_status != 'completed':
+        return run_status
+    if covered is None:
+        return 'coverage_unknown'
+    if event_id not in covered:
+        return 'not_covered'
+    if not value:
+        return 'no_advice'
+    if blocking_checks(value):
+        return 'needs_review'
+    if value.get('action') == 'buy':
+        return 'buy_suggested'
+    if any(order.get('kind') == 'limit_buy' and not order.get('checks')
+           for order in value.get('suggested_orders', [])):
+        return 'conditional_buy_suggested'
+    return 'no_buy_suggested'
+
+
+def observed_reviews(conn, bank, model, limit, now):
+    """Actual events passed to the model and their advice outcomes. No simulated entries."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
+    if tables != {'ai_runs', 'ai_views'}:
+        return {'status': 'history_unavailable', 'cases': [], 'by_branch': {}}
+    rows = conn.execute("""
+        SELECT r.id,r.run_id,r.status,r.started_at,r.completed_at,
+               json_extract(v.view_json,'$._covered_event_ids'),
+               a.id,a.created_at,a.advice_json,
+               json_extract(s.value,'$.trigger_events'),
+               json_extract(s.value,'$.event_coverage'),s.key IS NOT NULL
+        FROM (SELECT * FROM ai_runs WHERE analyst=? AND started_at<=? ORDER BY id DESC LIMIT ?) r
+        LEFT JOIN state s ON s.key='ai_model_input:'||r.run_id||':'||r.analyst
+        LEFT JOIN ai_views v ON v.rowid=r.view_rowid
+        LEFT JOIN jd_live_advice a ON a.view_id=r.view_rowid AND a.analyst=r.analyst AND a.bank=?
+        ORDER BY r.id DESC
+    """, (model, utc_text(now), limit, bank)).fetchall()
+    cases = []
+    summary = defaultdict(lambda: defaultdict(int))
+    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, _ in rows:
+        if not events or not sent:
+            continue
+        event_ids = set(json.loads(sent).get(model, []))
+        value = json.loads(raw) if raw else {}
+        events = [e for e in json.loads(events) if e['id'] in event_ids and e['id'].startswith(ENTRY_EVENT_PREFIX)
+                  and e.get('data', {}).get('bank') == bank]
+        if not events:
+            continue
+        released = stamp(published)
+        finished = stamp(finish)
+        covered_ids = json.loads(covered) if covered is not None else None
+        mark = None
+        if released:
+            mark = conn.execute(
+                'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
+                'WHERE bank=? AND quoted_at>=? AND observed_at>=quoted_at AND observed_at<=? '
+                'ORDER BY quoted_at LIMIT 1',
+                (bank, utc_text(released), utc_text(min(now, released + MAX_GAP)))).fetchone()
+        counted = set()
+        for e in events:
+            outcome = advice_outcome(status, e['id'], covered_ids, value)
+            paths = []
+            for route in e['data'].get('routes', []):
+                branch = review_branch(route)
+                confirmed = stamp(route.get('confirmed_at'))
+                price = number(route.get('price_cny'))
+                elapsed = (finished - confirmed).total_seconds() if confirmed and finished else None
+                paths.append({'branch': branch, 'threshold_cny': route.get('threshold_cny'),
+                              'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
+                              'seconds_to_completion': round(elapsed, 1) if elapsed is not None and elapsed >= 0 else None,
+                              'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None})
+                if (branch, outcome) not in counted:
+                    summary[branch][outcome] += 1
+                    counted.add((branch, outcome))
+            cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
+                          'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
+                          'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
+    archived = sum(row[-1] for row in rows)
+    return {'status': 'available' if archived else 'input_archives_unavailable',
+            'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary}
+
+
 def report(conn, bank, model, limit, now):
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone():
         return {'status': 'sampling_not_initialized', 'cases': []}
@@ -152,7 +248,8 @@ def report(conn, bank, model, limit, now):
                 watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now)})
-    return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': GRAMS, 'cases': cases}
+    return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': GRAMS, 'cases': cases,
+            'observed_reviews': observed_reviews(conn, bank, model, limit, now)}
 
 
 def main():

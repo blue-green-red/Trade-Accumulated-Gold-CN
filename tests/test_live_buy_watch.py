@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import evaluate
+from monitor.jd_live_buy_audit import evaluate, observed_reviews
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
 from monitor.jd_live_expiry import request_expiry_review
@@ -318,6 +318,49 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_report_counts_actual_review_branches_and_never_implies_a_fill(self):
+        from monitor.ai import ensure_schema as ensure_ai_schema
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'review.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            ensure_ai_schema(store)
+            two = START + timedelta(minutes=2)
+            three = START + timedelta(minutes=3)
+            bank_rule = {'hold_minutes': 3, 'retest_ceiling_cny': 807}
+            paths = [
+                {'condition': 'at_or_above', 'confirmation_mode': 'continuation', 'bank_breakout': bank_rule,
+                 'threshold_cny': 805, 'confirmed_at': START.isoformat(), 'price_cny': 806},
+                {'condition': 'at_or_below', 'buy_review': {'zone': {'floor_cny': 800}},
+                 'threshold_cny': 802, 'confirmed_at': START.isoformat(), 'price_cny': 806},
+            ]
+            with store.conn:
+                for i, action, covered in ((1, 'hold', True), (2, 'buy', False)):
+                    event_id = f'live-buy-confirmed:codex:zheshang:fixture-{i}'
+                    run = f'fixture-{i}'
+                    store.conn.execute('INSERT INTO ai_views(ts,model,trigger,view_json,analyst) VALUES(?,?,?,?,?)',
+                        (two.isoformat(), 'codex', 'test', json.dumps({'_covered_event_ids': [event_id] if covered else []}), 'codex'))
+                    store.conn.execute('INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status,completed_at,view_rowid) '
+                        'VALUES(?,?,?,?,?,?,?)', ('codex', START.isoformat(), 'fixture', run, 'completed', two.isoformat(), i))
+                    store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
+                        two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1', json.dumps({'action': action})))
+                    context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
+                        {'id': event_id, 'data': {'bank': 'zheshang', 'routes': paths}}]}
+                    store.conn.execute('INSERT INTO state VALUES(?,?,?)',
+                        (f'ai_model_input:{run}:codex', json.dumps(context), START.isoformat()))
+            record(store.conn, 'zheshang', point(1, 830))
+            record(store.conn, 'minsheng', point(2, 818))
+            record(store.conn, 'zheshang', point(3, 807))
+            result = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))
+            self.assertEqual(result['examined_runs'], 2)
+            self.assertEqual(result['by_branch']['breakout_continuation'], {'no_buy_suggested': 1, 'not_covered': 1})
+            self.assertEqual(result['by_branch']['shallow_pullback'], {'no_buy_suggested': 1, 'not_covered': 1})
+            newer, older = result['cases']
+            self.assertEqual((newer['advice_action'], newer['outcome']), ('buy', 'not_covered'))
+            self.assertEqual(older['outcome'], 'no_buy_suggested')
+            self.assertEqual(older['paths'][0]['quote_change_to_publication_cny'], 1)
+            self.assertEqual(older['paths'][0]['seconds_to_completion'], 120.0)
+
     def test_same_horizon_only_post_publication_quotes_with_observed_fee(self):
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
                  'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
