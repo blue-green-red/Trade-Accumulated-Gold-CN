@@ -2,7 +2,7 @@
 from collections import defaultdict
 from datetime import datetime
 
-from .jd_live_buy_watch import MAX_GAP, sample, utc_text
+from .jd_live_buy_watch import MAX_GAP, quote_tape, sample
 from .jd_live_conditions import stamp
 
 
@@ -51,13 +51,7 @@ def active_routes(conn, account, routes, now):
     anchored = [(route, anchor) for route in routes if (anchor := stamp(route.get('confirmed_at')))]
     if not anchored or not point:
         return []
-    rows = conn.execute(
-        'SELECT quoted_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
-        'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at<=? ORDER BY quoted_at',
-        (account['bank'], utc_text(min(anchor for _, anchor in anchored)), utc_text(point[0]), utc_text(now)))
-    tape = {at: (buy, sell) for at, buy, sell in rows}
-    tape[utc_text(point[0])] = point[2:]
-    quotes = [(stamp(at), buy, sell) for at, (buy, sell) in sorted(tape.items())]
+    quotes = quote_tape(conn, account['bank'], min(anchor for _, anchor in anchored), point)
     return [route for route, anchor in anchored if route_valid(route, anchor, quotes, point[0])]
 
 

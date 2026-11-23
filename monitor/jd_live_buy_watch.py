@@ -43,6 +43,17 @@ def record(conn, bank, point):
                          (bank, utc_text(observed - timedelta(days=40))))
 
 
+def quote_tape(conn, bank, after, point):
+    """Ordered distinct bank quotes through the current sample, as known when observed."""
+    rows = conn.execute(
+        'SELECT quoted_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
+        'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at<=? ORDER BY quoted_at',
+        (bank, utc_text(after), utc_text(point[0]), utc_text(point[1])))
+    quotes = {at: (buy, sell) for at, buy, sell in rows}
+    quotes[utc_text(point[0])] = point[2:]
+    return [(stamp(at), buy, sell) for at, (buy, sell) in sorted(quotes.items())]
+
+
 def quote_context(conn, account, now):
     """Compact observed buy-price history, aligned to the bank quote in this request."""
     current = sample(account, now)
@@ -301,10 +312,69 @@ def advance(state, condition, at, buy):
     return state
 
 
+def advance_watch(previous, condition, at, buy):
+    last = stamp(previous.get('last_at'))
+    if previous.get('stage') not in ('confirmed', 'episode_reviewed') or not last or at <= last:
+        return advance(previous, condition, at, buy)
+    if at - last > MAX_GAP:
+        return advance({}, condition, at, buy)
+    if condition.get('bank_breakout') and buy < condition['price_cny']:
+        return failed_breakout(at, buy)
+    step = {**previous, 'last_at': utc_text(at), 'last_price_cny': buy}
+    review = condition.get('buy_review')
+    if review and buy > review['max_buy_price_cny']:
+        step['stage'] = 'above_cap'
+    elif review and review.get('zone') and buy < review['recovery_price_cny']:
+        stage = 'pullback_lost' if buy < review['zone']['floor_cny'] else 'retest'
+        step.update(stage=stage, hold_since=None, confirmed_at=None)
+    return step
+
+
+def confirmed_route(condition, stage, price, boundary):
+    review = condition.get('buy_review')
+    mode = stage.get('confirmation_mode')
+    return {'condition_key': condition_key(condition), 'condition': condition['condition'],
+            'threshold_cny': condition['price_cny'], 'touched_at': stage['touched_at'], 'hold_since': stage['hold_since'],
+            'confirmed_at': stage['confirmed_at'], 'price_cny': price,
+            **({'position_boundary_cny': boundary} if boundary is not None else {}),
+            **({'confirmation_mode': mode} if mode else {}),
+            **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})}
+
+
+def review_event(event_id, bank, advice_id, watch, routes, now):
+    from .jd_live_readonly import PRODUCTS
+
+    latest = max(routes, key=lambda route: stamp(route['confirmed_at']))
+    label = '突破后持续走高' if any(r.get('confirmation_mode') == 'continuation' for r in routes) else '观察条件已企稳'
+    return {'id': event_id, 'reason': f'真实账户{label}，重新评估：{PRODUCTS[bank][1]}',
+            'min_gap_minutes': 0, 'observed_at': now.isoformat(),
+            'data': {'bank': bank, 'advice_id': advice_id, 'price_cny': latest['price_cny'],
+                     'quoted_at': latest['confirmed_at'], 'routes': routes, **({'plan_id': watch['id']} if watch else {})}}
+
+
+def replay_breakout(conn, account, stage, condition, boundary, now):
+    point = sample(account, now)
+    start = stamp(stage.get('touched_at'))
+    if not point or not start or point[0] < stamp(stage['last_at']):
+        return {}, None
+    tape = quote_tape(conn, account['bank'], start - timedelta(microseconds=1), point)
+    if tape[0][0] != start:
+        return {}, None
+    rebuilt, confirmation_price = {}, None
+    for at, buy, sell in tape:
+        if boundary is not None and sell <= boundary:
+            return {}, None
+        step = advance_watch(rebuilt, condition, at, buy)
+        if step.get('confirmed_at') != rebuilt.get('confirmed_at'):
+            confirmation_price = buy if step.get('stage') == 'confirmed' else None
+        rebuilt = step
+    return rebuilt, confirmation_price
+
+
 def carry_breakout_observations(conn, model, view_id, now):
     """Keep quote progress when a new advisory changes an unrelated condition."""
     from .ai_events import read, write
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, with_active_routes
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, reviewed_breakout, with_active_routes
     from .jd_live_readonly import accounts
     from .price_guard import save
     from .jd_live_conditions import read_watch
@@ -372,14 +442,18 @@ def carry_breakout_observations(conn, model, view_id, now):
                 'data': {**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']}}
             changed = True
         else:
-            point = sample(account, now)
-            # Unprocessed quotes can reset the counter or change the high.
-            if not point or point[0] != stamp(stage['last_at']) or point[2] != stage['last_price_cny']:
+            stage, confirmation_price = replay_breakout(conn, account, stage, condition, boundary, now)
+            if stage.get('stage') not in ('touched', 'holding', 'confirmed'):
                 continue
-            evidence = {'confirmed_at': stage['touched_at'], 'threshold_cny': condition['price_cny'],
-                        'position_boundary_cny': boundary}
-            if not active_routes(conn, account, [evidence], now):
-                continue
+            if stage['stage'] == 'confirmed':
+                receipt = reviewed_breakout(conn, model, account, condition['price_cny'], now)
+                if receipt:
+                    stage.update(stage='episode_reviewed', confirmed_at=receipt['confirmed_at'], event_id=receipt['event_id'])
+                else:
+                    event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
+                    route = confirmed_route(condition, stage, confirmation_price, boundary)
+                    events['pending'].append(review_event(event_id, bank, advice_id, watch, [route], now))
+                    changed = True
         save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
                          'routes': {new_key: stage}})
     if changed:
@@ -457,7 +531,6 @@ def request(store, account, advice, now, point):
     from .controls import active, control
     from .jd_live_buy_guard import reviewed_breakout, with_active_routes
     from .jd_live_conditions import read_watch
-    from .jd_live_readonly import PRODUCTS
 
     at, observed, buy, sell = point
     watch = advice.get('buy_watch') or {}
@@ -501,37 +574,14 @@ def request(store, account, advice, now, point):
         for condition in routes:
             fingerprint = condition_key(condition)
             previous = current['routes'].get(fingerprint, {})
-            step = advance(previous, condition, at, buy)
-            review = condition.get('buy_review')
-            last = stamp(previous.get('last_at'))
-            if previous.get('stage') in ('confirmed', 'episode_reviewed') and last and at > last:
-                if at - last > MAX_GAP:
-                    step = advance({}, condition, at, buy)
-                elif condition.get('bank_breakout') and buy < condition['price_cny']:
-                    step = failed_breakout(at, buy)
-                elif review and buy > review['max_buy_price_cny']:
-                    step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
-                elif review and review.get('zone') and buy < review['recovery_price_cny']:
-                    step = {**previous, 'stage': 'retest', 'last_at': utc_text(at),
-                            'last_price_cny': buy, 'hold_since': None, 'confirmed_at': None}
-                    if buy < review['zone']['floor_cny']:
-                        step['stage'] = 'pullback_lost'
-                else:
-                    step = {**previous, 'last_at': utc_text(at), 'last_price_cny': buy}
+            step = advance_watch(previous, condition, at, buy)
             if step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(
                         conn, model, account, condition['price_cny'], observed)):
                     updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
                                             'confirmed_at': receipt['confirmed_at'], 'event_id': receipt['event_id']}
                     continue
-                confirmed.append({'condition_key': fingerprint, 'condition': condition['condition'],
-                                  'threshold_cny': condition['price_cny'], 'touched_at': step['touched_at'],
-                                  'hold_since': step['hold_since'], 'confirmed_at': step['confirmed_at'],
-                                  'price_cny': buy,
-                                  **({'position_boundary_cny': boundary} if watch and boundary is not None else {}),
-                                  **({'confirmation_mode': step['confirmation_mode']}
-                                     if step.get('confirmation_mode') else {}),
-                                  **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})})
+                confirmed.append(confirmed_route(condition, step, buy, boundary if watch else None))
             updated[fingerprint] = step
         if updated == current['routes'] and not current.get('invalidated_at'):
             return
@@ -550,14 +600,7 @@ def request(store, account, advice, now, point):
                 existing.update(with_active_routes(existing, retained))
                 write(conn, model, events)
         elif confirmed and event_id not in events['covered']:
-            continued = any(r.get('confirmation_mode') == 'continuation' for r in confirmed)
-            label = '突破后持续走高' if continued else '观察条件已企稳'
-            events['pending'].append({'id': event_id,
-                'reason': f'真实账户{label}，重新评估：{PRODUCTS[bank][1]}',
-                'min_gap_minutes': 0, 'observed_at': now.isoformat(),
-                'data': {'bank': bank, 'advice_id': advice['id'], 'price_cny': buy,
-                         'quoted_at': utc_text(at), 'routes': confirmed,
-                         **({'plan_id': watch['id']} if watch else {})}})
+            events['pending'].append(review_event(event_id, bank, advice['id'], watch, confirmed, now))
             write(conn, model, events)
         conn.execute('INSERT INTO state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) '
                      'DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',

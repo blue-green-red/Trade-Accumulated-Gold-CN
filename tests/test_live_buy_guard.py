@@ -239,6 +239,24 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(event['data']['routes'][0]['confirmation_mode'], 'continuation')
         self.assertEqual(datetime.fromisoformat(event['data']['routes'][0]['touched_at']), START)
 
+    def test_quote_recorded_during_plan_change_can_finish_breakout_confirmation(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806)])
+        self.update_quote(3, 806.5)
+
+        at = START + timedelta(minutes=3, seconds=10)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_breakout_observations(self.conn, 'codex', 2, at)
+        event, = pending_events(self.conn, 'codex', at)
+        self.assertEqual(event['data']['plan_id'], second['buy_watch']['id'])
+        route, = event['data']['routes']
+        self.assertEqual(datetime.fromisoformat(route['confirmed_at']), START + timedelta(minutes=3))
+        self.assertEqual(route['price_cny'], 806.5)
+        self.observe_watch(second, [(4, 806.8)])
+        self.assertEqual(pending_events(self.conn, 'codex', START + timedelta(minutes=4)), [event])
+
     def test_breakout_progress_is_reset_after_a_quote_gap(self):
         self.update_quote(0, 805.5)
         first = self.publish_watch(1, START, 799)
@@ -254,7 +272,7 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(step['breakout_quote_count'], 1)
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
 
-    def test_breakout_progress_is_not_carried_if_the_recorded_price_fell_back(self):
+    def test_breakout_progress_restarts_after_a_recorded_drop(self):
         self.update_quote(0, 805.5)
         first = self.publish_watch(1, START, 799)
         self.observe_watch(first, [(0, 805.5)])
@@ -267,8 +285,28 @@ class BuyGuardTests(unittest.TestCase):
             carry_breakout_observations(self.conn, 'codex', 2, at)
         self.observe_watch(second, [(3, 806.5)])
         step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
-        self.assertEqual(step['breakout_quote_count'], 1)
+        self.assertEqual(step['breakout_quote_count'], 2)
+        self.assertEqual(datetime.fromisoformat(step['touched_at']), START + timedelta(minutes=1))
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+    def test_switch_replay_uses_the_high_of_all_intervening_quotes(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806)])
+        self.update_quote(2, 807)
+        self.update_quote(3, 806.5)
+
+        at = START + timedelta(minutes=3, seconds=10)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_breakout_observations(self.conn, 'codex', 2, at)
+        step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
+        self.assertEqual(step['peak'], 807)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+        self.observe_watch(second, [(4, 807.1)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        self.assertEqual(event['data']['routes'][0]['confirmation_mode'], 'continuation')
 
     def test_sell_and_existing_protection_can_still_pass_independent_validation(self):
         advice = {'action': 'sell', 'checks': [], 'suggested_orders': [
