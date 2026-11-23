@@ -139,6 +139,34 @@ class SpeedTests(unittest.TestCase):
         events.feed(raw,final=True)
         self.assertEqual(usage['input'],5);self.assertNotIn('cached',usage)
 
+    def test_codex_reconnects_inside_the_same_analysis_attempt(self):
+        original = self.a._run_process
+        notice = json.dumps({'type': 'error', 'message':
+            'Reconnecting... 2/5 (stream disconnected before completion: tls handshake eof)'}) + '\n'
+
+        def process(cmd, **kwargs):
+            consume = kwargs['on_stdout']
+            consume(notice)
+            result = original(cmd, **{**kwargs, 'on_stdout': lambda stdout: consume(notice + stdout)})
+            result.stdout = notice + result.stdout
+            return result
+
+        self.a._run_process = process
+        result = self.a.analyze(self.ctx, 'test', run_id='reconnect')
+        self.assertEqual(result['_performance']['reconnect_events'], 1)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual([row[0] for row in self.store.conn.execute('SELECT status FROM ai_runs')], ['completed'])
+
+    def test_codex_terminal_error_remains_fatal_after_progress_notice(self):
+        events = Events({})
+        notice = '{"type":"error","message":"Reconnecting... 5/5 (stream disconnected)"}\n'
+        events.feed(notice)
+        with self.assertRaisesRegex(RuntimeError, 'Codex turn failed'):
+            events.feed(notice + '{"type":"turn.failed","error":{"message":"Connection unavailable"}}\n')
+        self.assertEqual(events.reconnect_events, 1)
+        with self.assertRaisesRegex(RuntimeError, 'Codex turn failed'):
+            Events({}).feed('{"type":"error","message":"Invalid API request"}\n')
+
     def test_frozen_request_preserves_exact_context_schema_and_disables_all_tools(self):
         self.a.settings=replace(self.settings,codex_resume_enabled=False,ai_history_max_queries=0,ai_page_fetch_max_calls=0)
         original=deepcopy(self.ctx)

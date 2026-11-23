@@ -8,6 +8,7 @@ import subprocess
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import time
@@ -55,6 +56,7 @@ class Events:
         self.total_usage=dict(previous_totals or {})
         self.usage=usage;self.start=time.monotonic();self.offset=0;self.thread=None
         self.first=None;self.search_start={};self.search_seconds=0.;self.saw_search_time=False
+        self.reconnect_events=0
         for key in ('input','output','searches'): usage.setdefault(key,0)
     def feed(self,stdout,final=False):
         raw=stdout if isinstance(stdout,bytes) else stdout.encode()
@@ -88,6 +90,10 @@ class Events:
                         if delta<0:raise RuntimeError('Codex usage counters regressed')
                         self.usage[key]=self.usage.get(key,0)+delta
                 self.total_usage=dict(u)
+            if kind=='error' and re.match(r'^Reconnecting\.\.\. [0-9]+/[0-9]+(?:\s|$)', str(event.get('message') or '')):
+                # The CLI is already recovering this stream. Wait for its terminal result.
+                self.reconnect_events+=1
+                continue
             if kind in ('error','turn.failed'):raise RuntimeError('Codex turn failed')
 
 
@@ -236,4 +242,5 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
     finally:
         performance.update({'cli_seconds':round(time.monotonic()-events.start,3),
             'first_event_seconds':round(events.first,3) if events.first is not None else None,
-            'search_seconds':round(events.search_seconds,3) if events.saw_search_time else None})
+            'search_seconds':round(events.search_seconds,3) if events.saw_search_time else None,
+            'reconnect_events':events.reconnect_events})

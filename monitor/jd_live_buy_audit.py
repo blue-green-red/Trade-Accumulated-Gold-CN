@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance, eligible, utc_text, watch_deadline
 from .jd_live_conditions import archived_bank_quotes, pullback_depth, stamp, zoned_pullback
-from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key
+from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, stored_price_condition
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
@@ -247,6 +247,9 @@ def independent_branch_replay(value, published, expires, quotes, now, *, archive
 def review_branch(route):
     if route.get('renewed_pullback'):
         return 'renewed_pullback'
+    if route.get('trigger_kind') == 'price_touch':
+        return {'at_or_above': 'buy_price_rise_touch', 'at_or_below': 'buy_price_drop_touch'}.get(
+            route.get('condition'), 'buy_price_touch')
     if route.get('bank_breakout'):
         mode = route.get('confirmation_mode')
         return 'breakout_continuation' if mode == 'continuation' else (
@@ -259,6 +262,16 @@ def review_branch(route):
         depth = route.get('pullback_depth')
         return f'{depth}_pullback' if depth in ('shallow', 'deep') else 'zoned_pullback'
     return 'unclassified'
+
+
+def observed_buy_event(event):
+    if event['id'].startswith(ENTRY_EVENT_PREFIX):
+        return True
+    if not event['id'].startswith('live-price:'):
+        return False
+    data = event['data']
+    return (not data.get('order_key') and (data.get('renewed_pullback')
+            or data.get('quote_side') == 'buy' and not data.get('buy_review')))
 
 
 def advice_outcome(run_status, event_id, covered, value):
@@ -393,8 +406,7 @@ def observed_reviews(conn, bank, model, limit, now):
         fee = number(value.get('input_sell_fee_rate'))
         events = [e for e in json.loads(events)
                   if (sent_ids is None or e['id'] in sent_ids) and e.get('data', {}).get('bank') == bank
-                  and (e['id'].startswith(ENTRY_EVENT_PREFIX)
-                       or e['id'].startswith('live-price:') and e['data'].get('renewed_pullback'))]
+                  and observed_buy_event(e)]
         if not events:
             continue
         released = stamp(published)
@@ -412,7 +424,10 @@ def observed_reviews(conn, bank, model, limit, now):
             paths = []
             routes = e['data'].get('routes', [])
             if e['id'].startswith('live-price:'):
-                routes = [{**e['data'], 'confirmed_at': e['data'].get('quoted_at')}]
+                data = e['data']
+                condition, _, _ = stored_price_condition(conn, model, data)
+                routes = [{**data, 'condition': (condition or {}).get('condition'),
+                           'trigger_kind': 'price_touch', 'confirmed_at': data.get('quoted_at')}]
             origin = None
             if any(map(zoned_pullback, routes)):
                 origin = conn.execute("SELECT view_id,created_at,json_extract(advice_json,'$.input_quote_at') "
@@ -434,7 +449,7 @@ def observed_reviews(conn, bank, model, limit, now):
                     path_outcome = outcome
                 price = number(route.get('price_cny'))
                 paths.append({'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
-                              **({'trigger_kind': 'price_touch'} if branch == 'renewed_pullback' else {}),
+                              **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                               'seconds_to_start': elapsed_seconds(confirmed, started),
                               'seconds_to_completion': elapsed_seconds(confirmed, finished),
@@ -450,6 +465,7 @@ def observed_reviews(conn, bank, model, limit, now):
             cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
                           'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
+                          'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
                           'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
     archived = sum(row[-1] for row in rows)
     return {'status': 'available' if archived else 'input_archives_unavailable',

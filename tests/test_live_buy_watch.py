@@ -632,12 +632,19 @@ class BuyAuditTests(unittest.TestCase):
                 store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=2',
                                    (json.dumps({'_covered_event_ids': [newer['event_id']]}),))
                 store.conn.execute('UPDATE jd_live_advice SET advice_json=? WHERE id=2',
-                                   (json.dumps({'action': 'buy', 'entry_trigger_routes': paths[:1]}),))
+                                   (json.dumps({'action': 'buy', 'grams': 24.5, 'entry_trigger_routes': paths[:1]}),))
             bound = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))['cases'][0]
             self.assertEqual([p['outcome'] for p in bound['paths']], ['buy_suggested', 'not_buy_basis'])
+            self.assertEqual(bound['advice_buy_grams'], 24.5)
 
             renewed_id = 'live-price:codex:zheshang:3:renewed'
             ordinary_id = 'live-price:codex:zheshang:3:ordinary'
+            higher_id = 'live-price:codex:zheshang:3:higher'
+            lower_id = 'live-price:codex:zheshang:3:lower'
+            sell_id = 'live-price:codex:zheshang:3:sell'
+            linked_id = 'live-price:codex:zheshang:3:linked'
+            higher = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 806}
+            lower = {**higher, 'condition': 'at_or_below'}
             key = 'ai_model_input:fixture-1:codex'
             context = store.get_state(key)
             payload = {'bank': 'zheshang', 'advice_id': 3,
@@ -645,15 +652,28 @@ class BuyAuditTests(unittest.TestCase):
             context['trigger_events'].extend([
                 {'id': renewed_id, 'data': {**payload, 'renewed_pullback': True}},
                 {'id': ordinary_id, 'data': payload},
+                {'id': higher_id, 'data': {**payload, 'quote_side': 'buy',
+                                           'threshold_cny': 806, 'condition_key': condition_key(higher)}},
+                {'id': lower_id, 'data': {**payload, 'quote_side': 'buy',
+                                          'threshold_cny': 806, 'condition_key': condition_key(lower)}},
+                {'id': sell_id, 'data': {**payload, 'quote_side': 'sell'}},
+                {'id': linked_id, 'data': {**payload, 'quote_side': 'buy', 'order_key': 'some-order'}},
             ])
-            context['event_coverage']['codex'] += [renewed_id, ordinary_id]
+            covered = [older['event_id'], renewed_id, ordinary_id, higher_id, lower_id, sell_id, linked_id]
+            context['event_coverage']['codex'] = covered
             store.set_state(key, context)
             with store.conn:
                 store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=1',
-                                   (json.dumps({'_covered_event_ids': [older['event_id'], renewed_id, ordinary_id]}),))
+                                   (json.dumps({'_covered_event_ids': covered}),))
+                store.conn.execute('UPDATE jd_live_advice SET advice_json=? WHERE id=3',
+                                   (json.dumps({'review_conditions': [higher, lower]}),))
             audited = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
             self.assertEqual(audited['by_branch']['renewed_pullback'], {'no_buy_suggested': 1})
-            self.assertFalse(any(x['event_id'] == ordinary_id for x in audited['cases']))
+            self.assertEqual(audited['by_branch']['buy_price_rise_touch'], {'no_buy_suggested': 1})
+            self.assertEqual(audited['by_branch']['buy_price_drop_touch'], {'no_buy_suggested': 1})
+            self.assertFalse({ordinary_id, sell_id, linked_id} & {x['event_id'] for x in audited['cases']})
+            lower_readout = next(x for x in audited['cases'] if x['event_id'] == lower_id)['paths'][0]
+            self.assertEqual((lower_readout['trigger_kind'], lower_readout['threshold_cny']), ('price_touch', 806))
             renewed = next(x for x in audited['cases'] if x['event_id'] == renewed_id)['paths'][0]
             self.assertEqual((renewed['trigger_kind'], renewed['threshold_cny']), ('price_touch', 807))
             self.assertEqual(renewed['quote_followups'][0]['status'], 'observed')
