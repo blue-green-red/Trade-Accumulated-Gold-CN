@@ -409,6 +409,14 @@ class BuyGuardTests(unittest.TestCase):
 
         self.observe_watch(advice, [(4, 805.6)])
         at = START + timedelta(minutes=4)
+        from monitor.jd_live_readonly import model_input
+        previous = model_input(self.conn, at)['accounts']['zheshang']['previous_advice'][0]
+        breakout = previous['review_conditions'][-1]
+        self.assertEqual(breakout['monitoring'], {
+            'continuation': {'status': 'reviewed', 'confirmation_stage': 'confirmed'},
+            'retest': {'status': 'monitoring', 'confirmation_stage': 'holding'},
+        })
+        self.assertEqual(breakout['bank_breakout']['continuation_min_quotes'], 3)
         successor = self.publish_watch(2, at, 800)
         with self.conn:
             carry_entry_observations(self.conn, 'codex', 2, at)

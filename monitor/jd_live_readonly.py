@@ -306,6 +306,13 @@ def review_condition_input(conn, account, advice, condition, watch_end):
         return item
     from .jd_live_conditions import read_watch,stamp
     state_info={k:state[k] for k in ('status','confirmation_stage') if state.get(k)}
+    if breakout:
+        item['bank_breakout'].update({k:state[k] for k in ('continuation_min_quotes','continuation_minutes')
+                                     if state.get(k) is not None})
+        modes=state.get('breakout_modes') or {}
+        if modes.get('continuation')!=modes.get('retest'):
+            item['monitoring']=modes
+            return item
     common=watch_end if condition.get('buy_review') or breakout else advice['expires_at']
     end=state.get('expires_at')
     deadline=stamp(end)
