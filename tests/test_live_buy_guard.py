@@ -225,15 +225,16 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
                          late['confirmed_at'])
 
-    def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None):
+    def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None,
+                      basis='依据本行近一小时采样。', max_buy_price=806):
         revision = accounts(self.conn, at, include_advice=False)[0]['revision']
         source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
         deadline = (at + timedelta(minutes=15)).isoformat()
         conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
                        'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
-                                      'max_buy_price_cny': 806, 'zone': {'floor_cny': 797,
-                                          'weak_target_cny': 818, 'risk_exit_cny': 796}}}]
+                                      'max_buy_price_cny': max_buy_price, 'zone': {'floor_cny': 797,
+                                          'weak_target_cny': 818, 'risk_exit_cny': 796, 'basis': basis}}}]
         if retest_price is not None:
             conditions.append({**conditions[0], 'condition': 'at_or_above', 'price_cny': retest_price})
         advice = {'id': advice_id, 'analyst': 'codex', 'action': 'hold', 'status': 'current', 'action_status': 'current',
@@ -461,13 +462,13 @@ class BuyGuardTests(unittest.TestCase):
         self.observe_watch(second, [(4, 806.8)])
         self.assertEqual(pending_events(self.conn, 'codex', START + timedelta(minutes=4)), [event])
 
-    def test_new_retest_plan_preserves_unchanged_pullback_progress_and_deadline(self):
+    def test_new_retest_plan_preserves_pullback_progress_when_only_its_explanation_changes(self):
         self.update_quote(0, 799)
         first = self.publish_watch(1, START, 799, retest_price=805)
         self.observe_watch(first, [(0, 799), (1, 803.5), (3, 804)])
 
         at = START + timedelta(minutes=3, seconds=10)
-        second = self.publish_watch(2, at, 799, retest_price=806)
+        second = self.publish_watch(2, at, 799, retest_price=806, basis='从浙商近一小时数据得出。')
         with self.conn:
             carry_entry_observations(self.conn, 'codex', 2, at)
         account = accounts(self.conn, at, include_advice=False)[0]
@@ -491,13 +492,26 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(len(event['data']['routes']), 2)
 
         at = START + timedelta(minutes=6)
-        second = self.publish_watch(2, at, 800, retest_price=805)
+        second = self.publish_watch(2, at, 800, retest_price=805, basis='从浙商近一小时数据得出。')
         with self.conn:
             carry_entry_observations(self.conn, 'codex', 2, at)
         queued, = pending_events(self.conn, 'codex', at)
         self.assertEqual(queued['data']['plan_id'], second['buy_watch']['id'])
         route, = queued['data']['routes']
         self.assertEqual(route, next(r for r in event['data']['routes'] if r['condition'] == 'at_or_above'))
+
+    def test_changed_buy_cap_requires_a_new_confirmation(self):
+        self.update_quote(0, 799)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 799), (1, 803.5), (4, 804)])
+        self.assertEqual(len(read(self.conn, 'codex')['pending']), 1)
+
+        at = START + timedelta(minutes=5)
+        second = self.publish_watch(2, at, 799, max_buy_price=805.5)
+        self.assertNotEqual(first['buy_watch']['id'], second['buy_watch']['id'])
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.assertEqual(pending_events(self.conn, 'codex', at), [])
 
     def test_late_quote_cannot_complete_a_carried_pullback_after_the_old_deadline(self):
         self.update_quote(0, 802)

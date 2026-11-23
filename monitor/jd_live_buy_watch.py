@@ -163,6 +163,13 @@ def queued_route(route, advice, source_advice_id, now):
     return {**route, 'signal_expires_at': utc_text(deadline)}
 
 
+def buy_review_terms(condition):
+    review = condition.get('buy_review') or {}
+    zone = review.get('zone') or {}
+    return (*[review.get(key) for key in ('grams', 'recovery_price_cny', 'hold_minutes', 'max_buy_price_cny')],
+            *[zone.get(key) for key in ('floor_cny', 'weak_target_cny', 'risk_exit_cny')])
+
+
 def set_watch(conn, bank, analyst, value, source, now, minimum):
     """Keep a live window across identical advice and reopen it once expired."""
     from .controls import control
@@ -207,11 +214,7 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     for c in conditions:
         if not extended(c) or not eligible(c, minimum):
             continue
-        review = c.get('buy_review') or {}
-        zone = review.get('zone') or {}
-        terms.append([condition_key(c), *[review.get(k) for k in ('grams', 'recovery_price_cny',
-                      'hold_minutes', 'max_buy_price_cny')], *[zone.get(k) for k in ('floor_cny', 'weak_target_cny',
-                      'risk_exit_cny')], c.get('bank_breakout')])
+        terms.append([condition_key(c), *buy_review_terms(c), c.get('bank_breakout')])
     if not terms:
         return
     terms.sort(key=lambda item: item[0])
@@ -410,7 +413,7 @@ def replay_observation(conn, account, stage, condition, boundary, now):
 
 def observation_terms(condition):
     breakout = condition.get('bank_breakout') or {}
-    return (condition['condition'], condition['quote_side'], condition['price_cny'], condition.get('buy_review'),
+    return (condition['condition'], condition['quote_side'], condition['price_cny'], buy_review_terms(condition),
             breakout.get('retest_ceiling_cny'), breakout.get('hold_minutes'))
 
 
@@ -464,7 +467,8 @@ def carry_entry_observations(conn, model, view_id, now):
         for condition in new['review_conditions']:
             if not extended(condition) or not eligible(condition, minimum):
                 continue
-            previous_condition = next((c for c in old_conditions if observation_terms(c) == observation_terms(condition)), None)
+            terms = observation_terms(condition)
+            previous_condition = next((c for c in old_conditions if observation_terms(c) == terms), None)
             if not previous_condition:
                 continue
             previous_key = condition_key(previous_condition)
