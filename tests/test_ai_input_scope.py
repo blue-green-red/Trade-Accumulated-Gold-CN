@@ -7,6 +7,28 @@ import test_four_account as fixtures
 
 
 class InputScopeTests(unittest.TestCase):
+    def test_live_waiting_comparison_retains_returns_without_repeated_cash_examples(self):
+        full = {'status': 'ready', 'reference_amounts_cny': [1000, 5000],
+                'up_delta_cny': [15, 75], 'down_delta_cny': [-25, -125],
+                'waiting': {'reference_amount_cny': 1000, 'buy_hold_delta_cny': -8.42,
+                            'quote_change_pct': -0.442, 'observed_minutes': 35.2, 'rounds': 3}}
+        account = {'cash_cny': 50_000, 'participation_review': {'status': 'ready', 'up_delta_cny': [15, 75]},
+                   'previous_advice': [{'strategy_review': {'participation_review': full, 'weakened_rounds': 2}}]}
+        source = {'live_readonly_accounts': {'accounts': {'zheshang': account}}}
+        packed = compact_context(source)
+        live = packed['live_readonly_accounts']['accounts']['zheshang']
+        self.assertNotIn('participation_review', live)
+        self.assertEqual(live['cash_cny'], 50_000)
+        strategy = live['previous_advice'][0]['strategy_review']
+        self.assertEqual(strategy['weakened_rounds'], 2)
+        self.assertEqual(strategy['participation_review'], {'waiting': {
+            'quote_change_pct': -0.442, 'observed_minutes': 35.2, 'rounds': 3, 'net_return_pct': -0.842}})
+        self.assertEqual(compact_context(packed), packed)
+        self.assertIn('reference_amount_cny', full['waiting'])
+        simulated = compact_context({**source, 'trading_accounts': {'accounts': {'paper': {}}}})
+        self.assertEqual(simulated['live_readonly_accounts']['accounts']['zheshang']['previous_advice'],
+                         account['previous_advice'])
+
     def test_previous_shallow_pullback_compares_to_current_sampled_bank_low(self):
         as_of = '2026-11-23T02:00:00+00:00'
         condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 792.4,

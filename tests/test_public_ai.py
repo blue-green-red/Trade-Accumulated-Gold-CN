@@ -122,12 +122,16 @@ class PublicTests(unittest.TestCase):
         account['previous_advice'] = [{'review_conditions': [{'buy_review': {'zone': {'floor_cny': 866.12}},
                                                             'trigger_below_sampled_1h_low_cny_per_gram': 7.02}]}]
         account['new_buy_break_even_sell_cny'] = 872.93
-        account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52},
+        account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52,
+                                                               'weak_target_net_cny_per_gram': 2.47},
                                                    'breakout': {'at_breakout_level_net_cny_per_gram': -3.66}}
         account['new_buy_capacity_at_input'] = {'cash_after_buy_orders_cny': 12042.32, 'cash_limited_grams': 14.35}
-        for price in (865.32, 868.05, 866.12, 866.91, 872.93, 234.52, 3.66, 12042.32, 7.02):
+        account['participation_review'] = {'waiting': {'net_return_pct': -1.237}}
+        for price in (865.32, 868.05, 866.12, 866.91, 872.93, 234.52, 3.66, 12042.32, 7.02, 2.47):
             d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
             self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
+        d = content(); d['analysis']['outlook'] = '等待期扣费回报为-1.237%。'
+        self.assertEqual(self.publish(d, view_id=12137), 'unavailable')
 
     def test_only_verified_public_unit_examples_become_percentages(self):
         self.context['public_reference']={'sell_fee_rate':.004,'spread_cny':0}

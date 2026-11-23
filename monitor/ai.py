@@ -624,12 +624,12 @@ class AIAnalyst:
         else:
             policy = f"本轮最多搜索 {self.settings.ai_max_searches} 次，仅补充上下文缺失的事实；数据缺失、过期或出现重大突发事件线索时优先核实。优先官方/一手来源，保留发布日期与网址；无新增可靠信息时停止搜索，不必用满次数。"
             if self.settings.ai_page_fetch_max_calls>0:policy+=f"关键依据仅有搜索摘要或网页打开失败时，用fetch_public_page核对原文与相反/限定表述，可用focus定位，本轮最多{self.settings.ai_page_fetch_max_calls}次；失败注明未核实。"
-        from .trade_costs import PROMPT as COST_PROMPT
+        from .trade_costs import LIVE_PROMPT, PROMPT as COST_PROMPT
         research=RISK_RESEARCH_SYSTEM if self.settings.ai_trading_mode in ('risk_six_account','live_only') else RESEARCH_SYSTEM
         if self.settings.ai_trading_mode=='live_only':
             research=research.replace('黄金研究与账户建议','黄金研究、真实账户人工操作建议及公众内容')
             policy=policy.replace('及只读账户历史查询工具','').replace('、只读账户历史查询工具','')
-            COST_PROMPT=COST_PROMPT.replace('模拟、真实及公众内容共用','真实账户及公众内容共用')
+            COST_PROMPT=LIVE_PROMPT
         return research + "\n" + policy + PUBLIC_PROMPT + COST_PROMPT
 
     def result_instructions(self):

@@ -90,10 +90,31 @@ def prepare_bank_entry_context(out):
                 account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
 
 
+def compact_waiting_review(container):
+    from .trade_costs import number
+
+    review = container.pop('participation_review', None) or {}
+    waiting = review.get('waiting') or {}
+    net_pct = waiting.get('net_return_pct')
+    if net_pct is None and (amount := number(waiting.get('reference_amount_cny'))):
+        net = waiting.get('buy_hold_delta_cny')
+        if isinstance(net, (int, float)):
+            net_pct = round(net / amount * 100, 3)
+    if net_pct is not None:
+        compact = {key: waiting[key] for key in ('observed_minutes', 'rounds', 'quote_change_pct') if key in waiting}
+        container['participation_review'] = {'waiting': {**compact, 'net_return_pct': net_pct}}
+
+
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
     prepare_bank_entry_context(out)
+    if not out.get('trading_accounts'):
+        for account in (out.get('live_readonly_accounts') or {}).get('accounts', {}).values():
+            compact_waiting_review(account)
+            for advice in account.get('previous_advice', []):
+                if isinstance(advice.get('strategy_review'), dict):
+                    compact_waiting_review(advice['strategy_review'])
     if out.get('trading_accounts') or out.get('live_readonly_accounts'):
         signals=out.get('signals_tradingview')
         if isinstance(signals,dict):

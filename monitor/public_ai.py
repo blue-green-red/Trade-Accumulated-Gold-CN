@@ -188,7 +188,9 @@ def privacy_ok(content, context):
     output_numbers.update(float(m.replace(",", "")) for m in re.findall(r"(?<![0-9.])\d[\d,]*(?:\.\d+)?", text))
     per_gram_amounts = {float(m.replace(",", "")) for m in re.findall(
         r"(?<![0-9.])\d[\d,]*(?:\.\d+)?(?=\s*元\s*(?:[/／]|每)\s*克)", text)}
-    per_gram_fields = {'at_breakout_level_net_cny_per_gram', 'trigger_below_sampled_1h_low_cny_per_gram'}
+    percentages = {float(m) for m in re.findall(r"(?<![0-9.])\d+(?:\.\d+)?(?=\s*[%％])", text)}
+    per_gram_fields = {'at_breakout_level_net_cny_per_gram', 'trigger_below_sampled_1h_low_cny_per_gram',
+                       'weak_target_net_cny_per_gram', 'risk_exit_net_cny_per_gram'}
     sensitive = {"average_cost_cny", "avg_cost", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
                  "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
                  "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
@@ -217,22 +219,26 @@ def privacy_ok(content, context):
         elif isinstance(value, list):
             for v in value:
                 yield from private_numbers(v)
-    def private_per_gram(value):
+    def private_values_at_fields(value, fields):
         if isinstance(value, dict):
             for k, v in value.items():
-                if k in per_gram_fields:
+                if k in fields:
                     yield from numbers(v)
                 else:
-                    yield from private_per_gram(v)
+                    yield from private_values_at_fields(v, fields)
         elif isinstance(value, list):
             for v in value:
-                yield from private_per_gram(v)
+                yield from private_values_at_fields(v, fields)
     for name in ("trading_accounts", "live_readonly_accounts"):
         private = context.get(name) or {}
         # Private cost/order levels and distinctive balances must not become public levels.
         if any(n in output_numbers and n not in public_numbers for n in private_numbers(private) if n > 100):
             return False
-        if per_gram_amounts and any(abs(n) in per_gram_amounts and abs(n) not in public_numbers for n in private_per_gram(private)):
+        if per_gram_amounts and any(abs(n) in per_gram_amounts and abs(n) not in public_numbers
+                                   for n in private_values_at_fields(private, per_gram_fields)):
+            return False
+        if percentages and any(abs(n) in percentages and abs(n) not in public_numbers
+                               for n in private_values_at_fields(private, {'net_return_pct'}) if n):
             return False
         for key, account in private.get("accounts", {}).items():
             if str(key) in text or any(str(account.get(k, "")) in text for k in ("key", "revision") if len(str(account.get(k, ""))) >= 8):
