@@ -133,12 +133,14 @@ def condition_state(conn,account,advice,condition,now,latest=True):
             and not condition.get('order_key') and not condition.get('buy_review')):
         result['status']='review_required';return result
     boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
-    from .jd_live_buy_watch import (active_window, eligible, extended, pending_plan_review, watch_deadline, watch_id,
-                                    watch_progress, watch_route_key, watch_routes)
+    from .jd_live_buy_watch import (active_window, candidate_deadline, eligible, extended, pending_plan_review,
+                                    watch_deadline, watch_id, watch_progress, watch_route_key, watch_routes)
     independent=latest and advice.get('buy_watch') and extended(condition)
+    if independent or latest and candidate_deadline(advice,condition):
+        deadline=watch_deadline(advice,condition)
+        result['expires_at']=deadline.isoformat()
+        if now>=deadline:result['status']='expired';return result
     if independent:
-        result['expires_at']=watch_deadline(advice,condition).isoformat()
-        if now>=watch_deadline(advice,condition):result['status']='expired';return result
         if not active_window(advice,account):
             result['status']=advice.get('action_status') if advice.get('action_status') in ('account_changed','data_unavailable') else 'review_required'
             return result
@@ -183,7 +185,7 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if carried_until and now>=carried_until:
             stage={}
         elif carried_until and independent:
-            result['expires_at']=min(watch_deadline(advice,condition),carried_until).isoformat()
+            result['expires_at']=min(deadline,carried_until).isoformat()
         previous_review=current.get('reviewed_routes',{}).get(route_key) if same_plan else None
         event_id=stage.get('event_id',f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{identity}')
         status='monitoring' if eligible(condition,account.get('minimum_buy_grams')) else 'review_required'

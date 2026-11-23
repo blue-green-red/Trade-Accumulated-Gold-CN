@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .config import Settings
-from .jd_live_buy_watch import MAX_GAP, advance, eligible, extended, utc_text
+from .jd_live_buy_watch import MAX_GAP, advance, eligible, utc_text, watch_deadline
 from .jd_live_conditions import stamp
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
 from .participation_audit import horizon_at, readonly
@@ -59,8 +59,11 @@ def entries(value, published, expires, quotes, now, *, breakout_mode=None, progr
         return immediate, unavailable('no_valid_buy_review'), None
 
     watch_end = stamp((value.get('buy_watch') or {}).get('expires_at'))
-    deadlines = [watch_end if watch_end and extended(route) else expires for route in routes]
+    advice = {**value, 'expires_at': utc_text(expires)}
+    deadlines = [watch_deadline(advice, route) for route in routes]
     last_deadline = max(deadlines)
+    if last_deadline <= published:
+        return immediate, unavailable('no_valid_buy_review'), None
     boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
     actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline]
     states = [{} for _ in routes]
@@ -205,8 +208,11 @@ def shallow_level_sensitivity(value, condition, archived_quotes, published, expi
     if not eligible(candidate, number(value.get('input_minimum_buy_grams'))):
         return {'status': 'shifted_zone_incompatible_with_original_terms', **result}
     payoff = bank_review_payoff(candidate_review['max_buy_price_cny'], GRAMS, zone, value.get('input_sell_fee_rate'))
+    cutoff = watch_deadline({**value, 'expires_at': utc_text(expires)}, condition)
+    if watch := value.get('buy_watch'):
+        value = {**value, 'buy_watch': {**watch, 'expires_at': utc_text(cutoff)}}
     return {'status': 'replayed', **result, 'payoff_10g_at_candidate_cap_cny': payoff,
-            'replay': replay_one_branch(value, candidate, None, published, expires, quotes, now)}
+            'replay': replay_one_branch(value, candidate, None, published, min(expires, cutoff), quotes, now)}
 
 
 def independent_branch_replay(value, published, expires, quotes, now, *, archived_quotes=None):

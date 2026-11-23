@@ -175,9 +175,25 @@ def watch_progress(current):
     return current
 
 
+def candidate_deadline(advice, condition):
+    """Find the deadline of a matching low-entry candidate, including queued routes."""
+    review = condition.get('buy_review')
+    if not review or condition.get('condition') != 'at_or_below' or condition.get('order_key'):
+        return None
+    entries = {review.get('max_buy_price_cny'), condition.get('threshold_cny', condition.get('price_cny'))}
+    risk_exit = (review.get('zone') or {}).get('risk_exit_cny')
+    return min((cutoff for candidate in advice.get('limit_buy_reviews', [])
+                if candidate.get('decision') == 'needs_review' and candidate.get('grams') == review.get('grams')
+                and candidate.get('entry_price_cny') in entries and candidate.get('entry_price_cny') is not None
+                and (risk_exit is None or candidate.get('risk_exit_cny') in (None, risk_exit))
+                and (cutoff := stamp(candidate.get('expires_at')))), default=None)
+
+
 def watch_deadline(advice, condition):
     watch = advice.get('buy_watch') if extended(condition) else None
-    return stamp((watch or {}).get('expires_at') or advice.get('expires_at'))
+    deadline = stamp((watch or {}).get('expires_at') or advice.get('expires_at'))
+    cutoff = candidate_deadline(advice, condition)
+    return min(deadline, cutoff) if deadline and cutoff else deadline
 
 
 def queued_route(route, advice, source_advice_id, now):
@@ -521,7 +537,7 @@ def carry_entry_observations(conn, model, view_id, now):
             if (stage.get('stage') not in active_stages or stage.get('reviewed_confirmation_at')
                     or previous_key in current.get('reviewed_routes', {})):
                 continue
-            deadline = min(previous_end, stamp(watch['expires_at']),
+            deadline = min(watch_deadline(old, previous_condition), watch_deadline(new, condition),
                            stamp(stage.get('observation_expires_at')) or previous_end)
             if now >= deadline:
                 continue
@@ -531,6 +547,8 @@ def carry_entry_observations(conn, model, view_id, now):
                 if not route or not active_routes(conn, account, [route], now):
                     continue
                 deadline = min(deadline, stamp(route.get('signal_expires_at')) or deadline)
+                if now >= deadline:
+                    continue
                 route = {**route, 'condition_key': new_key, 'signal_expires_at': utc_text(deadline)}
                 if condition.get('bank_breakout'):
                     route['bank_breakout'] = condition['bank_breakout']
@@ -650,6 +668,7 @@ def request(store, account, advice, now, point):
     at, observed, _, sell = point
     watch = advice.get('buy_watch') or {}
     created = stamp(watch.get('starts_at') or advice.get('created_at'))
+    published = stamp(advice.get('created_at')) or created
     boundary = (advice.get('position_path') or {}).get('boundary_price_cny')
     boundary_hit = watch and boundary is not None and sell <= boundary
     if (not created or not created <= at <= observed
@@ -709,8 +728,13 @@ def request(store, account, advice, now, point):
                     updated[fingerprint] = previous
                     continue
                 previous = {}
-                route_tape = [quote for quote in tape if quote[0] >= deadline]
+                route_tape = [quote for quote in tape if quote[0] >= max(deadline, published)]
+                deadline = None
+            if (candidate := candidate_deadline(advice, condition)) and not previous:
+                route_tape = [quote for quote in route_tape if quote[0] >= published]
             step, confirmation_price = advance_observation(condition, route_tape, previous)
+            if step and candidate:
+                step['observation_expires_at'] = utc_text(min(deadline, candidate) if deadline else candidate)
             if (step.get('stage') == 'confirmed' and confirmation_price is not None
                     and fingerprint not in reviewed):
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(

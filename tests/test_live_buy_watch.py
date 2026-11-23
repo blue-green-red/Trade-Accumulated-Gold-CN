@@ -426,6 +426,13 @@ class BuyAuditTests(unittest.TestCase):
                          round(10 * (797 * .995 - 809), 2))
         self.assertEqual(value['review_conditions'], [zoned_route()])
 
+        limited = {**value, 'limit_buy_reviews': [{'decision': 'needs_review', 'entry_price_cny': 804,
+                   'grams': 10, 'risk_exit_cny': 797, 'expires_at': (START + timedelta(minutes=3)).isoformat()}]}
+        row, = independent_branch_replay(limited, START, end, points, now, archived_quotes=archived)
+        shadow = row['sampled_low_sensitivity']
+        self.assertEqual(shadow['status'], 'replayed')
+        self.assertEqual(shadow['replay']['confirmation']['status'], 'no_confirmation')
+
         value['review_conditions'][0]['buy_review']['zone']['weak_target_cny'] = 808
         row, = independent_branch_replay(value, START, end, points, now, archived_quotes=archived)
         self.assertEqual(row['sampled_low_sensitivity']['status'], 'shifted_zone_incompatible_with_original_terms')

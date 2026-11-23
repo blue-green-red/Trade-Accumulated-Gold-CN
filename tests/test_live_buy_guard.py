@@ -227,7 +227,7 @@ class BuyGuardTests(unittest.TestCase):
                          late['confirmed_at'])
 
     def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None,
-                      basis='依据本行近一小时采样。', max_buy_price=806):
+                      basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None):
         revision = accounts(self.conn, at, include_advice=False)[0]['revision']
         source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
@@ -242,6 +242,9 @@ class BuyGuardTests(unittest.TestCase):
                   'valid_for_minutes': 15, 'review_conditions': conditions, 'created_at': at.isoformat(),
                   'expires_at': deadline, 'snapshot_revision': revision,
                   'position_path': {'boundary_price_cny': boundary, 'exit_scope': exit_scope}}
+        if candidate_until:
+            advice['limit_buy_reviews'] = [{'decision': 'needs_review', 'entry_price_cny': max_buy_price,
+                                            'risk_exit_cny': 796, 'grams': 10, 'expires_at': candidate_until.isoformat()}]
         with self.conn:
             set_watch(self.conn, 'zheshang', 'codex', advice, source, at, 10)
             self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
@@ -254,6 +257,58 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
             request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_low_entry_candidate_expires_while_its_breakout_watch_keeps_running(self):
+        self.update_quote(0, 801)
+        cutoff = START + timedelta(minutes=6)
+        advice = self.publish_watch(1, START, 799, candidate_until=cutoff)
+        self.observe_watch(advice, [(1, 799), (2, 803.5), (4, 804), (5, 804.1)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=5))
+        route, = event['data']['routes']
+        self.assertEqual(datetime.fromisoformat(route['signal_expires_at']), cutoff)
+
+        self.assertEqual(pending_events(self.conn, 'codex', cutoff), [])
+        account = accounts(self.conn, cutoff, include_advice=False)[0]
+        expired = condition_state(self.conn, account, advice, advice['review_conditions'][0], cutoff)
+        self.assertEqual(expired['status'], 'expired')
+        self.assertEqual(datetime.fromisoformat(expired['expires_at']), cutoff)
+
+        self.observe_watch(advice, [(6, 805.5), (7, 806.5), (9, 807)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=9))
+        breakout, = event['data']['routes']
+        self.assertEqual(breakout['confirmation_mode'], 'continuation')
+        self.assertEqual(breakout['signal_expires_at'], advice['buy_watch']['expires_at'])
+
+    def test_reissued_low_entry_after_its_deadline_requires_new_recovery(self):
+        self.update_quote(0, 801)
+        advice = self.publish_watch(1, START, 799, candidate_until=START + timedelta(minutes=5))
+        self.observe_watch(advice, [(1, 799), (2, 803.5), (4, 804)])
+        self.update_quote(6, 804.2)
+        later = self.publish_watch(2, START + timedelta(minutes=6), 799, candidate_until=START + timedelta(minutes=14))
+        self.assertEqual(later['buy_watch']['id'], advice['buy_watch']['id'])
+        self.observe_watch(later, [(7, 804.3)])
+        self.assertEqual(pending_events(self.conn, 'codex', START + timedelta(minutes=7)), [])
+        self.observe_watch(later, [(8, 799), (9, 803.5), (11, 804), (12, 804.2)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=12))
+        low, = event['data']['routes']
+        self.assertEqual(datetime.fromisoformat(low['confirmed_at']), START + timedelta(minutes=12))
+        self.assertEqual(datetime.fromisoformat(low['signal_expires_at']), START + timedelta(minutes=14))
+
+    def test_carried_low_entry_keeps_its_earlier_candidate_deadline(self):
+        self.update_quote(0, 801)
+        cutoff = START + timedelta(minutes=6)
+        advice = self.publish_watch(1, START, 799, candidate_until=cutoff)
+        self.observe_watch(advice, [(1, 799), (2, 803.5), (4, 804)])
+        at = START + timedelta(minutes=4)
+        successor = self.publish_watch(2, at, 799, retest_price=808, candidate_until=START + timedelta(minutes=14))
+        self.assertNotEqual(successor['buy_watch']['id'], advice['buy_watch']['id'])
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.observe_watch(successor, [(5, 804.1)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=5))
+        route, = event['data']['routes']
+        self.assertEqual(datetime.fromisoformat(route['signal_expires_at']), cutoff)
+        self.assertFalse(pending_events(self.conn, 'codex', cutoff))
 
     def test_retest_can_trigger_after_continuation_across_advice_in_the_same_move(self):
         self.update_quote(0, 805.5)
