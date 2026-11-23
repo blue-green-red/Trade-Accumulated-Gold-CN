@@ -484,14 +484,43 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM ai_runs').fetchone()[0], 1)
 
-    def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1):
+    def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1, *, basis=None, now=START):
         raw = {'action': action, 'grams': 10 if action == 'buy' else None,
                'price_condition': condition, 'price_cny': 806 if condition != 'none' else None,
                'valid_for_minutes': 15, 'reason': '本轮按实际报价评估。', 'risk_note': '先核对实时买价。',
-               'suggested_orders': list(orders)}
+               'suggested_orders': list(orders), 'entry_trigger_key': basis}
         with self.conn:
-            save(self.conn, 'codex', view, {'zheshang': raw}, model_input(self.conn, START), START,
+            save(self.conn, 'codex', view, {'zheshang': raw}, model_input(self.conn, now), now,
                  entry_routes={'zheshang': routes} if routes else None)
+
+    def test_mixed_confirmations_require_a_still_valid_buy_basis_at_publication(self):
+        self.update_quote(0, 806)
+        routes = [self.route(805), self.route(803)]
+        self.update_quote(1, 804.9)
+        now = START + timedelta(minutes=1)
+        for view, (basis, expected) in enumerate(((None, 'review_required'), ('805', 'review_required'),
+                                                 ('unknown', 'review_required'), ('803', 'current')), start=1):
+            with self.subTest(basis=basis):
+                self.save_advice(routes=routes, basis=basis, view=view, now=now)
+                advice = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+                self.assertEqual(advice['action_status'], expected)
+                self.assertEqual(bool(notification_events(self.conn, 'codex', view, now=now)), expected == 'current')
+        self.assertEqual(advice['entry_trigger_routes'], [routes[1]])
+
+    def test_display_rechecks_only_the_selected_buy_basis_or_requires_all_unselected_routes(self):
+        self.update_quote(0, 806)
+        routes = [self.route(805), self.route(803)]
+        self.save_advice(routes=routes)
+        self.update_quote(1, 804.9)
+        now = START + timedelta(minutes=1)
+        advice = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(advice['action_status'], 'review_required')
+        self.save_advice(routes=routes, basis='803', view=2, now=now)
+        advice = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(advice['action_status'], 'current')
+        self.update_quote(2, 802.9)
+        advice = accounts(self.conn, START + timedelta(minutes=2), selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(advice['action_status'], 'review_required')
 
     def test_price_limit_is_rechecked_without_rewriting_original_advice(self):
         self.update_quote(0, 806)

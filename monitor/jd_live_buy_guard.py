@@ -213,12 +213,30 @@ def block_entries(value, warning, *, include_reviews=True):
                 value['checks'].append(prefix + warning)
 
 
+def publication_entry_basis(conn, bank, value, routes, now):
+    """Bind a recommendation to its named input route, or require all ambiguous routes to hold."""
+    from .jd_live_readonly import accounts
+
+    basis = value.get('entry_trigger_key')
+    selected = [route for route in routes if route['condition_key'] == basis] if basis else routes
+    if not selected:
+        return [], '本轮加仓引用的复评分支与输入不符，须重新确认'
+    if len(routes) == 1:
+        return selected, None
+    account = next(iter(accounts(conn, now, include_advice=False, selected_bank=bank)), {})
+    if len(active_routes(conn, account, selected, now)) == len(selected):
+        return selected, None
+    if basis:
+        return selected, '本轮加仓引用的复评分支已失效，须重新确认'
+    return selected, '部分买入触发已失效，尚未明确剩余路径是否支持本轮加仓'
+
+
 def current_entry_state(conn, account, advice, now):
     if advice['lifecycle_status'] != 'current':
         return
     routes = advice.get('entry_trigger_routes')
     checks = advice.setdefault('checks', [])
-    if routes and not active_routes(conn, account, routes, now):
+    if routes and len(active_routes(conn, account, routes, now)) != len(routes):
         warning = '本轮买入依据已失守、超价、触及退出边界或报价中断，请用新行情复评'
         size = len(checks)
         block_entries(advice, warning, include_reviews=False)

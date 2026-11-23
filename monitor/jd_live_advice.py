@@ -61,6 +61,7 @@ class LiveAdvice(BaseModel):
     grams:Optional[float]=Field(default=None,ge=0,allow_inf_nan=False)
     price_condition:Literal['at_or_above','at_or_below','reference','none']='none'
     price_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
+    entry_trigger_key:Optional[str]=Field(default=None,min_length=1,max_length=64,description='加仓依赖的 trigger_events.routes.condition_key，未引用填 null')
     valid_for_minutes:int=Field(default=240,ge=15,le=1440)
     reason:str=Field(max_length=1600,description='当前规模与同幅涨跌金额取舍、等待的具体反证；含持有/减仓及不挂单依据，不重复reassessment')
     risk_note:str=Field(max_length=800)
@@ -157,11 +158,16 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         annotate(value,source)
         value['input_protection']=protection_state(source)
         value['checks']=warnings
+        warning = (entry_warnings or {}).get(bank)
         if routes := (entry_routes or {}).get(bank):
-            value['entry_trigger_routes']=routes
-        if warning := (entry_warnings or {}).get(bank):
+            from .jd_live_buy_guard import publication_entry_basis
+            selected, basis_warning = publication_entry_basis(conn, bank, value, routes, now)
+            warning = warning or basis_warning
+            if not warning:
+                value['entry_trigger_routes'] = selected
+        if warning:
             from .jd_live_buy_guard import block_entries
-            block_entries(value,warning)
+            block_entries(value,warning,include_reviews=bank in (entry_warnings or {}))
         from .jd_live_buy_watch import set_watch
         set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))
         value['validation_version']=1
