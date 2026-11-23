@@ -485,10 +485,12 @@ class AIAnalyst:
                 entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids))
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):
+            pending_entry_ids = set()
             if context.get("live_readonly_accounts"):
-                from .jd_live_buy_guard import remember_reviewed_breakouts
+                from .jd_live_buy_guard import entry_events, remember_reviewed_breakouts, remove_submitted_confirmations
                 remember_reviewed_breakouts(store.conn,self.analyst,entry_context,covered_ids,self._generation)
-            acknowledge(store.conn, self.analyst, covered_ids)
+                pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, entry_events(entry_context, covered_ids))
+            acknowledge(store.conn, self.analyst, [event_id for event_id in covered_ids if event_id not in pending_entry_ids])
         store.conn.commit()
         if public_status == "unavailable":
             log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)

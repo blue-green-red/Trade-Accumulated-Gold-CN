@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import evaluate, observed_reviews
+from monitor.jd_live_buy_guard import remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
 from monitor.jd_live_expiry import request_expiry_review
@@ -374,6 +375,13 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(len(pending[0]['data']['routes']), 2)
             self.assertEqual(pending[0]['min_gap_minutes'], 0)
             self.assertEqual(store.conn.execute('SELECT count(*) FROM jd_live_quote_samples').fetchone()[0], 5)
+
+            event = pending[0]
+            submitted = {**event, 'data': {**event['data'], 'routes': event['data']['routes'][:1]}}
+            with store.conn:
+                remove_submitted_confirmations(store.conn, 'codex', [submitted])
+            self.assertEqual([condition_state(store.conn, account, advice, c, sample[1])['status']
+                              for c in conditions], ['reviewed', 'queued'])
 
             above = point(5, 809)
             request(store, account, advice, above[1], above)

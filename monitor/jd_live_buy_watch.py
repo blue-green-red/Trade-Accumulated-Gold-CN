@@ -370,7 +370,7 @@ def pending_events(conn, model, now):
 def request(store, account, advice, now, point):
     from .ai_events import read, write
     from .controls import active, control
-    from .jd_live_buy_guard import reviewed_breakout
+    from .jd_live_buy_guard import reviewed_breakout, with_active_routes
     from .jd_live_conditions import read_watch
     from .jd_live_readonly import PRODUCTS
 
@@ -456,12 +456,13 @@ def request(store, account, advice, now, point):
         existing = next((e for e in events['pending'] if e['id'] == event_id), None)
         if existing:
             evidence = existing['data']['routes'] + confirmed
-            retained = [r for r in evidence if updated.get(r['condition_key'], {}).get('stage') == 'confirmed']
+            retained = [r for r in evidence if (step := updated.get(r['condition_key'], {})).get('stage') == 'confirmed'
+                        and step.get('confirmed_at') == r['confirmed_at']]
             if not retained:
                 events['pending'].remove(existing)
-            else:
-                existing['data']['routes'] = retained
-            if existing['data']['routes'] != evidence or confirmed or not retained:
+                write(conn, model, events)
+            elif retained != existing['data']['routes']:
+                existing.update(with_active_routes(existing, retained))
                 write(conn, model, events)
         elif confirmed and event_id not in events['covered']:
             continued = any(r.get('confirmation_mode') == 'continuation' for r in confirmed)

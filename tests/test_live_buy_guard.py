@@ -125,6 +125,41 @@ class BuyGuardTests(unittest.TestCase):
             self.assertEqual(retire_failed_events(self.conn, 'codex', context, [key], {'zheshang': 'stale'}), [])
         self.assertEqual(read(self.conn, 'codex'), later)
 
+    def test_successful_review_keeps_a_confirmation_that_arrived_during_analysis(self):
+        context, key = self.prepare_signal([self.route()])
+        analyst = AIAnalyst(self.settings, self.store, 'codex', 'codex')
+        data = result().model_dump()
+        data.update(research_notes='测试', sources=[], live_account_advice={})
+        response = ClaudeCodeResult.model_validate(data)
+        finish = START + timedelta(minutes=2)
+        late = self.route(804, confirmed_at=(START + timedelta(minutes=1)).isoformat(), confirmation_mode='continuation',
+                          bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 805})
+
+        def backend(*_):
+            self.update_quote(1, 806)
+            events = read(self.conn, 'codex')
+            events['pending'][0]['data']['routes'].append(late)
+            with self.conn:
+                write(self.conn, 'codex', events)
+            self.update_quote(2, 806)
+            return 'notes', [], response
+
+        with patch.object(analyst, '_run_codex', side_effect=backend), patch('monitor.ai.utc_now', return_value=finish):
+            view = analyst.analyze(context, '突破条件', run_id='first-review')
+        self.assertEqual(view['_covered_event_ids'], [key])
+        events = read(self.conn, 'codex')
+        self.assertNotIn(key, events['covered'])
+        self.assertEqual(events['pending'][0]['data']['routes'], [late])
+        self.assertEqual(events['pending'][0]['data']['quoted_at'], late['confirmed_at'])
+        self.assertIn('突破后持续走高', events['pending'][0]['reason'])
+        context['trigger_events'] = pending_events(self.conn, 'codex', finish)
+
+        with patch.object(analyst, '_run_codex', return_value=('notes', [], response)), \
+                patch('monitor.ai.utc_now', return_value=finish):
+            view = analyst.analyze(context, '后到的复评信号', run_id='second-review')
+        self.assertEqual(view['_covered_event_ids'], [key])
+        self.assertEqual(read(self.conn, 'codex'), {'pending': [], 'covered': [key]})
+
     def test_sell_and_existing_protection_can_still_pass_independent_validation(self):
         advice = {'action': 'sell', 'checks': [], 'suggested_orders': [
             {'kind': 'limit_buy'}, {'kind': 'take_profit_stop_loss'}], 'review_conditions': [],

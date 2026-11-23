@@ -176,7 +176,11 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if stage.get('stage')=='above_cap':status='price_limit_exceeded'
         if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
-            status='queued' if any(e['id']==event_id for e in pending) else 'reviewed'
+            from .jd_live_buy_guard import confirmation_key
+            confirmation=(result['condition_key'],stage['confirmed_at'])
+            queued=any(e['id']==event_id and any(confirmation_key(r)==confirmation for r in e['data']['routes'])
+                       for e in pending)
+            status='queued' if queued else 'reviewed'
         elif stage.get('stage')=='episode_reviewed':
             status='reviewed'
             event_id=stage['event_id']

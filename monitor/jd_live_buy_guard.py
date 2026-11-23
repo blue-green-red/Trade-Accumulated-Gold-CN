@@ -23,11 +23,8 @@ def reviewed_breakout(conn, model, account, threshold, now):
 def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
     """Record the reviewed market move independently of the other routes in its plan."""
     from .price_guard import read, save
-    ids = set(event_ids)
     inputs = (context.get('live_readonly_accounts') or {}).get('accounts', {})
-    for event in context.get('trigger_events', []):
-        if event['id'] not in ids or not event['id'].startswith(ENTRY_EVENT_PREFIX):
-            continue
+    for event in entry_events(context, event_ids):
         data = event['data']
         bank = data['bank']
         revision = (inputs.get(bank) or {}).get('revision')
@@ -64,12 +61,16 @@ def active_routes(conn, account, routes, now):
     return [route for route, anchor in anchored if route_valid(route, anchor, quotes, point[0])]
 
 
+def entry_events(context, event_ids):
+    ids = set(event_ids)
+    return (event for event in context.get('trigger_events', [])
+            if event['id'] in ids and event['id'].startswith(ENTRY_EVENT_PREFIX))
+
+
 def submitted_routes(context, event_ids):
     by_bank = defaultdict(list)
-    ids = set(event_ids)
-    for event in context.get('trigger_events', []):
-        if event['id'] in ids and event['id'].startswith(ENTRY_EVENT_PREFIX):
-            by_bank[event['data']['bank']].extend(event['data'].get('routes', []))
+    for event in entry_events(context, event_ids):
+        by_bank[event['data']['bank']].extend(event['data'].get('routes', []))
     return by_bank
 
 
@@ -137,32 +138,44 @@ def matching_entry_event(event, current):
     """Keep only submitted confirmations that still exist in the live queue."""
     if not current:
         return None
-    active = {confirmation_key(route) for route in current['data']['routes']}
-    routes = [route for route in event['data']['routes'] if confirmation_key(route) in active]
+    active = {confirmation_key(route): route for route in current['data']['routes']}
+    routes = [active[key] for route in event['data']['routes'] if (key := confirmation_key(route)) in active]
     if not routes:
         return None
     return with_active_routes(event, routes)
 
 
-def retire_failed_events(conn, model, context, event_ids, failures):
-    """Discard the submitted stale observation while keeping a newer attempt."""
+def remove_submitted_confirmations(conn, model, submitted):
+    """Remove only exact confirmations from submitted events, under the publication write lock."""
     from .ai_events import read, write
 
-    def confirmations(event):
-        return {confirmation_key(r) for r in event['data'].get('routes', [])}
-
-    failed = {event['id']: confirmations(event) for event in context.get('trigger_events', [])
-              if event['id'] in event_ids and event['id'].startswith(ENTRY_EVENT_PREFIX)
-              and event['data']['bank'] in failures}
-    if not failed:
-        return event_ids
+    covered = {event['id']: {confirmation_key(r) for r in event['data'].get('routes', [])} for event in submitted}
+    if not covered:
+        return set()
     events = read(conn, model)
-    retained = [e for e in events['pending']
-                if e['id'] not in failed or not confirmations(e).issubset(failed[e['id']])]
+    retained, remaining_ids = [], set()
+    for event in events['pending']:
+        event_id = event['id']
+        if event_id not in covered:
+            retained.append(event)
+            continue
+        remaining = [route for route in event['data'].get('routes', [])
+                     if confirmation_key(route) not in covered[event_id]]
+        if remaining:
+            retained.append(with_active_routes(event, remaining))
+            remaining_ids.add(event_id)
     if retained != events['pending']:
         events['pending'] = retained
         write(conn, model, events)
-    return [event_id for event_id in event_ids if event_id not in failed]
+    return remaining_ids
+
+
+def retire_failed_events(conn, model, context, event_ids, failures):
+    """Discard submitted stale observations while keeping a newer attempt."""
+    failed = [event for event in entry_events(context, event_ids) if event['data']['bank'] in failures]
+    remove_submitted_confirmations(conn, model, failed)
+    failed_ids = {event['id'] for event in failed}
+    return [event_id for event_id in event_ids if event_id not in failed_ids]
 
 
 def block_entries(value, warning, *, include_reviews=True):
