@@ -192,12 +192,16 @@ class Monitor:
             return events
         from .manual_ai import ready,TRIGGER
         due={}
+        automatic=set()
         for name,analyst in self.enabled_analysts().items():
             if force:due[name]="手动"
             elif ready(self.store.conn,self.settings,name):
                 # Read-only real advice uses its own bank preflight, not the simulated execution feed.
                 due[name]=TRIGGER if self.settings.ai_trading_mode=='live_only' or (snap.get("market_open") and execution_quote(snap)) else None
-            elif not manual_only:due[name]=analyst.due()
+            elif not manual_only:
+                due[name]=analyst.due()
+                if self.settings.ai_trading_mode=='live_only':
+                    automatic.add(name)
         due = {name: trigger for name, trigger in due.items() if trigger}
         if self.portfolios:
             due = {name:trigger for name,trigger in due.items() if self.store.conn.execute(
@@ -212,7 +216,7 @@ class Monitor:
             self.store.set_state("ai_first_analyst", order[0])
         base_plan = build_plan(snap, axis_m=DEFAULT_AXIS_M, spread_cny=self.settings.spread_cny,
                                sell_fee_rate=self.settings.sell_fee_rate, ratio_bank=self.settings.paper_bank)
-        self._ai_thread = threading.Thread(target=self._ai_worker, args=(dict(snap), base_plan, due, self.recent_jin10()),
+        self._ai_thread = threading.Thread(target=self._ai_worker, args=(dict(snap), base_plan, due, self.recent_jin10(), automatic),
                                            name="ai-analysis", daemon=True)
         self._ai_thread.start()
         return events
@@ -246,12 +250,13 @@ class Monitor:
                     event_id="jin10:" + item["id"], payload={"source": "金十快讯", "time_bj": item.get("time_bj"),
                         "text": item["text"][:1000]})
 
-    def _ai_worker(self, snap, base_plan, due: Dict[str, str], jin10_recent=None) -> None:
+    def _ai_worker(self, snap, base_plan, due: Dict[str, str], jin10_recent=None, automatic=()) -> None:
         """同一份上下文串行交给各分析师（同一 run_id），低配机器只运行一个 AI。"""
         from copy import deepcopy
         run_id = utc_now().isoformat(timespec="seconds")
         log.info("AI 消息面分析开始（%s，后台串行）", " → ".join(f"{n}:{t}" for n, t in due.items()))
         try:
+            from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, matching_entry_event
             from .jd_live_buy_watch import pending_events
             from .jd_live_preflight import prepare as prepare_live
             coverage_store = Store(self.settings.db_path)
@@ -268,6 +273,13 @@ class Monitor:
                 from .research_evidence import select_news
                 jin10_recent=select_news(coverage_store.get_state('jin10_flash',jin10_recent or []),snap.get('ts') or utc_now())
                 pending = {name: pending_events(coverage_store.conn, name, utc_now()) for name in due}
+                due = {name: self.analysts[name].due(store=coverage_store, pending=pending[name]) if name in automatic else trigger
+                       for name, trigger in due.items()}
+                due = {name: trigger for name, trigger in due.items() if trigger}
+                if not due:
+                    log.info("账户刷新后触发条件已失效，取消本次自动分析")
+                    return
+                pending = {name: pending[name] for name in due}
                 portfolio_inputs = {name: self.portfolios.input(name, snap.get("execution_quote"),coverage_store,as_of=snap["ts"].isoformat())
                                     for name in due} if self.portfolios else {}
             finally:
@@ -316,16 +328,32 @@ class Monitor:
                         log.info("%s 等待账户采集浏览器退出；未消费分析请求", name)
                         return name,None
                     from .manual_ai import claim,TRIGGER
-                    if due[name]==TRIGGER:
+                    trigger = due[name]
+                    if trigger==TRIGGER:
                         manual=claim(store.conn,name,run_id)
                         if not manual:return name,None
-                    store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
                     model_context = deepcopy(context)
+                    submitted = pending[name]
+                    if any(e['id'].startswith(ENTRY_EVENT_PREFIX) for e in submitted):
+                        current = {e['id']: e for e in pending_events(store.conn, name, utc_now())}
+                        matched = {e['id']: fresh for e in submitted if e['id'].startswith(ENTRY_EVENT_PREFIX)
+                                   and (fresh := matching_entry_event(e, current.get(e['id'])))}
+                        kept = [matched.get(e['id'], e) for e in submitted
+                                if not e['id'].startswith(ENTRY_EVENT_PREFIX) or e['id'] in matched]
+                        model_context['event_coverage'][name] = [e['id'] for e in kept]
+                        if name in automatic and not (trigger := self.analysts[name].due(store=store,pending=kept)):
+                            log.info("%s 派发前买入复评信号已失效，取消自动分析",name)
+                            return name,None
+                    else:
+                        matched = {}
+                    model_context['trigger_events'] = [matched.get(e['id'], e) for e in model_context['trigger_events']
+                        if not e['id'].startswith(ENTRY_EVENT_PREFIX) or e['id'] in matched]
+                    store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
                     for account in (model_context.get('live_readonly_accounts') or {}).get('accounts',{}).values():
                         account['previous_advice']=[v for v in account.get('previous_advice',[]) if v['analyst']==name]
                     if name in portfolio_inputs:
                         model_context["trading_accounts"] = deepcopy(portfolio_inputs[name])
-                    result=self.analysts[name].analyze(model_context, due[name], store=store, run_id=run_id)
+                    result=self.analysts[name].analyze(model_context,trigger,store=store,run_id=run_id)
                     return name,result
             except Exception:
                 log.exception("%s 分析线程异常", name)

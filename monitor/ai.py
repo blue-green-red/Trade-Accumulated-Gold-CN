@@ -258,11 +258,12 @@ class AIAnalyst:
             return False
         return enqueue(self.store.conn, self.analyst, reason, min_gap_minutes, event_id, payload)
 
-    def latest(self, max_age_hours: float) -> Optional[Dict[str, Any]]:
-        switch = control(self.store.conn, self.analyst)
+    def latest(self, max_age_hours: float, *, store=None) -> Optional[Dict[str, Any]]:
+        conn = (store or self.store).conn
+        switch = control(conn, self.analyst)
         if not switch["enabled"]:
             return None
-        row = self.store.conn.execute(
+        row = conn.execute(
             "SELECT rowid, ts, view_json, run_id, snapshot_at, started_at, completed_at FROM ai_views WHERE error IS NULL AND analyst=? ORDER BY ts DESC LIMIT 1",
             (self.analyst,)).fetchone()
         if not row:
@@ -278,29 +279,32 @@ class AIAnalyst:
         view["_run_id"] = row["run_id"]
         return view
 
-    def due(self) -> Optional[str]:
+    def due(self, *, store=None, pending=None) -> Optional[str]:
         """返回触发原因；不需要运行时返回 None。"""
-        if not active(self.store.conn, self.analyst):
+        scan = store or self.store
+        if not active(scan.conn, self.analyst):
             return None
         from .cadence import allowed
         from .jd_live_buy_watch import pending_events
-        pending = pending_events(self.store.conn, self.analyst, utc_now())
-        if not allowed(self.settings,self.store.conn,self.analyst,utc_now(),[e["id"] for e in pending]):
+        now = utc_now()
+        if pending is None:
+            pending = pending_events(scan.conn, self.analyst, now)
+        if not allowed(self.settings,scan.conn,self.analyst,now,[e["id"] for e in pending]):
             return None
-        switch = control(self.store.conn, self.analyst)
+        switch = control(scan.conn, self.analyst)
         if switch["generation"] != self._seen_generation:
             self._seen_generation = switch["generation"]
             self._failed_at = None
-        if self._failed_at and utc_now() - self._failed_at < timedelta(minutes=RETRY_AFTER_FAILURE_MINUTES):
+        if self._failed_at and now - self._failed_at < timedelta(minutes=RETRY_AFTER_FAILURE_MINUTES):
             return None
-        if switch["changed_at"] and self.latest(10000) is None:
+        if switch["changed_at"] and self.latest(10000, store=scan) is None:
             return "模型重新开启"
-        last = self.store.conn.execute("SELECT MAX(ts) t FROM ai_views WHERE error IS NULL AND analyst=?",
+        last = scan.conn.execute("SELECT MAX(ts) t FROM ai_views WHERE error IS NULL AND analyst=?",
                                        (self.analyst,)).fetchone()["t"]
         last_dt = datetime.fromisoformat(last) if last else None
         if pending:
             gap = min(e["min_gap_minutes"] for e in pending)
-            if last_dt is None or utc_now() - last_dt >= timedelta(minutes=gap):
+            if last_dt is None or now - last_dt >= timedelta(minutes=gap):
                 return "；".join(dict.fromkeys(e["reason"] for e in pending))[:300]
             # 不清除队列：定时分析可以合并覆盖，否则等待冷却结束。
         now_bj = datetime.now(BJ)

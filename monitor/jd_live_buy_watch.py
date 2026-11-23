@@ -295,47 +295,58 @@ def advance(state, condition, at, buy):
 
 
 def pending_events(conn, model, now):
-    """Ignore old collector touch events and confirmations from superseded advice."""
+    """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, with_active_routes
     from .jd_live_readonly import accounts
 
-    def obsolete(event):
+    def validated(event):
         event_id, data = event['id'], event.get('data') or {}
         if event_id.startswith('live-price:'):
             if data.get('buy_review'):
-                return True
+                return None
             if data.get('advice_id') and data.get('condition_key'):
                 row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
-                if row:
-                    return any((c.get('bank_breakout') or c.get('buy_review')) and
+                if row and any((c.get('bank_breakout') or c.get('buy_review')) and
                                condition_key(c) == data['condition_key']
-                               for c in json.loads(row[0]).get('review_conditions', []))
+                               for c in json.loads(row[0]).get('review_conditions', [])):
+                    return None
         if event_id.startswith('live-expired:') and data.get('advice_id'):
             row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
             old = json.loads(row[0]) if row else {}
-            return bool(old.get('buy_watch') and observation_only(old))
-        if event_id.startswith(('live-buy-confirmed:', 'live-watch-expired:')):
+            if old.get('buy_watch') and observation_only(old):
+                return None
+        confirmation = event_id.startswith(ENTRY_EVENT_PREFIX)
+        if confirmation or event_id.startswith('live-watch-expired:'):
             latest = conn.execute('SELECT id,expires_at,advice_json,snapshot_revision FROM jd_live_advice WHERE bank=? AND analyst=? '
                                   'ORDER BY id DESC LIMIT 1', (data.get('bank'), model)).fetchone()
             if not latest:
-                return True
+                return None
             watch = json.loads(latest[2]).get('buy_watch') or {}
             if data.get('plan_id'):
                 if (watch.get('id') != data['plan_id']
-                        or event_id.startswith('live-buy-confirmed:') and now >= stamp(watch['expires_at'])):
-                    return True
-                current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
-                return not current or current[0].get('revision') != latest[3]
-            return latest[0] != data.get('advice_id') or now >= stamp(latest[1])
-        return False
+                        or confirmation and now >= stamp(watch['expires_at'])):
+                    return None
+            elif latest[0] != data.get('advice_id') or now >= stamp(latest[1]):
+                return None
+            current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
+            if not current or current[0].get('revision') != latest[3]:
+                return None
+            if confirmation:
+                routes = active_routes(conn, current[0], data.get('routes', []), now)
+                return with_active_routes(event, routes) if routes else None
+        return event
+
+    def prune(events):
+        return [fresh for event in events if (fresh := validated(event)) is not None]
 
     pending = read(conn, model)['pending']
-    if not any(obsolete(event) for event in pending):
+    if prune(pending) == pending:
         return pending
     with conn:
         conn.execute('BEGIN IMMEDIATE')
         events = read(conn, model)
-        pending = [event for event in events['pending'] if not obsolete(event)]
+        pending = prune(events['pending'])
         if pending != events['pending']:
             events['pending'] = pending
             write(conn, model, events)
