@@ -519,6 +519,37 @@ class BuyAuditTests(unittest.TestCase):
                 if phase == 'confirmed':
                     self.assertEqual(datetime.fromisoformat(row['confirmation']['quoted_at']), point(8, 804)[0])
 
+    def test_plain_buy_status_reports_distance_without_using_quotes_after_replacement(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'plain-observations.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            plain = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 800}
+            upper = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 810}
+            conditions = [plain, upper, {**plain, 'quote_side': 'sell'}, {**plain, 'order_key': 'old'}, zoned_route()]
+            replacement = START + timedelta(minutes=4)
+            expires = START + timedelta(minutes=15)
+            with store.conn:
+                for i, published in ((1,START), (2,replacement)):
+                    store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
+                        published.isoformat(), expires.isoformat(), 'v1', json.dumps({'review_conditions': conditions})))
+            for minute, price in ((0.5,802), (1.5,801), (3,801.1), (4.5,799), (5.5,802)):
+                record(store.conn, 'zheshang', point(minute,price))
+            record(store.conn, 'zheshang', (START+timedelta(minutes=2), replacement+timedelta(seconds=15), 798, 798))
+
+            early, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=3.5))['cases']
+            self.assertEqual(early['plain_buy_quote_observations'][0]['status'], 'pending')
+            latest, old = report(store.conn, 'zheshang', 'codex', 2, START+timedelta(minutes=16))['cases']
+            low, high = old['plain_buy_quote_observations']
+            self.assertEqual(low['status'], 'threshold_not_sampled')
+            self.assertEqual((low['extreme_buy_cny'],low['distance_to_threshold_cny_per_gram'],low['quote_samples']), (801,1,3))
+            self.assertEqual(datetime.fromisoformat(low['expires_at']), replacement)
+            self.assertEqual((high['extreme_buy_cny'],high['distance_to_threshold_cny_per_gram']), (802,8))
+            self.assertEqual([row['status'] for row in latest['plain_buy_quote_observations']],
+                             ['threshold_sampled','quote_coverage_incomplete'])
+            self.assertEqual(datetime.fromisoformat(latest['plain_buy_quote_observations'][0]['first_threshold_sample_at']),
+                             point(4.5,799)[0])
+
     def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'renewed-windows.db')

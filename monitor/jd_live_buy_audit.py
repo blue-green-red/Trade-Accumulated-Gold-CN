@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 from .config import Settings
 from .jd_live_buy_watch import (MAX_GAP, advance_watch, breakout_retest_price_status, eligible, utc_text,
                                watch_deadline, watch_routes)
-from .jd_live_conditions import archived_bank_quotes, condition_key, pullback_depth, stamp, zoned_pullback
-from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, stored_price_condition
+from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
+from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
@@ -755,6 +755,36 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
             'timing_comparison': compare_review_timings((path for _, path in episodes.values()), grams)}
 
 
+def plain_buy_quote_observations(value, published, expires, quotes, now):
+    """Show whether each ordinary price level was reached on available quotes."""
+    conditions = [item for item in value.get('review_conditions', []) if plain_buy_observation(item)]
+    if not conditions or expires <= published:
+        return []
+    points = list(observable_quotes(p for p in quotes if published <= p[0] <= p[1] < expires and p[1] <= now))
+    complete = now >= expires and bool(points) and complete_sampling(published, expires, points)
+    available = []
+    for condition in conditions:
+        threshold = condition['price_cny']
+        direction = condition['condition']
+        row = {'condition': direction, 'threshold_cny': threshold, 'expires_at': utc_text(expires),
+               'quote_samples': len(points)}
+        gap = None
+        if points:
+            closest = (min if direction == 'at_or_below' else max)(p[2] for p in points)
+            gap = threshold - closest if direction == 'at_or_above' else closest - threshold
+            row.update(extreme_buy_cny=closest, distance_to_threshold_cny_per_gram=round(max(0., gap), 2))
+        if gap is not None and gap <= 0:
+            status = 'threshold_sampled'
+            first = next(p for p in points if price_met(condition, p[2]))
+            row['first_threshold_sample_at'] = utc_text(first[0])
+        elif now < expires:
+            status = 'pending'
+        else:
+            status = 'threshold_not_sampled' if complete else 'quote_coverage_incomplete'
+        available.append({**row, 'status': status})
+    return available
+
+
 def report(conn, bank, model, limit, now, *, grams=GRAMS):
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone():
         return {'status': 'sampling_not_initialized', 'cases': []}
@@ -765,6 +795,7 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
     history = [(advice_id, published, end, json.loads(raw), view_id) for advice_id, created, expires, raw, view_id in recent
                if (published := stamp(created)) and (end := stamp(expires)) and published <= now]
     windows = pullback_observation_windows(reversed(history))
+    next_publications = {older[0]: newer[1] for newer, older in zip(history, history[1:])}
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, published, end, value, view_id in history[:limit]:
         rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
@@ -787,6 +818,8 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                     condition['pullback_depth'] = depth
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
+                      'plain_buy_quote_observations': plain_buy_quote_observations(
+                          value, published, min(end, next_publications.get(advice_id, end)), points, now),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})
