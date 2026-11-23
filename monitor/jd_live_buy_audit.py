@@ -18,6 +18,7 @@ from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
 
 GRAMS = 10
+DELAYED_HORIZON_WINDOW = timedelta(minutes=30)
 
 
 def complete_sampling(start, end, points):
@@ -633,6 +634,19 @@ def first_review_quote(conn, bank, start, cutoff, archive):
                key=lambda row: (row[3], -stamp(row[0]).timestamp()), default=None)
 
 
+def first_delayed_horizon_quote(conn, bank, target, strict_deadline, cutoff, archive):
+    """Choose the first fresh quote received after the regular horizon window."""
+    if cutoff <= strict_deadline:
+        return None
+    start, deadline, end = map(utc_text, (target, strict_deadline, cutoff))
+    tape = conn.execute('SELECT quoted_at,buy_price_cny,sell_price_cny,observed_at FROM jd_live_quote_samples '
+                        'WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>? AND observed_at<=?',
+                        (bank, start, end, deadline, end))
+    candidates = [row for row in tape if timedelta(0) <= stamp(row[3]) - stamp(row[0]) <= MAX_GAP]
+    candidates.extend(row for key, row in (archive or {}).items() if start <= key <= end and deadline < row[3] <= end)
+    return min(candidates, key=lambda quote: (quote[3], -stamp(quote[0]).timestamp()), default=None)
+
+
 def quote_source(sample):
     return (sample[4] if len(sample) > 4 else 'bank_quote_tape') if sample else None
 
@@ -724,6 +738,7 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
     for days in (1, 3):
         row = {'trading_days': days, 'wait': {'status': 'valued', 'net_cny': 0.0}}
         if not confirmed or not price:
+            row['status'] = 'signal_unavailable'
             row.update({key: unavailable('signal_unavailable') for key in entry_keys})
             horizons.append(row)
             continue
@@ -733,9 +748,24 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
         exit_quote = first_review_quote(conn, bank, target, cutoff, archive)
         if not exit_quote:
             status = 'pending' if now < deadline else 'horizon_quote_missing'
+            row['status'] = status
             row.update({key: unavailable(status) for key in entry_keys})
+            session_close = stamp(trading_session(target)['close_at']) - timedelta(microseconds=1)
+            delayed_deadline = min(target + DELAYED_HORIZON_WINDOW, session_close)
+            if delayed_deadline > deadline:
+                sensitivity = {'trading_days': days, 'target_at': utc_text(target), 'deadline_at': utc_text(delayed_deadline),
+                               'status': 'pending' if now < delayed_deadline else 'horizon_quote_missing'}
+                delayed = first_delayed_horizon_quote(conn, bank, target, deadline, min(now, delayed_deadline), archive)
+                if delayed:
+                    sensitivity.update(status='observed', exit_quote_at=delayed[0], exit_observed_at=delayed[3],
+                                       exit_quote_source=quote_source(delayed),
+                                       seconds_after_target=elapsed_seconds(target, stamp(delayed[3])))
+                    sensitivity.update(observed_entry_marks(conn, bank, confirmed, price, fee, published,
+                                       publication_quote, target, delayed, grams, entry_checks, confirmed_quote, sizing))
+                row['delayed_quote_sensitivity'] = sensitivity
             horizons.append(row)
             continue
+        row['status'] = 'observed'
         row['exit_quote_at'] = exit_quote[0]
         row['exit_quote_source'] = quote_source(exit_quote)
         row.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target,
@@ -972,7 +1002,8 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
     return {'status': 'available' if archived else 'input_archives_unavailable',
             'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary,
             'timing_comparison': compare_review_timings(matched_paths, grams),
-            'position_size_comparison': summarize_position_sizes(matched_paths)}
+            'position_size_comparison': summarize_position_sizes(matched_paths),
+            'position_size_delayed_sensitivity': summarize_position_sizes(matched_paths, delayed=True)}
 
 
 def plain_buy_review_index(cases):

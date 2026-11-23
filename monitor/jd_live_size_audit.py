@@ -1,5 +1,5 @@
 """Offline comparison of total position sizes at the same observed bank entry."""
-from collections import defaultdict
+from collections import Counter, defaultdict
 from math import floor
 
 from .trade_costs import number
@@ -96,17 +96,22 @@ def position_marks(sizing, mark):
     return outcomes
 
 
-def summarize_position_sizes(paths):
+def summarize_position_sizes(paths, *, delayed=False):
     grouped = defaultdict(lambda: defaultdict(list))
     for path in paths:
         sizing = path.get('position_size_at_publication') or {}
         if sizing.get('status') != 'available':
             continue
-        for rows, unit, field in ((path['quote_followups'], 'm', 'minutes'),
-                                  (path['trading_day_followups'], 'd', 'trading_days')):
+        trading_days = path['trading_day_followups']
+        if delayed:
+            periods = (([row['delayed_quote_sensitivity'] for row in trading_days if 'delayed_quote_sensitivity' in row],
+                        'd', 'trading_days'),)
+        else:
+            periods = ((path['quote_followups'], 'm', 'minutes'), (trading_days, 'd', 'trading_days'))
+        for rows, unit, field in periods:
             for row in rows:
                 grouped[path['branch']][f'{row[field]}{unit}'].append(
-                    (sizing, row.get('position_size_marks', {}), path.get('outcome')))
+                    (sizing, row.get('position_size_marks', {}), path.get('outcome'), row.get('status', 'unknown')))
     summary = {}
     for branch, horizons in grouped.items():
         summary[branch] = {}
@@ -117,7 +122,7 @@ def summarize_position_sizes(paths):
                 deltas, nav_deltas, adverse_deltas = [], [], []
                 risk_known = within_risk = gross_up_but_net_unprofitable = 0
                 no_buy_pairs = no_buy_then_net_profitable = 0
-                for sizing, marks, outcome in episodes:
+                for sizing, marks, outcome, _ in episodes:
                     if lower not in marks or upper not in marks:
                         continue
                     small, large = marks[lower], marks[upper]
@@ -143,5 +148,7 @@ def summarize_position_sizes(paths):
                     'mean_extra_net_nav_pct': round(sum(nav_deltas) / len(nav_deltas), 5) if nav_deltas else None,
                     'mean_extra_adverse_cny': round(sum(adverse_deltas) / len(adverse_deltas), 2) if adverse_deltas else None,
                 }
-            summary[branch][horizon] = {'size_inputs_available': len(episodes), 'pairs': pairs}
+            summary[branch][horizon] = {'size_inputs_available': len(episodes),
+                                        'quote_status_counts': dict(Counter(status for _, _, _, status in episodes)),
+                                        'pairs': pairs}
     return summary

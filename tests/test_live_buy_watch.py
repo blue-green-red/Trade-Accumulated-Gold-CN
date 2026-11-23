@@ -549,6 +549,46 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_delayed_trading_day_marks_use_fresh_quotes_only_and_preserve_the_strict_result(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'delayed.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            record(store.conn, 'zheshang', (START, START, 800, 800))
+            record(store.conn, 'zheshang', point(2, 801))
+            target = START + timedelta(days=1)
+            record(store.conn, 'zheshang', (target + timedelta(minutes=4), target + timedelta(minutes=8), 950, 950))
+            record(store.conn, 'minsheng', point(1445, 900))
+            record(store.conn, 'zheshang', point(1450, 814))
+            record(store.conn, 'zheshang', point(4351, 890))
+            archived = point(1449, 813)
+            key = archived[0].isoformat(timespec='microseconds')
+            archive = {key: (key, 813, 813, archived[1].isoformat(timespec='microseconds'), 'analysis_archive')}
+            early = first_observed_quote(store.conn, 'zheshang', START, START)
+            entry = first_observed_quote(store.conn, 'zheshang', point(2, 801)[0], point(2, 801)[1])
+
+            def replay(now):
+                return observed_review_horizons(store.conn, 'zheshang', START, 800, .005,
+                                                START + timedelta(minutes=2), entry, now,
+                                                confirmed_quote=early, archive=archive)
+
+            provisional = replay(target + timedelta(minutes=8, seconds=30))[0]
+            self.assertEqual(provisional['status'], 'horizon_quote_missing')
+            self.assertEqual(provisional['delayed_quote_sensitivity']['status'], 'pending')
+            one_day, three_day = replay(START + timedelta(days=4))
+            self.assertEqual(one_day['after_analysis_10g']['status'], 'horizon_quote_missing')
+            delayed = one_day['delayed_quote_sensitivity']
+            self.assertEqual(delayed['exit_quote_source'], 'analysis_archive')
+            self.assertEqual(delayed['seconds_after_target'], 550)
+            self.assertEqual(delayed['after_analysis_10g']['net_cny'], round((813 * .995 - 801) * 10, 2))
+            self.assertIsNone(delayed['after_analysis_10g']['sampled_adverse_excursion_cny'])
+            self.assertEqual(three_day['delayed_quote_sensitivity']['status'], 'horizon_quote_missing')
+
+            record(store.conn, 'zheshang', point(1441, 803))
+            regular = replay(START + timedelta(days=4))[0]
+            self.assertEqual(regular['status'], 'observed')
+            self.assertNotIn('delayed_quote_sensitivity', regular)
+
     def test_shallow_replay_uses_only_the_contemporaneous_bank_low(self):
         end = START + timedelta(minutes=8)
         now = end + timedelta(minutes=1)

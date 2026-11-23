@@ -60,3 +60,15 @@ class PositionSizeAuditTests(unittest.TestCase):
         self.assertEqual(result['larger_within_risk_reference'], 0)
         self.assertEqual(result['complete_adverse_samples'], 1)
         self.assertEqual(result['mean_extra_adverse_cny'], 105)
+        paths[0]['trading_day_followups'] = [
+            {'trading_days': 1, 'status': 'horizon_quote_missing',
+             'delayed_quote_sensitivity': {'trading_days': 1, 'status': 'observed', 'position_size_marks': good}},
+            {'trading_days': 3, 'status': 'pending',
+             'delayed_quote_sensitivity': {'trading_days': 3, 'status': 'pending'}},
+        ]
+        branch = 'breakout_continuation'
+        strict = summarize_position_sizes(paths)[branch]
+        delayed = summarize_position_sizes(paths, delayed=True)[branch]
+        self.assertEqual(strict['1d']['pairs']['20_to_40']['paired_samples'], 0)
+        self.assertEqual(delayed['1d']['pairs']['20_to_40']['no_buy_then_net_profitable'], 1)
+        self.assertEqual(delayed['3d']['quote_status_counts'], {'pending': 1})
