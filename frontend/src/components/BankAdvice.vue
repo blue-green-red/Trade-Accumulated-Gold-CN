@@ -10,6 +10,7 @@ import {
   modelNames,
   quantity,
   num,
+  signed,
   fmtTs,
   pastDeadline,
 } from "../format";
@@ -104,7 +105,8 @@ const conditionState = (c) =>
       ? "data_unavailable"
       : c.monitoring?.status;
 const conditionHeading = (c) => {
-  if (c.bank_breakout?.earlier_high) return `更早高位 ${num(c.price_cny)} 元/克`;
+  if (c.bank_breakout?.earlier_high)
+    return `更早高位 ${num(c.price_cny)} 元/克`;
   if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后观察`;
   const floor = c.buy_review?.zone?.floor_cny;
   if (floor != null) {
@@ -258,6 +260,70 @@ const proposalState = (order) => {
         :note="advice.presentation?.execution_note"
         :active="partState === 'current' && quoteFresh"
       />
+      <section
+        v-if="advice.presentation?.buy_sizing?.length"
+        class="live-quote"
+        data-buy-sizing
+      >
+        <div class="live-section-heading">
+          <strong>买入克数测算</strong><span class="sub">按分析时数据</span>
+        </div>
+        <div
+          v-for="(size, i) in advice.presentation.buy_sizing"
+          :key="i"
+          class="sub"
+        >
+          <strong>{{
+            {
+              immediate: "本轮买入",
+              recommend: "限价买入建议",
+              needs_review: "回调复评情景",
+            }[size.kind]
+          }}</strong>
+          · 按 {{ num(size.entry_price_cny) }} 元/克
+          <template v-if="size.suggested_grams != null">
+            · 建议 {{ num(size.suggested_grams, 4) }} 克</template
+          >
+          <div v-if="size.target_add_grams != null">
+            达到 {{ num(size.target_position_pct) }}% 总仓位约需追加
+            {{ num(size.target_add_grams) }} 克
+            <template v-if="size.suggested_grams == null">
+              · 克数待复评后确定</template
+            >
+          </div>
+          <div v-if="size.spending_cny != null">
+            {{ size.suggested_grams == null ? "按目标估算" : "按建议估算" }}投入
+            {{ num(size.spending_cny) }} 元
+            <template v-if="size.spending_nav_pct != null">
+              · 占净值 {{ num(size.spending_nav_pct) }}%</template
+            >
+            <template v-if="size.position_after_pct != null">
+              · 成交后总仓位 {{ num(size.position_after_pct) }}%</template
+            >
+          </div>
+          <div
+            v-if="size.cash_cap_grams != null || size.risk_cap_grams != null"
+          >
+            <template v-if="size.cash_cap_grams != null"
+              >扣现有买单后现金可买 {{ num(size.cash_cap_grams) }} 克</template
+            >
+            <template
+              v-if="size.cash_cap_grams != null && size.risk_cap_grams != null"
+            >
+              ·
+            </template>
+            <template v-if="size.risk_cap_grams != null"
+              >风险预算上限参考 {{ num(size.risk_cap_grams) }} 克</template
+            >
+          </div>
+          <div v-if="size.account_at_exit_change_cny != null">
+            到 {{ num(size.exit_price_cny) }} 元/克时，现仓加本批的扣费净值变化
+            {{ signed(size.account_at_exit_change_cny) }} 元（{{
+              signed(size.account_at_exit_change_pct, 3)
+            }}%）
+          </div>
+        </div>
+      </section>
       <DownsideReview :items="advice.downside_scenarios" />
       <section class="live-proposals">
         <div class="live-quote" data-protection-status>
@@ -417,9 +483,7 @@ const proposalState = (order) => {
       <div v-if="!advice.review_conditions?.length" class="sub">
         本轮未设置价格复评条件，沿用其他事件和周期调度。
       </div>
-      <div v-else class="sub">
-        达到观察条件会排队重新分析。
-      </div>
+      <div v-else class="sub">达到观察条件会排队重新分析。</div>
       <div
         v-for="(c, i) in advice.review_conditions || []"
         :key="i"
@@ -448,30 +512,45 @@ const proposalState = (order) => {
           本行近期回补报价已提高，触价后重新评估。
         </div>
         <div v-if="c.bank_breakout" class="sub">
-          突破后至少 {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
-          跨满 {{ c.monitoring?.continuation_minutes ?? 3 }} 分钟且刷新突破后的高点时复评。
+          突破后至少
+          {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
+          跨满
+          {{
+            c.monitoring?.continuation_minutes ?? 3
+          }}
+          分钟且刷新突破后的高点时复评。
           <template v-if="!c.bank_breakout.earlier_high">
-            突破后回踩 {{ num(c.price_cny) }}–{{ num(c.bank_breakout.retest_ceiling_cny) }}
-            元/克，守住 {{ num(c.price_cny) }} 元/克满 {{ c.bank_breakout.hold_minutes }} 分钟后复评。
+            突破后回踩 {{ num(c.price_cny) }}–{{
+              num(c.bank_breakout.retest_ceiling_cny)
+            }}
+            元/克，守住 {{ num(c.price_cny) }} 元/克满
+            {{ c.bank_breakout.hold_minutes }} 分钟后复评。
           </template>
         </div>
         <div v-if="c.buy_review?.zone && !c.checks?.length" class="sub">
           <template v-if="c.condition === 'at_or_above'">
-            回踩观察区 {{ num(c.buy_review.zone.floor_cny) }}–{{ num(c.price_cny) }}
+            回踩观察区 {{ num(c.buy_review.zone.floor_cny) }}–{{
+              num(c.price_cny)
+            }}
             元/克。
           </template>
           买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
           {{ c.buy_review.hold_minutes }} 分钟、且不超过
           {{ num(c.buy_review.max_buy_price_cny) }} 元/克，再评估{{
-            c.buy_review.grams == null ? "是否加仓及数量" : "是否买入 " + quantity(c.buy_review.grams)
+            c.buy_review.grams == null
+              ? "是否加仓及数量"
+              : "是否买入 " + quantity(c.buy_review.grams)
           }}。跌穿区间下缘则放弃。
           {{ c.buy_review.zone.basis }}
         </div>
         <div v-else-if="c.buy_review && !c.checks?.length" class="sub">
-          {{ c.condition === "at_or_above" ? "突破后等回踩" : "回调触价后等回升" }}，
-          买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
+          {{
+            c.condition === "at_or_above" ? "突破后等回踩" : "回调触价后等回升"
+          }}， 买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
           {{ c.buy_review.hold_minutes }} 分钟，再评估{{
-            c.buy_review.grams == null ? "是否加仓及数量" : "是否买入 " + quantity(c.buy_review.grams)
+            c.buy_review.grams == null
+              ? "是否加仓及数量"
+              : "是否买入 " + quantity(c.buy_review.grams)
           }}。触价后若超过
           {{ num(c.buy_review.max_buy_price_cny) }} 元/克，本轮放弃。
         </div>
@@ -480,7 +559,11 @@ const proposalState = (order) => {
           {{ fmtTs(c.monitoring.last_quote_at) }}
         </div>
         <div v-if="c.monitoring?.triggered_at" class="live-quote-time">
-          {{ c.monitoring.confirmation_mode === "continuation" ? "持续走高触发" : "触发时间" }}
+          {{
+            c.monitoring.confirmation_mode === "continuation"
+              ? "持续走高触发"
+              : "触发时间"
+          }}
           {{ fmtTs(c.monitoring.triggered_at) }}
         </div>
         <div class="sub">

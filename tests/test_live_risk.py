@@ -5,7 +5,7 @@ import unittest
 import os
 from unittest.mock import patch
 
-from monitor.jd_live_risk import account_risk,effect,annotate,validate_downside
+from monitor.jd_live_risk import account_risk,effect,annotate,buy_sizing,validate_downside
 from monitor.jd_live_proposals import proposal_signature,format_proposals
 from monitor.jd_live_semantics import notification_parts
 from monitor.public_ai import privacy_ok
@@ -77,6 +77,39 @@ class AccountRiskTests(unittest.TestCase):
             self.assertIsNone(effect(s,840,'sell',100))
         self.assertIsNone(effect(source(),840,'sell',201))
         self.assertIsNone(effect(source(),850,'buy',1000))
+
+    def test_buy_sizing_accounts_for_reserved_cash_existing_holdings_and_exit_fees(self):
+        value={'action':'buy','price_condition':'at_or_below','price_cny':920,'grams':2,
+               'input_data_status':{'account':'fresh'},'input_quote_status':'fresh',
+               'input_buy_quote_cny':1000,'input_quote_cny':1000,'input_sell_fee_rate':.004,
+               'input_state':{'cash_cny':10000,'total_grams':10},'input_participation_cash_cny':8000,
+               'input_account_risk':{'net_assets_cny':19960,'risk_budget_cny':1500},
+               'position_path':{'target_position_pct':60,'boundary_price_cny':880}}
+        result,=buy_sizing(value)
+        self.assertEqual(result['kind'],'immediate')
+        self.assertEqual(result['suggested_grams'],2)
+        self.assertEqual(result['target_add_grams'],2.5217)
+        self.assertEqual(result['position_after_pct'],57.5)
+        self.assertEqual(result['spending_cny'],1840)
+        self.assertEqual(result['cash_cap_grams'],8.69)
+        self.assertEqual(result['risk_cap_grams'],7.0)
+        self.assertEqual(result['account_at_exit_change_cny'],-1282.24)
+        self.assertEqual(result['added_loss_cny_per_gram'],43.52)
+
+    def test_buy_sizing_keeps_observation_quantities_hypothetical_and_unknown_limits_omitted(self):
+        case={'decision':'needs_review','entry_price_cny':900,'risk_exit_cny':875,'grams':None}
+        value={'action':'hold','input_data_status':{'account':'fresh'},'input_quote_status':'fresh',
+               'input_state':{'cash_cny':90000,'total_grams':0},'input_quote_cny':950,
+               'input_account_risk':{'net_assets_cny':90000},'position_path':{'target_position_pct':2},
+               'limit_buy_reviews':[{'decision':'not_worthwhile','entry_price_cny':940},case]}
+        result,=buy_sizing(value)
+        self.assertIsNone(result['suggested_grams'])
+        self.assertEqual((result['target_add_grams'],result['position_after_pct']),(2.,2.))
+        self.assertNotIn('cash_cap_grams',result)
+        self.assertNotIn('risk_cap_grams',result)
+        self.assertNotIn('account_at_exit_change_cny',result)
+        self.assertEqual(buy_sizing({**value,'input_quote_status':'historical'}),[])
+        self.assertEqual(buy_sizing({**value,'limit_buy_reviews':[case,{**case,'entry_price_cny':890}]}),[])
 
     def test_annotation_does_not_rewrite_orders_or_create_notification_churn(self):
         order={'kind':'take_profit_stop_loss','grams':100.,'price_cny':900.,'loss_price_cny':840.}

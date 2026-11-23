@@ -1,4 +1,6 @@
 """Deterministic bank-account valuations and hypothetical effects; never places orders."""
+from math import floor
+
 from .trade_costs import number
 
 
@@ -80,6 +82,80 @@ def annotate(value,source):
         order['account_effects']={'trigger':effect(source,order['price_cny'],side,order['grams'])}
         if order['kind']=='take_profit_stop_loss':
             order['account_effects']['stop_loss']=effect(source,order.get('loss_price_cny'),side,order['grams'])
+
+
+def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None):
+    """Recalculate a proposed batch at its entry price using the saved bank inputs."""
+    state = advice.get('input_state') or {}
+    assets = advice.get('input_account_risk') or {}
+    cash, holding = number(state.get('cash_cny')), number(state.get('total_grams'))
+    available = number(advice.get('input_participation_cash_cny'))
+    net = number(assets.get('net_assets_cny'))
+    data = {'entry_price_cny': entry, 'suggested_grams': grams}
+    if available is not None:
+        data['cash_cap_grams'] = floor(available / entry * 100) / 100
+    gross_at_entry = cash + holding * entry if cash is not None and holding is not None else None
+    sized = grams
+    if target is not None and gross_at_entry:
+        target_grams = max(0., (target / 100 * gross_at_entry) / entry - holding)
+        data.update(target_position_pct=target, target_add_grams=round(target_grams, 4))
+        if sized is None:
+            sized = target_grams
+    if sized is not None:
+        spending = sized * entry
+        data['spending_cny'] = round(spending, 2)
+        if net:
+            data['spending_nav_pct'] = round(spending / net * 100, 4)
+        if gross_at_entry and spending <= cash + 1e-8:
+            data['position_after_pct'] = round((holding + sized) * entry / gross_at_entry * 100, 4)
+
+    fee = number(advice.get('input_sell_fee_rate'))
+    if not exit_price or exit_price >= entry or fee is None or fee >= 1:
+        return data
+    net_at_exit = exit_price * (1 - fee)
+    added_loss = entry - net_at_exit
+    data.update(exit_price_cny=exit_price, added_loss_cny_per_gram=round(added_loss, 4))
+    current_sell = number(advice.get('input_quote_cny'))
+    budget = number(assets.get('risk_budget_cny'))
+    if holding is None or not current_sell or not net:
+        return data
+    held_loss = holding * (current_sell - exit_price) * (1 - fee)
+    if budget is not None:
+        remaining_risk = max(0., budget - max(0., held_loss))
+        data['risk_cap_grams'] = floor(remaining_risk / added_loss * 100) / 100
+    if sized is not None and cash is not None and sized * entry <= cash + 1e-8:
+        account_delta = -(held_loss + sized * added_loss)
+        data.update(account_at_exit_change_cny=round(account_delta, 2),
+                    account_at_exit_change_pct=round(account_delta / net * 100, 4))
+    return data
+
+
+def buy_sizing(advice):
+    """Keep immediate quantities and conditional target illustrations distinct."""
+    if ((advice.get('input_data_status') or {}).get('account') != 'fresh'
+            or advice.get('input_quote_status') != 'fresh'):
+        return []
+    path = advice.get('position_path') or {}
+    target = number(path.get('target_position_pct')) if not path.get('checks') else None
+    if target is not None and target > 100:
+        target = None
+    result = []
+    if advice.get('action') == 'buy' and (grams := number(advice.get('grams'))):
+        reference = number(advice.get('price_cny')) or 0
+        quote = number(advice.get('input_buy_quote_cny')) or 0
+        entry = reference if advice.get('price_condition') == 'at_or_below' else max(reference, quote)
+        if entry:
+            exit_price = number(path.get('boundary_price_cny')) if not path.get('checks') else None
+            result.append({'kind': 'immediate', **buy_size_metrics(advice, entry, grams, target=target, exit_price=exit_price)})
+    candidates = [review for review in advice.get('limit_buy_reviews', []) if not review.get('checks')
+                  and review.get('decision') in ('recommend', 'needs_review') and number(review.get('entry_price_cny'))]
+    candidate_target = target if advice.get('action') in ('hold', 'wait') and len(candidates) == 1 else None
+    for review in candidates:
+        grams = number(review.get('grams'))
+        if grams or candidate_target is not None:
+            result.append({'kind': review['decision'], **buy_size_metrics(advice, float(review['entry_price_cny']),
+                grams, target=candidate_target, exit_price=number(review.get('risk_exit_cny')))})
+    return result
 
 
 def validate_downside(value,source,require=False):

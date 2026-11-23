@@ -59,5 +59,8 @@ def plan_steps(path):
 
 
 def presentation(value):
+    from .jd_live_risk import buy_sizing
+
     path=value.get('position_path') or {}
-    return {'basis':basis(value),'plan_steps':plan_steps(path),'execution_note':full_text(path.get('execution_note'))}
+    return {'basis':basis(value),'plan_steps':plan_steps(path),'execution_note':full_text(path.get('execution_note')),
+            'buy_sizing':buy_sizing(value)}
