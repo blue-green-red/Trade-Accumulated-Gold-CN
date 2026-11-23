@@ -257,7 +257,9 @@ def refresh(store,client,groups=None,now=None):
             record_success(store.conn,bank,data,times['account'] if 'core' in current else before[1])
             if 'core' not in current and meta and meta[0]!='fresh':record_failure(store.conn,bank,meta[0],meta[1])
         except PermissionError:record_failure(store.conn,bank,'login_required')
-        except Exception:record_failure(store.conn,bank,'unavailable')
+        except Exception as exc:
+            log.warning('京东账户采集失败 %s (%s)',bank,type(exc).__name__)
+            record_failure(store.conn,bank,'unavailable')
     from .jd_live_review import request_reviews
     try:
         request_reviews(store,observed_now(),after_sync=True)
@@ -341,7 +343,8 @@ def run(once=False):
                 except PermissionError:
                     status='login_required'
                     for bank in enabled_banks(store.conn):record_failure(store.conn,bank,'login_required')
-                except Exception:
+                except Exception as exc:
+                    log.warning('京东采集进程无法完成刷新 (%s)',type(exc).__name__)
                     status='unavailable'
                     for bank in enabled_banks(store.conn):record_failure(store.conn,bank,'unavailable')
                 last_request=wanted
