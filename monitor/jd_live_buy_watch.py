@@ -192,28 +192,39 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
                           'generation': generation}
 
 
+def failed_breakout(at, buy):
+    return {'stage': 'breakout_failed', 'last_at': utc_text(at), 'last_price_cny': buy}
+
+
 def advance_breakout(state, condition, at, buy):
     threshold = condition['price_cny']
     stage = state.get('stage')
-    if not stage:
+    if stage in (None, 'breakout_failed'):
         if buy > threshold:
             return {**state, 'stage': 'touched', 'peak': buy, 'touched_at': utc_text(at),
-                    'continuation_since': utc_text(at), 'breakout_buy_price_cny': buy, 'breakout_quote_count': 1}
+                    'continuation_since': utc_text(at), 'breakout_quote_count': 1}
         return state
     if buy < threshold:
-        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
+        return failed_breakout(at, buy)
+
+    rising = buy > state['peak']
+    if buy > threshold:
+        since = state.setdefault('continuation_since', utc_text(at))
+        count = state['breakout_quote_count'] = state.get('breakout_quote_count', 0) + 1
+        if (rising and count >= CONTINUATION_MIN_QUOTES
+                and at - stamp(since) >= timedelta(minutes=CONTINUATION_HOLD_MINUTES)):
+            return {**state, 'stage': 'confirmed', 'peak': buy, 'confirmed_at': utc_text(at),
+                    'hold_since': since, 'confirmation_mode': 'continuation'}
+    else:
+        state.pop('continuation_since', None)
+        state.pop('breakout_quote_count', None)
+
+    peak = state['peak']
+    state['peak'] = max(peak, buy)
     rule = condition['bank_breakout']
     if stage == 'touched':
-        if buy > rule['retest_ceiling_cny'] or buy >= state['peak']:
-            state.setdefault('continuation_since', utc_text(at))
-            state.setdefault('breakout_buy_price_cny', buy)
-            count = state['breakout_quote_count'] = state.get('breakout_quote_count', 0) + 1
-            if (count >= CONTINUATION_MIN_QUOTES
-                    and at - stamp(state['continuation_since']) >= timedelta(minutes=CONTINUATION_HOLD_MINUTES)
-                    and buy > max(state['peak'], state['breakout_buy_price_cny'])):
-                return {**state, 'stage': 'confirmed', 'peak': buy, 'confirmed_at': utc_text(at),
-                        'hold_since': state['continuation_since'], 'confirmation_mode': 'continuation'}
-            return {**state, 'peak': max(state['peak'], buy)}
+        if buy > rule['retest_ceiling_cny'] or buy >= peak:
+            return state
         return {**state, 'stage': 'holding', 'hold_since': utc_text(at)}
     since = stamp(state.get('hold_since'))
     if at - since >= timedelta(minutes=rule['hold_minutes']):
@@ -224,12 +235,19 @@ def advance_breakout(state, condition, at, buy):
 def advance(state, condition, at, buy):
     """Require ordered quotes with no stale gap across the setup and its hold."""
     previous_at = stamp(state.get('last_at'))
-    if state.get('stage') in ('confirmed', 'above_cap', 'pullback_lost') or (previous_at and at <= previous_at):
+    stage = state.get('stage')
+    bank_breakout = condition.get('bank_breakout')
+    if stage in ('confirmed', 'above_cap') or (previous_at and at <= previous_at):
         return state
+    if stage == 'pullback_lost' and not bank_breakout:
+        return state
+    if stage == 'pullback_lost':
+        # Existing observation plans can resume after the older terminal failure.
+        state = failed_breakout(previous_at or at, state.get('last_price_cny'))
     if previous_at and at - previous_at > MAX_GAP:
         state = {}
     state = {**state, 'last_at': utc_text(at), 'last_price_cny': buy}
-    if condition.get('bank_breakout'):
+    if bank_breakout:
         return advance_breakout(state, condition, at, buy)
     review = condition['buy_review']
     trigger = condition['price_cny']
@@ -376,8 +394,7 @@ def request(store, account, advice, now, point):
             review = condition.get('buy_review')
             if previous.get('stage') == 'confirmed' and at > stamp(previous['last_at']):
                 if condition.get('bank_breakout') and buy < condition['price_cny']:
-                    step = {**previous, 'stage': 'pullback_lost', 'last_at': utc_text(at),
-                            'last_price_cny': buy, 'confirmed_at': None}
+                    step = failed_breakout(at, buy)
                 elif review and buy > review['max_buy_price_cny']:
                     step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
                 elif review and review.get('zone') and buy < review['recovery_price_cny']:

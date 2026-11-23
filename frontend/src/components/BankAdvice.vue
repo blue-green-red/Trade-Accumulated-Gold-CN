@@ -39,6 +39,7 @@ const monitorStates = {
   monitoring: "监控中",
   queued: "已触发 · 待复评",
   reviewed: "已触发 · 已纳入复评",
+  plan_reviewed: "本计划已复评",
   latched: "持续满足 · 不重复触发",
   price_limit_exceeded: "已超过买价上限 · 本轮放弃",
   pullback_lost: "已跌穿回踩区间 · 本轮放弃",
@@ -53,6 +54,7 @@ const confirmationStages = {
   touched: "已触价 · 等待回升或回踩",
   retest: "已回踩 · 等待收复观察价",
   holding: "已达到观察价 · 正在计时",
+  breakout_failed: "突破失守 · 等待再次突破",
 };
 const state = computed(() =>
   pastDeadline(props.advice)

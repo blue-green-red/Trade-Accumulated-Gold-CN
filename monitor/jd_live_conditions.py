@@ -163,7 +163,8 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if not target or (stamp(target.get('expires_at')) and stamp(target['expires_at'])<=now):
             result['status']='order_inactive';return result
     from .ai_events import read
-    pending=read(conn,advice['analyst'])['pending']
+    events=read(conn,advice['analyst'])
+    pending=events['pending']
     if condition.get('buy_review') or condition.get('bank_breakout'):
         current=read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}')
         identity=watch_id(advice)
@@ -176,6 +177,8 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
             status='queued' if any(e['id']==event_id for e in pending) else 'reviewed'
+        elif condition.get('bank_breakout') and event_id in events['covered']:
+            status='plan_reviewed'
         if condition.get('bank_breakout'):
             from .jd_live_buy_watch import CONTINUATION_HOLD_MINUTES, CONTINUATION_MIN_QUOTES
             result.update(continuation_minutes=CONTINUATION_HOLD_MINUTES, continuation_min_quotes=CONTINUATION_MIN_QUOTES,

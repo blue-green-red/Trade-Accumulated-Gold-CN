@@ -87,8 +87,9 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(self.advance_all([(0, 807), (2, 806.5), (4, 807)], condition=condition), 'touched')
         self.assertEqual(self.advance_all([(0, 807), (2, 805.5), (4, 806), (5, 806.5)],
                                          condition=condition), 'confirmed')
+        self.assertEqual(self.advance_all([(0, 807), (2, 804.99)], condition=condition), 'breakout_failed')
         self.assertEqual(self.advance_all([(0, 807), (2, 804.99), (4, 806), (5, 806.5)],
-                                         condition=condition), 'pullback_lost')
+                                         condition=condition), 'touched')
 
     def test_bank_high_continuation_confirms_below_the_periodic_threshold(self):
         condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
@@ -103,6 +104,45 @@ class BuyWatchTests(unittest.TestCase):
                                          condition=condition), 'touched')
         self.assertEqual(self.advance_all([(0, 805.4), (5, 806.1), (6, 806.5)],
                                          condition=condition), 'touched')
+
+    def test_continuation_can_confirm_after_an_above_threshold_retest(self):
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        prices = [(0, 806.4), (1, 805.8), (2, 806.1), (3, 806.7)]
+        self.assertEqual(self.advance_all(prices, condition=condition), 'confirmed')
+        prices[1] = (1, 805)
+        self.assertEqual(self.advance_all(prices, condition=condition), 'holding')
+
+    def test_bank_watch_can_rearm_after_a_failed_confirmation_without_duplicate_analysis(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            expires = (START + timedelta(minutes=30)).isoformat()
+            condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                         'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+            with store.conn:
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
+                                   ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', json.dumps({})))
+            advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': [condition]}
+            account = {'bank': 'zheshang', 'connected': True}
+
+            def observe(stream):
+                for minute, price in stream:
+                    quote = point(minute, price)
+                    request(store, account, advice, quote[1], quote)
+                return read(store.conn, 'codex')['pending']
+
+            first = observe([(0, 806.4), (1, 806.5), (3, 806.7)])[0]
+            self.assertEqual(first['data']['routes'][0]['confirmation_mode'], 'continuation')
+            self.assertEqual(observe([(4, 804.9)]), [])
+            second = observe([(5, 806.4), (6, 806.6), (8, 806.8)])[0]
+            self.assertEqual(first['id'], second['id'])
+            self.assertEqual(second['data']['routes'][0]['touched_at'], point(5, 806.4)[0].isoformat(timespec='microseconds'))
+            with store.conn:
+                acknowledge(store.conn, 'codex', [second['id']])
+            self.assertEqual(observe([(9, 804.9), (10, 806.3), (11, 806.5), (13, 806.9)]), [])
 
     def test_program_breakout_can_coexist_with_a_buy_retest_at_the_same_level(self):
         with TemporaryDirectory() as tmp:
