@@ -459,10 +459,23 @@ class AIAnalyst:
             guard=finish(store.conn,self.analyst,attempt)
             data["_price_guard"]=guard
         view_ts = utc_now().isoformat(timespec="microseconds")
+        published_at = datetime.fromisoformat(view_ts)
         entry_warnings={}
+        submitted, reviewed_entries = [], []
         if context.get("live_readonly_accounts"):
-            from .jd_live_buy_guard import review_failures, retire_failed_events
-            entry_warnings=review_failures(store.conn,entry_context,covered_ids,datetime.fromisoformat(view_ts))
+            from .jd_live_buy_guard import (confirmation_key, entry_events, retire_failed_events,
+                                           validate_entry_routes, with_active_routes)
+            submitted = list(entry_events(entry_context, covered_ids))
+            entry_warnings, valid = validate_entry_routes(store.conn, entry_context, covered_ids, published_at)
+            confirmations = {}
+            for event in submitted:
+                active_keys = valid.get(event['data']['bank'], set())
+                routes = [route for route in event['data']['routes'] if confirmation_key(route) in active_keys]
+                confirmations[event['id']] = [confirmation_key(route) for route in routes]
+                if routes:
+                    reviewed_entries.append(with_active_routes(event, routes))
+            if confirmations:
+                data['_valid_entry_confirmations'] = confirmations
             if entry_warnings:
                 covered_ids=retire_failed_events(store.conn,self.analyst,entry_context,covered_ids,entry_warnings)
         data["_performance"]=metrics
@@ -483,6 +496,7 @@ class AIAnalyst:
             from .jd_live_advice import save as save_live_advice
             from .jd_live_buy_guard import submitted_routes
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],entry_context["live_readonly_accounts"],
+                now=published_at,
                 invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
                 entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids))
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
@@ -490,18 +504,18 @@ class AIAnalyst:
             pending_entry_ids = set()
             if context.get("live_readonly_accounts"):
                 from .jd_live_buy_guard import (
-                    entry_events, remember_reviewed_breakouts, remember_reviewed_confirmations, remember_reviewed_price_observations,
+                    remember_reviewed_breakouts, remember_reviewed_confirmations, remember_reviewed_price_observations,
                     remove_submitted_confirmations,
                 )
-                remember_reviewed_breakouts(store.conn,self.analyst,entry_context,covered_ids,self._generation)
+                confirmed_context={**entry_context,'trigger_events':reviewed_entries}
+                remember_reviewed_breakouts(store.conn,self.analyst,confirmed_context,covered_ids,self._generation)
                 remember_reviewed_price_observations(store.conn,self.analyst,entry_context,covered_ids,self._generation)
-                submitted = list(entry_events(entry_context, covered_ids))
-                remember_reviewed_confirmations(store.conn, self.analyst, submitted)
+                remember_reviewed_confirmations(store.conn, self.analyst, reviewed_entries)
                 pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, submitted)
             acknowledge(store.conn, self.analyst, [event_id for event_id in covered_ids if event_id not in pending_entry_ids])
             if context.get('live_readonly_accounts') and data.get('live_account_advice'):
                 from .jd_live_buy_watch import carry_entry_observations
-                carry_entry_observations(store.conn, self.analyst, cur.lastrowid, datetime.fromisoformat(view_ts))
+                carry_entry_observations(store.conn, self.analyst, cur.lastrowid, published_at)
         store.conn.commit()
         if public_status == "unavailable":
             log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance, eligible, utc_text, watch_deadline
 from .jd_live_conditions import archived_bank_quotes, pullback_depth, stamp, zoned_pullback
-from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
+from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
@@ -372,7 +372,8 @@ def observed_reviews(conn, bank, model, limit, now):
                json_extract(v.view_json,'$._covered_event_ids'),
                a.id,a.created_at,a.advice_json,
                json_extract(s.value,'$.trigger_events'),
-               json_extract(s.value,'$.event_coverage'),s.key IS NOT NULL
+               json_extract(s.value,'$.event_coverage'),
+               json_extract(v.view_json,'$._valid_entry_confirmations'),s.key IS NOT NULL
         FROM (SELECT * FROM ai_runs WHERE analyst=? AND started_at<=? ORDER BY id DESC LIMIT ?) r
         LEFT JOIN state s ON s.key='ai_model_input:'||r.run_id||':'||r.analyst
         LEFT JOIN ai_views v ON v.rowid=r.view_rowid
@@ -381,7 +382,7 @@ def observed_reviews(conn, bank, model, limit, now):
     """, (model, utc_text(now), limit, bank)).fetchall()
     cases = []
     summary = defaultdict(lambda: defaultdict(int))
-    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, _ in rows:
+    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, _ in rows:
         if not events:
             continue
         # Current Codex archives are scoped to the submitted events and omit the duplicate coverage list.
@@ -397,10 +398,14 @@ def observed_reviews(conn, bank, model, limit, now):
         started = stamp(start)
         finished = stamp(finish)
         covered_ids = json.loads(covered) if covered is not None else None
+        valid_confirmations = json.loads(valid) if valid is not None else {}
         mark = first_observed_quote(conn, bank, released, min(now, released + MAX_GAP)) if released else None
         counted = set()
         for e in events:
             outcome = advice_outcome(status, e['id'], covered_ids, value)
+            confirmations = valid_confirmations.get(e['id'])
+            valid_keys = {tuple(key) for key in confirmations} if confirmations is not None else None
+            buy_basis = {confirmation_key(r) for r in value.get('entry_trigger_routes', [])}
             paths = []
             routes = e['data'].get('routes', [])
             origin = None
@@ -415,8 +420,15 @@ def observed_reviews(conn, bank, model, limit, now):
                     if depth := pullback_depth(route, evidence, origin[2], published_at):
                         route = {**route, 'pullback_depth': depth}
                 branch = review_branch(route)
+                key = confirmation_key(route)
+                if valid_keys is not None and key not in valid_keys:
+                    path_outcome = 'signal_invalidated_at_publication'
+                elif outcome in ('buy_suggested', 'conditional_buy_suggested') and buy_basis and key not in buy_basis:
+                    path_outcome = 'not_buy_basis'
+                else:
+                    path_outcome = outcome
                 price = number(route.get('price_cny'))
-                paths.append({'branch': branch, 'threshold_cny': route.get('threshold_cny'),
+                paths.append({'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                               'seconds_to_start': elapsed_seconds(confirmed, started),
                               'seconds_to_completion': elapsed_seconds(confirmed, finished),
@@ -426,9 +438,9 @@ def observed_reviews(conn, bank, model, limit, now):
                                                   for minutes in (15, 60)],
                               'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
                                                                                  released, mark, now)})
-                if (branch, outcome) not in counted:
-                    summary[branch][outcome] += 1
-                    counted.add((branch, outcome))
+                if (branch, path_outcome) not in counted:
+                    summary[branch][path_outcome] += 1
+                    counted.add((branch, path_outcome))
             cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
                           'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,

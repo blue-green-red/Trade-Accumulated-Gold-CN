@@ -130,16 +130,16 @@ def submitted_routes(context, event_ids):
     return by_bank
 
 
-def review_failures(conn, context, event_ids, now):
-    """Return a bank warning when every included entry route has lost its basis."""
+def validate_entry_routes(conn, context, event_ids, now):
+    """Recheck each submitted route, warning the bank when none still hold."""
     by_bank = submitted_routes(context, event_ids)
     if not by_bank:
-        return {}
+        return {}, {}
 
     from .jd_live_readonly import accounts
     current = {a['bank']: a for a in accounts(conn, now, include_advice=False)}
     source = (context.get('live_readonly_accounts') or {}).get('accounts', {})
-    warnings = {}
+    warnings, valid = {}, {}
     for bank, routes in by_bank.items():
         account = current.get(bank) or {}
         point = sample(account, now)
@@ -150,9 +150,16 @@ def review_failures(conn, context, event_ids, now):
         if not any(anchors):
             warnings[bank] = '原买入触发缺少确认时间，需用新报价重新评估'
             continue
-        if not active_routes(conn, account, routes, now):
+        remaining = active_routes(conn, account, routes, now)
+        if remaining:
+            valid[bank] = {confirmation_key(route) for route in remaining}
+        else:
             warnings[bank] = '分析期间买入触发已到期、失守、超价、触及退出边界或报价中断，须按新行情复评'
-    return warnings
+    return warnings, valid
+
+
+def review_failures(conn, context, event_ids, now):
+    return validate_entry_routes(conn, context, event_ids, now)[0]
 
 
 def route_valid(route, anchor: datetime, quotes, latest_at):

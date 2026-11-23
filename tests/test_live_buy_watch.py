@@ -556,9 +556,9 @@ class BuyAuditTests(unittest.TestCase):
             three = START + timedelta(minutes=3)
             bank_rule = {'hold_minutes': 3, 'retest_ceiling_cny': 807}
             paths = [
-                {'condition': 'at_or_above', 'confirmation_mode': 'continuation', 'bank_breakout': bank_rule,
+                {'condition_key': 'breakout', 'condition': 'at_or_above', 'confirmation_mode': 'continuation', 'bank_breakout': bank_rule,
                  'threshold_cny': 805, 'confirmed_at': START.isoformat(), 'price_cny': 806},
-                {'condition': 'at_or_below', 'buy_review': {'zone': {'floor_cny': 800}},
+                {'condition_key': 'low-entry', 'condition': 'at_or_below', 'buy_review': {'zone': {'floor_cny': 800}},
                  'threshold_cny': 802, 'confirmed_at': START.isoformat(), 'price_cny': 806},
             ]
             with store.conn:
@@ -618,6 +618,13 @@ class BuyAuditTests(unittest.TestCase):
             friday = datetime(2026, 11, 20, 18, 25, tzinfo=timezone.utc)
             after_close = followup_quote(store.conn, 'zheshang', friday, 806, 15, friday + timedelta(hours=1))
             self.assertEqual(after_close, {'minutes': 15, 'status': 'market_closed'})
+            with store.conn:
+                store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=2',
+                                   (json.dumps({'_covered_event_ids': [newer['event_id']]}),))
+                store.conn.execute('UPDATE jd_live_advice SET advice_json=? WHERE id=2',
+                                   (json.dumps({'action': 'buy', 'entry_trigger_routes': paths[:1]}),))
+            bound = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))['cases'][0]
+            self.assertEqual([p['outcome'] for p in bound['paths']], ['buy_suggested', 'not_buy_basis'])
 
     def test_same_horizon_only_post_publication_quotes_with_observed_fee(self):
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},

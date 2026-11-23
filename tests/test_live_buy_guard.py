@@ -226,6 +226,45 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
                          late['confirmed_at'])
 
+    def test_publication_only_marks_the_surviving_confirmation_reviewed(self):
+        from monitor.jd_live_buy_audit import observed_reviews
+        from monitor.jd_live_buy_guard import confirmation_key
+
+        rule = {'hold_minutes': 3, 'retest_ceiling_cny': 806}
+        expired = self.route(805, bank_breakout=rule, confirmation_mode='continuation',
+                             signal_expires_at=(START + timedelta(minutes=1)).isoformat())
+        live = self.route(805, condition_key='805:retest', bank_breakout=rule, confirmation_mode='retest')
+        context, key = self.prepare_signal([expired, live])
+        watch_key = 'live-buy-watch:codex:zheshang'
+        self.store.set_state(watch_key, {'advice_id': 1, 'routes': {
+            r['condition_key']: {'stage': 'confirmed', 'confirmed_at': r['confirmed_at'],
+                                'confirmation_mode': r['confirmation_mode']}
+            for r in (expired, live)}})
+        analyst = AIAnalyst(self.settings, self.store, 'codex', 'codex')
+        data = result().model_dump()
+        data.update(research_notes='测试', sources=[], live_account_advice={})
+        response = ClaudeCodeResult.model_validate(data)
+        finish = START + timedelta(minutes=2)
+
+        def backend(*_):
+            self.update_quote(2, 806)
+            return 'notes', [], response
+
+        with patch.object(analyst, '_run_codex', side_effect=backend), patch('monitor.ai.utc_now', return_value=finish):
+            view = analyst.analyze(context, '合并复评', run_id='mixed-expiry')
+
+        self.assertEqual(view['_covered_event_ids'], [key])
+        self.assertEqual(view['_valid_entry_confirmations'], {key: [confirmation_key(live)]})
+        state = read_watch(self.conn, watch_key)
+        self.assertEqual(state['reviewed_routes'], {live['condition_key']: key})
+        self.assertNotIn('reviewed_confirmation_at', state['routes'][expired['condition_key']])
+        self.assertIsNone(read_watch(self.conn, 'live-breakout-reviewed:codex:zheshang:continuation').get('event_id'))
+        self.assertEqual(read_watch(self.conn, 'live-breakout-reviewed:codex:zheshang:retest')['event_id'], key)
+        self.assertFalse(read(self.conn, 'codex')['pending'])
+        report = observed_reviews(self.conn, 'zheshang', 'codex', 12, finish)
+        self.assertEqual(report['by_branch']['breakout_continuation'], {'signal_invalidated_at_publication': 1})
+        self.assertEqual(report['by_branch']['breakout_retest'], {'no_advice': 1})
+
     def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None,
                       basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None):
         revision = accounts(self.conn, at, include_advice=False)[0]['revision']
