@@ -59,6 +59,18 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(self.advance_all([(0, 804), (1, 797), (2, 803), (4, 804)],
                                          condition=condition), 'pullback_lost')
 
+    def test_upper_edge_can_exceed_the_recovery_price_and_entry_cap(self):
+        condition = zoned_route()
+        condition['price_cny'] = 805
+        self.assertTrue(valid_route(condition))
+        self.assertEqual(self.advance_all([(0, 809), (1, 805), (2, 804), (4, 803)],
+                                         condition=condition), 'touched')
+        self.assertEqual(self.advance_all([(0, 809), (1, 805), (2, 802), (3, 803), (5, 804)],
+                                         condition=condition), 'confirmed')
+        source = {'sell_fee_rate': .004, 'recent_bank_quotes': {'status': 'available'}}
+        value = {'action': 'wait', 'order_management': [], 'review_conditions': [condition], 'valid_for_minutes': 15}
+        self.assertEqual(validate_structure(value, source, START), [])
+
     def test_breakout_above_entry_cap_can_retest_and_confirm(self):
         condition = zoned_route('at_or_above')
         self.assertTrue(valid_route(condition))

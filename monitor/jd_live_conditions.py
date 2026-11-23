@@ -77,7 +77,7 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                 checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
             trigger=condition['price_cny'];recovery=buy_review['recovery_price_cny']
             cap=buy_review['max_buy_price_cny'];zone=buy_review.get('zone')
-            if condition['condition']=='at_or_below' and trigger>=recovery:
+            if not zone and condition['condition']=='at_or_below' and trigger>=recovery:
                 checks.append('回调触价须低于企稳价')
             if zone:
                 floor=zone['floor_cny']

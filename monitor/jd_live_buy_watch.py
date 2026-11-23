@@ -84,7 +84,7 @@ def valid_route(condition, minimum=None):
     if zone := review.get('zone'):
         floor = zone['floor_cny']
         return (zone['risk_exit_cny'] <= floor and recovery <= cap < zone['weak_target_cny']
-                and (floor < trigger < recovery if condition['condition'] == 'at_or_below'
+                and (floor < min(trigger, recovery) if condition['condition'] == 'at_or_below'
                      else floor < recovery <= trigger))
     if condition['condition'] == 'at_or_below':
         return trigger < recovery <= cap
@@ -112,18 +112,27 @@ def advance(state, condition, at, buy):
             return state
         if floor is not None and buy < floor:
             return {**state, 'stage': 'pullback_lost'}
-        state.update(stage='above_cap' if buy > cap and not (breakout and zone) else 'touched',
-                     touched_at=utc_text(at), peak=buy)
+        state.update(stage='above_cap' if buy > cap and not zone else 'touched',
+                     touched_at=utc_text(at))
+        state['peak' if breakout else 'trough']=buy
         return state
-    if buy > cap and not (breakout and zone and stage == 'touched'):
+    if floor is not None and buy < floor:
+        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
+    if buy > cap and not (zone and stage == 'touched'):
         return {**state, 'stage': 'above_cap', 'hold_since': None}
     if breakout and stage == 'touched':
         if buy > trigger or buy >= state['peak'] or (zone and buy > cap):
             return {**state, 'peak': max(state['peak'], buy)}
         # A pullback from the observed breakout must precede confirmation.
         state['stage'] = 'retest'
-    if floor is not None and buy < floor:
-        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
+    if zone and not breakout and stage == 'touched':
+        trough = min(state.get('trough', buy), buy)
+        state['trough'] = trough
+        if buy > cap and trough <= cap:
+            return {**state, 'stage': 'above_cap'}
+        if buy <= trough or buy > cap or buy < recovery:
+            return state
+        state['stage'] = 'retest'
     if buy < recovery:
         return {**state, 'stage': state['stage'] if state['stage'] in ('touched', 'retest') else 'retest',
                 'hold_since': None}
