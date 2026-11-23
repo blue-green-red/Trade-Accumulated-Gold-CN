@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import (MAX_GAP, advance_watch, breakout_retest_price_status, eligible, utc_text,
-                               watch_deadline, watch_routes)
+                               plain_buy_discards, watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
 from .participation_audit import horizon_at, readonly
@@ -814,7 +814,8 @@ def latched_at_model_input(condition, value, points, published):
     return True
 
 
-def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs, markers=None):
+def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs,
+                                *, markers=None, discards=None):
     """Show whether each ordinary price level was reached on available quotes."""
     conditions = [item for item in value.get('review_conditions', []) if plain_buy_observation(item)]
     if not conditions or expires <= published:
@@ -849,8 +850,14 @@ def plain_buy_quote_observations(advice_id, value, published, expires, quotes, n
                     if (queued := stamp(attempt.get('event_queued_at')) or stamp(attempt['observed_touch_at']))
                     and published <= queued < expires and queued <= now]
         marker = (markers or {}).get(key)
+        rejected = [event for event in (discards or {}).get(key, [])
+                    if (queued := stamp(event['queued_at'])) and published <= queued < expires]
+        if rejected:
+            row['discarded_events'] = rejected
         if attempts:
             row.update(review_archive_status='review_archived', review_attempts=attempts)
+        elif rejected:
+            row['review_archive_status'] = 'queue_discarded'
         elif marker and published <= marker[0] < expires and marker[0] <= now:
             row.update(review_archive_status='queued_without_archived_review',
                        retained_queue_marker={'event_id': marker[1], 'queued_at': utc_text(marker[0])})
@@ -881,6 +888,10 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
     observed = observed_reviews(conn, bank, model, limit, now, grams=grams, bank_inputs=bank_inputs)
     plain_reviews = plain_buy_review_index(observed['cases'])
     queue_markers = plain_buy_queue_markers(conn, bank, model, now)
+    plain_discards = defaultdict(list)
+    for event in plain_buy_discards(conn, model):
+        if event['bank'] == bank and (discarded_at := stamp(event['discarded_at'])) and discarded_at <= now:
+            plain_discards[(event['advice_id'], event['condition_key'])].append(event)
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, published, end, value, view_id in history[:limit]:
         input_at = stamp(value.get('input_quote_at')) if value.get('input_quote_status') == 'fresh' else None
@@ -907,7 +918,7 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
                       'plain_buy_quote_observations': plain_buy_quote_observations(
                           advice_id, value, published, min(end, next_publications.get(advice_id, end)), points, now,
-                          plain_reviews, bank_inputs, queue_markers),
+                          plain_reviews, bank_inputs, markers=queue_markers, discards=plain_discards),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})

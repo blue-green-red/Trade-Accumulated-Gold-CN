@@ -16,7 +16,7 @@ from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakout
                                        remember_reviewed_price_observations, remove_submitted_confirmations,
                                        review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import carry_entry_observations, pending_events, record, request, set_watch
+from monitor.jd_live_buy_watch import carry_entry_observations, pending_events, plain_buy_discards, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, condition_state, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
@@ -165,6 +165,12 @@ class BuyGuardTests(unittest.TestCase):
             remember_reviewed_price_observations(self.conn, 'codex', context, [first], 0)
             acknowledge(self.conn, 'codex', [first])
         self.assertEqual(pending_events(self.conn, 'codex', now), [])
+        discards = plain_buy_discards(self.conn, 'codex')
+        self.assertEqual([(p['event_id'], p['reason']) for p in discards],
+                         [(first, 'advice_replaced'), (second, 'same_price_episode_already_reviewed')])
+        self.assertTrue(all(datetime.fromisoformat(p['discarded_at']) == now for p in discards))
+        self.assertEqual(pending_events(self.conn, 'codex', now), [])
+        self.assertEqual(plain_buy_discards(self.conn, 'codex'), discards)
 
         sell = queue(3, 2, 806.3, 806, quote_side='sell')
         down = queue(4, 2, 806.3, 807, direction='at_or_below')
@@ -189,6 +195,8 @@ class BuyGuardTests(unittest.TestCase):
             'condition_key': key, 'quote_side': 'buy', 'quoted_at': START.isoformat()})
         self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=1))], [event_id])
         self.assertFalse(pending_events(self.conn, 'codex', START + timedelta(minutes=6)))
+        discard, = plain_buy_discards(self.conn, 'codex')
+        self.assertEqual((discard['event_id'],discard['reason']), (event_id,'advice_expired'))
 
     def test_two_explicit_thresholds_in_one_direction_are_reviewed_independently(self):
         shallow={'condition':'at_or_above','quote_side':'buy','price_cny':805}

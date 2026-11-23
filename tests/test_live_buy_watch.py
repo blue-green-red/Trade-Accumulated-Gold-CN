@@ -10,7 +10,7 @@ from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, firs
                                        observed_review_horizons, observed_reviews, plain_buy_quote_observations,
                                        report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
-from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
+from monitor.jd_live_buy_watch import PRICE_DISCARD_KEY, advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
 from monitor.jd_live_expiry import request_expiry_review
 from monitor.jd_live_readonly import ensure_schema
@@ -543,11 +543,20 @@ class BuyAuditTests(unittest.TestCase):
             with store.conn:
                 store.conn.execute('INSERT INTO state VALUES(?,?,?)', (f'live-price-watch:codex:0:zheshang:{fingerprint}',
                     json.dumps(marker), (START+timedelta(minutes=6)).isoformat()))
+                removed_at = (START+timedelta(minutes=8)).isoformat()
+                discard = {'bank':'zheshang','advice_id':2,'condition_key':fingerprint,'event_id':marker['event_id'],
+                           'queued_at':queued.isoformat(),'discarded_at':removed_at,'reason':'same_price_episode_already_reviewed'}
+                store.conn.execute('INSERT INTO state VALUES(?,?,?)', (PRICE_DISCARD_KEY+'codex',
+                    json.dumps({'events':[discard]}), removed_at))
 
             early, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=3.5))['cases']
             self.assertEqual(early['plain_buy_quote_observations'][0]['status'], 'pending')
             before_marker, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=5.75))['cases']
             self.assertEqual(before_marker['plain_buy_quote_observations'][0]['review_archive_status'], 'no_matching_archived_review')
+            pending, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=7))['cases']
+            recorded = pending['plain_buy_quote_observations'][0]
+            self.assertEqual(recorded['review_archive_status'], 'queued_without_archived_review')
+            self.assertEqual(recorded['retained_queue_marker']['event_id'], marker['event_id'])
             latest, old = report(store.conn, 'zheshang', 'codex', 2, START+timedelta(minutes=16))['cases']
             low, high = old['plain_buy_quote_observations']
             self.assertEqual(low['status'], 'threshold_not_sampled')
@@ -559,8 +568,8 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(datetime.fromisoformat(latest['plain_buy_quote_observations'][0]['first_threshold_sample_at']),
                              point(4.5,799)[0])
             recorded = latest['plain_buy_quote_observations'][0]
-            self.assertEqual(recorded['review_archive_status'], 'queued_without_archived_review')
-            self.assertEqual(recorded['retained_queue_marker']['event_id'], marker['event_id'])
+            self.assertEqual(recorded['review_archive_status'], 'queue_discarded')
+            self.assertEqual(recorded['discarded_events'], [discard])
 
     def test_plain_buy_observation_distinguishes_exact_review_other_input_and_already_met(self):
         condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 800}

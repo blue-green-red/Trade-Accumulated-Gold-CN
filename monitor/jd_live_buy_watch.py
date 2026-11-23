@@ -12,6 +12,8 @@ WATCH_WINDOW = timedelta(hours=1)
 CONTINUATION_HOLD_MINUTES = 3
 CONTINUATION_MIN_QUOTES = 3
 BREAKOUT_MODES = ('continuation', 'retest')
+PRICE_DISCARD_KEY = 'live-price-discards:'
+PRICE_DISCARD_LIMIT = 512
 QUOTE_SCHEMA = """CREATE TABLE IF NOT EXISTS jd_live_quote_samples (
     bank TEXT NOT NULL, quoted_at TEXT NOT NULL, observed_at TEXT NOT NULL,
     buy_price_cny REAL NOT NULL, sell_price_cny REAL NOT NULL,
@@ -630,6 +632,12 @@ def carry_entry_observations(conn, model, view_id, now):
         write(conn, model, events)
 
 
+def plain_buy_discards(conn, model):
+    from .price_guard import read
+
+    return read(conn, PRICE_DISCARD_KEY + model).get('events', [])
+
+
 def pending_events(conn, model, now):
     """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
@@ -637,8 +645,15 @@ def pending_events(conn, model, now):
                                    reviewed_breakout, reviewed_price_observation, stored_price_condition, with_active_routes)
     from .jd_live_readonly import accounts
 
-    def validated(event):
+    def validated(event, discarded):
         event_id, data = event['id'], event.get('data') or {}
+
+        def discard_plain_buy(reason):
+            if discarded is not None:
+                discarded.append({'event_id': event_id, 'bank': data['bank'], 'advice_id': data['advice_id'],
+                                  'condition_key': data['condition_key'], 'queued_at': event.get('observed_at'),
+                                  'discarded_at': utc_text(now), 'reason': reason})
+            return None
         if event_id.startswith('live-retest-reprice:'):
             current = accounts(conn, now, selected_bank=data['bank'])
             return event if any(advice['id'] == data['advice_id'] and advice['analyst'] == model
@@ -656,31 +671,34 @@ def pending_events(conn, model, now):
                                           'WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT 1',
                                           (data['bank'], model)).fetchone()
                     if not latest:
-                        return None
+                        return discard_plain_buy('advice_unavailable')
                     renewed = data.get('renewed_pullback')
                     if renewed and latest[0] != data['advice_id']:
-                        return None
+                        return discard_plain_buy('advice_replaced')
                     if not renewed and now >= stamp(origin['expires_at']):
-                        return None
+                        return discard_plain_buy('advice_expired')
                     current_conditions=json.loads(latest[2]).get('review_conditions',[])
                     levels=plain_buy_levels(current_conditions,condition['condition'])
                     if latest[0] != data['advice_id']:
-                        if (latest[3] != revision or now >= stamp(latest[1])
-                                or data['condition_key'] not in levels):
-                            return None
+                        if latest[3] != revision:
+                            return discard_plain_buy('account_changed')
+                        if now >= stamp(latest[1]):
+                            return discard_plain_buy('advice_expired')
+                        if data['condition_key'] not in levels:
+                            return discard_plain_buy('advice_replaced')
                     quoted, observed = stamp(data.get('quoted_at')), stamp(event.get('observed_at'))
                     buy = number(data.get('price_cny'))
                     if quoted and observed and buy and unchanged_buy_observation(
                             conn, data['bank'], origin, condition, (quoted, observed, buy, None)):
-                        return None
+                        return discard_plain_buy('already_in_analysis_input')
                     current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
                     if current and current[0].get('revision') != revision:
-                        return None
+                        return discard_plain_buy('account_changed')
                     if renewed and (not current or not renewed_pullback_deadline(conn, current[0], origin, condition, now)):
-                        return None
+                        return discard_plain_buy('renewed_pullback_no_longer_valid')
                     if current and current[0].get('revision') == revision and reviewed_price_observation(
                             conn, model, current[0], condition, now, independent=len(levels)>1):
-                        return None
+                        return discard_plain_buy('same_price_episode_already_reviewed')
         if event_id.startswith('live-expired:') and data.get('advice_id'):
             row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
             old = json.loads(row[0]) if row else {}
@@ -715,8 +733,8 @@ def pending_events(conn, model, now):
                 return with_active_routes(event, routes) if routes else None
         return event
 
-    def prune(events):
-        return [fresh for event in events if (fresh := validated(event)) is not None]
+    def prune(events, discarded=None):
+        return [fresh for event in events if (fresh := validated(event, discarded)) is not None]
 
     pending = read(conn, model)['pending']
     if prune(pending) == pending:
@@ -724,10 +742,16 @@ def pending_events(conn, model, now):
     with conn:
         conn.execute('BEGIN IMMEDIATE')
         events = read(conn, model)
-        pending = prune(events['pending'])
+        discarded = []
+        pending = prune(events['pending'], discarded)
         if pending != events['pending']:
             events['pending'] = pending
             write(conn, model, events)
+            if discarded:
+                from .price_guard import save
+
+                history = [*plain_buy_discards(conn, model), *discarded][-PRICE_DISCARD_LIMIT:]
+                save(conn, PRICE_DISCARD_KEY + model, {'events': history})
     return pending
 
 
