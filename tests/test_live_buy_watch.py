@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import (evaluate, first_observed_quote, followup_quote, independent_branch_replay,
-                                       observed_review_horizons, observed_reviews)
+                                       observed_review_horizons, observed_reviews, report)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -633,6 +633,18 @@ class BuyAuditTests(unittest.TestCase):
             record(store.conn, 'minsheng', point(15, 819))
             record(store.conn, 'zheshang', (*point(16, 805.5)[:3], 805.25))
             record(store.conn, 'zheshang', point(64, 810))
+            during=START+timedelta(minutes=1)
+            historical=report(store.conn,'zheshang','codex',1,during)
+            self.assertEqual([case['advice_id'] for case in historical['cases']],[3])
+            inflight=historical['observed_reviews']['cases'][0]
+            self.assertEqual(inflight['outcome'],'running')
+            self.assertIsNone(inflight['advice_id'])
+            self.assertIsNone(inflight['completed_at'])
+            with store.conn:
+                store.conn.execute("UPDATE state SET updated_at=? WHERE key='ai_model_input:fixture-2:codex'",
+                                   (two.isoformat(),))
+            waiting_for_input=observed_reviews(store.conn,'zheshang','codex',4,during)
+            self.assertEqual([case['attempt_id'] for case in waiting_for_input['cases']],[1])
             result = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))
             self.assertEqual(result['examined_runs'], 2)
             self.assertEqual(result['by_branch']['breakout_continuation'], {'no_buy_suggested': 1, 'not_covered': 1})
@@ -690,7 +702,11 @@ class BuyAuditTests(unittest.TestCase):
             ])
             covered = [older['event_id'], renewed_id, ordinary_id, higher_id, lower_id, sell_id, linked_id]
             context['event_coverage']['codex'] = covered
-            store.set_state(key, context)
+            def save_input():
+                with store.conn:
+                    store.conn.execute('UPDATE state SET value=?,updated_at=? WHERE key=?',
+                                       (json.dumps(context),started.isoformat(),key))
+            save_input()
             with store.conn:
                 store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=1',
                                    (json.dumps({'_covered_event_ids': covered}),))
@@ -710,7 +726,7 @@ class BuyAuditTests(unittest.TestCase):
             context['live_readonly_accounts'] = {'accounts': {'zheshang': {
                 'status': 'fresh', 'quote': {'status': 'fresh'}, 'minimum_buy_grams': 10,
                 'new_buy_capacity_at_input': {'cash_after_buy_orders_cny': 16_130}}}}
-            store.set_state(key, context)
+            save_input()
             sized = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65), grams=20)
             lower_readout = next(x for x in sized['cases'] if x['event_id'] == lower_id)['paths'][0]
             after_15 = lower_readout['quote_followups'][0]
@@ -722,7 +738,7 @@ class BuyAuditTests(unittest.TestCase):
             lower_readout = next(x for x in below_minimum['cases'] if x['event_id'] == lower_id)['paths'][0]
             self.assertEqual(lower_readout['quote_followups'][0]['at_confirmation_5g']['status'], 'below_bank_minimum')
             context['live_readonly_accounts']['accounts']['zheshang']['new_buy_capacity_at_input']['cash_after_buy_orders_cny'] = None
-            store.set_state(key, context)
+            save_input()
             unknown = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
             lower_readout = next(x for x in unknown['cases'] if x['event_id'] == lower_id)['paths'][0]
             self.assertEqual(lower_readout['quote_followups'][0]['after_analysis_10g']['status'], 'cash_unknown')
@@ -734,6 +750,12 @@ class BuyAuditTests(unittest.TestCase):
         samples = [point(m, p) for m, p in [(-1, 785), (1, 798), (2, 804), (4, 805),
                                               (1441, 812), (4321, 790)]]
         end = START + timedelta(minutes=10)
+        before_confirmation = evaluate(value, START, end, samples, START + timedelta(minutes=4))[0]
+        self.assertEqual(before_confirmation['confirmed_10g']['status'], 'pending')
+        self.assertNotIn('confirmation_branch', before_confirmation)
+        before_exit = evaluate(value, START, end, samples, START + timedelta(minutes=1441))[0]
+        self.assertEqual(before_exit['confirmed_10g']['status'], 'pending')
+        self.assertNotIn('exit_quote_at', before_exit)
         rows = evaluate(value, START, end, samples, START + timedelta(days=4))
         for row, price in zip(rows, (812, 790)):
             self.assertEqual(row['immediate_10g']['entry_cny_per_gram'], 798)

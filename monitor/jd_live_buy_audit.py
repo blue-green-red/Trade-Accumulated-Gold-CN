@@ -47,7 +47,7 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     elif cash is None or fee is None or fee >= 1:
         blocked = 'cash_or_fee_unknown'
 
-    actionable = [p for p in quotes if published <= p[0] <= p[1] < expires]
+    actionable = [p for p in quotes if published <= p[0] <= p[1] < expires and p[1] <= now]
     first = next((p for p in actionable if p[1] - published <= MAX_GAP), None)
     if blocked:
         immediate = unavailable(blocked)
@@ -69,7 +69,7 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     if last_deadline <= published:
         return immediate, unavailable(blocked or 'no_valid_buy_review'), None
     boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
-    actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline]
+    actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline and p[1] <= now]
     states = [{} for _ in routes]
     unfunded = {}
     for point in actionable:
@@ -158,7 +158,7 @@ def evaluate_entries(immediate, confirmed, branch, published, fee, quotes, now, 
     horizons = []
     for days in (1, 3):
         target, deadline = trading_horizon(published, days)
-        exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= deadline), None)
+        exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= min(now, deadline)), None)
         row = {'trading_days': days, 'target_at': target.isoformat(), 'wait': {'status': 'valued', 'net_cny': 0.0}}
         if branch:
             row['confirmation_branch'] = branch
@@ -418,7 +418,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                a.id,a.created_at,a.advice_json,
                json_extract(s.value,'$.trigger_events'),
                json_extract(s.value,'$.event_coverage'),
-               json_extract(v.view_json,'$._valid_entry_confirmations'),json_extract(s.value,?),s.key IS NOT NULL
+               json_extract(v.view_json,'$._valid_entry_confirmations'),json_extract(s.value,?),s.updated_at
         FROM (SELECT * FROM ai_runs WHERE analyst=? AND started_at<=? ORDER BY id DESC LIMIT ?) r
         LEFT JOIN state s ON s.key='ai_model_input:'||r.run_id||':'||r.analyst
         LEFT JOIN ai_views v ON v.rowid=r.view_rowid
@@ -427,9 +427,13 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     """, (f'$.live_readonly_accounts.accounts.{bank}', model, utc_text(now), limit, bank)).fetchall()
     cases = []
     summary = defaultdict(lambda: defaultdict(int))
-    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, _ in rows:
-        if not events:
+    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, archived_at in rows:
+        if not events or not (archived_at:=stamp(archived_at)) or archived_at>now:
             continue
+        finished=stamp(finish)
+        if finished and finished>now:
+            status='running'
+            finish,finished,covered,advice_id,published,raw,valid=(None,)*7
         # Current Codex archives are scoped to the submitted events and omit the duplicate coverage list.
         sent_ids = set(json.loads(sent).get(model, [])) if sent is not None else None
         value = json.loads(raw) if raw else {}
@@ -453,7 +457,6 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
             continue
         released = stamp(published)
         started = stamp(start)
-        finished = stamp(finish)
         covered_ids = json.loads(covered) if covered is not None else None
         valid_confirmations = json.loads(valid) if valid is not None else {}
         mark = first_observed_quote(conn, bank, released, min(now, released + MAX_GAP)) if released else None
@@ -513,7 +516,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
                           'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
-    archived = sum(row[-1] for row in rows)
+    archived = sum(1 for row in rows if (at:=stamp(row[-1])) and at<=now)
     return {'status': 'available' if archived else 'input_archives_unavailable',
             'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary}
 
@@ -523,24 +526,26 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
         return {'status': 'sampling_not_initialized', 'cases': []}
     cases = []
     recent = conn.execute('SELECT id,created_at,expires_at,advice_json,view_id FROM jd_live_advice '
-                          'WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT ?', (bank, model, limit)).fetchall()
+                          'WHERE bank=? AND analyst=? AND julianday(created_at)<=julianday(?) '
+                          'ORDER BY id DESC LIMIT ?', (bank, model, utc_text(now), limit)).fetchall()
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, created, expires, raw, view_id in recent:
         published, end = stamp(created), stamp(expires)
         if not published or not end or published > now:
             continue
         rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
-                            'WHERE bank=? AND quoted_at>=? AND quoted_at<=? ORDER BY quoted_at',
+                            'WHERE bank=? AND quoted_at>=? AND observed_at>=quoted_at AND observed_at<=? ORDER BY quoted_at',
                             (bank, utc_text(published), utc_text(now))).fetchall()
-        points = [(stamp(q), stamp(o), buy, sell) for q, o, buy, sell in rows if stamp(o) <= now]
+        points = [(stamp(q), stamp(o), buy, sell) for q, o, buy, sell in rows]
         value = json.loads(raw)
         watch = value.get('buy_watch')
         if watch:
             replacement = conn.execute("SELECT created_at FROM jd_live_advice WHERE bank=? AND analyst=? "
                                        "AND id>? AND COALESCE(json_extract(advice_json,'$.buy_watch.id'),'')!=? "
-                                       "ORDER BY id LIMIT 1", (bank, model, advice_id, watch['id'])).fetchone()
-            if replacement:
-                watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
+                                       "AND julianday(created_at)<=julianday(?) ORDER BY id LIMIT 1",
+                                       (bank, model, advice_id, watch['id'], utc_text(now))).fetchone()
+            if replacement and (replacement_at:=stamp(replacement[0])) and replacement_at<=now:
+                watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), replacement_at))
         archived_quotes = {}
         if has_history and any(map(zoned_pullback, value.get('review_conditions', []))):
             archived_quotes = archived_bank_quotes(conn, bank, model, view_id)
@@ -561,13 +566,17 @@ def main():
     parser.add_argument('--model', choices=('codex', 'claude'), default='codex')
     parser.add_argument('--limit', type=int, choices=range(1, 101), metavar='1..100', default=12)
     parser.add_argument('--grams', metavar='GRAMS', default=GRAMS, help='Assumed buy size, default: %(default)s g')
+    parser.add_argument('--as-of', metavar='ISO8601', help='Historical report cutoff, including timezone')
     options = parser.parse_args()
     grams = number(options.grams)
     if not grams:
         parser.error('--grams must be a positive finite number')
+    now = stamp(options.as_of) if options.as_of is not None else datetime.now(timezone.utc)
+    if now is None:
+        parser.error('--as-of must be an ISO 8601 timestamp with a timezone')
     conn = readonly(Settings().db_path)
     try:
-        print(json.dumps(report(conn, options.bank, options.model, options.limit, datetime.now(timezone.utc), grams=grams),
+        print(json.dumps(report(conn, options.bank, options.model, options.limit, now, grams=grams),
                          ensure_ascii=False, indent=2))
     finally:
         conn.close()

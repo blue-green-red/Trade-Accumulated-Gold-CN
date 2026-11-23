@@ -268,7 +268,8 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(2, 806)
             return 'notes', [], response
 
-        with patch.object(analyst, '_run_codex', side_effect=backend), patch('monitor.ai.utc_now', return_value=finish):
+        with patch.object(analyst, '_run_codex', side_effect=backend), patch('monitor.ai.utc_now', return_value=finish), \
+                patch('monitor.store.utc_now', return_value=finish):
             view = analyst.analyze(context, '合并复评', run_id='mixed-expiry')
 
         self.assertEqual(view['_covered_event_ids'], [key])
