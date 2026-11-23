@@ -111,6 +111,50 @@ class StructuredAdviceTests(unittest.TestCase):
         self.price(840,10,buy=850);request_reviews(self.s,NOW+timedelta(seconds=10));self.assertEqual(len(self.price_events()),1)
         self.assertEqual(self.price_events()[0]['data']['quote_side'],'buy')
 
+    def test_already_seen_buy_price_waits_for_a_new_crossing(self):
+        from monitor.jd_live_buy_watch import record
+        buy = self.condition(condition='at_or_above', price_cny=855., quote_side='buy')
+        sell = self.condition(price_cny=855.)
+        self.saved(self.value(review_conditions=[buy, sell]))
+        self.price(855.1, 10)
+        request_reviews(self.s, NOW + timedelta(seconds=10))
+        self.assertFalse(self.price_events())
+        self.assertEqual(self.latest(NOW + timedelta(seconds=10))['review_conditions'][0]['monitoring']['status'], 'latched')
+
+        intermediate = NOW + timedelta(seconds=20)
+        record(self.s.conn, 'zheshang', (intermediate, intermediate, 854.9, 854.9))
+        self.price(855.2, 30)
+        request_reviews(self.s, NOW + timedelta(seconds=30))
+        event, = self.price_events()
+        self.assertEqual(event['data']['quote_side'], 'buy')
+        self.assertEqual(event['data']['price_cny'], 855.2)
+
+    def test_new_buy_crossing_before_first_poll_and_already_met_sell_can_trigger(self):
+        from monitor.jd_live_buy_watch import record
+        buy = self.condition(price_cny=855., quote_side='buy')
+        sell = self.condition(price_cny=855.)
+        intermediate = NOW + timedelta(seconds=10)
+        record(self.s.conn, 'zheshang', (intermediate, intermediate, 855.1, 855.1))
+        self.saved(self.value(review_conditions=[buy, sell]), NOW + timedelta(seconds=15))
+        self.price(854.9, 20)
+        now = NOW + timedelta(seconds=20)
+        request_reviews(self.s, now)
+        from monitor.jd_live_buy_watch import pending_events
+        events = pending_events(self.s.conn, 'codex', now)
+        self.assertCountEqual([e['data']['quote_side'] for e in events if e['id'].startswith('live-price:')], ['buy', 'sell'])
+
+    def test_dispatch_drops_a_touch_queued_by_an_older_collector(self):
+        from monitor.jd_live_buy_watch import pending_events
+        buy = self.condition(condition='at_or_above', price_cny=855., quote_side='buy')
+        self.saved(self.value(review_conditions=[buy]))
+        self.price(855.1, 10)
+        now = NOW + timedelta(seconds=10)
+        with patch('monitor.jd_live_conditions.buy_observation_latched', return_value=False):
+            request_reviews(self.s, now)
+        self.assertEqual(len(self.price_events()), 1)
+        self.assertFalse(any(e['id'].startswith('live-price:') for e in pending_events(self.s.conn, 'codex', now)))
+        self.assertFalse(self.price_events())
+
     def test_stale_quote_changed_account_and_closed_session_do_not_trigger(self):
         self.saved(self.value(review_conditions=[self.condition()]));self.price(849,10)
         request_reviews(self.s,NOW+timedelta(seconds=200));self.assertFalse(self.price_events())

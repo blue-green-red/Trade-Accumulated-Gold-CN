@@ -4,7 +4,7 @@ from hashlib import sha256
 from datetime import timedelta, timezone
 from statistics import median
 
-from .jd_live_conditions import condition_key, stamp
+from .jd_live_conditions import condition_key, stamp, unchanged_buy_observation
 from .trade_costs import number
 
 MAX_GAP = timedelta(minutes=3)
@@ -532,10 +532,15 @@ def pending_events(conn, model, now):
             if data.get('buy_review'):
                 return None
             if data.get('advice_id') and data.get('condition_key'):
-                condition, revision = stored_price_condition(conn, model, data)
+                condition, revision, origin = stored_price_condition(conn, model, data)
                 if condition and (condition.get('bank_breakout') or condition.get('buy_review')):
                     return None
                 if condition and plain_buy_observation(condition):
+                    quoted, observed = stamp(data.get('quoted_at')), stamp(event.get('observed_at'))
+                    buy = number(data.get('price_cny'))
+                    if quoted and observed and buy and unchanged_buy_observation(
+                            conn, data['bank'], origin, condition, (quoted, observed, buy, None)):
+                        return None
                     current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
                     if current and current[0].get('revision') == revision and reviewed_price_observation(
                             conn, model, current[0], condition['condition'], now):

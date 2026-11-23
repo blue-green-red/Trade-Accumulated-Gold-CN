@@ -221,9 +221,43 @@ def management_state(account,advice,item,now):
     return 'current'
 
 
+def price_met(condition, price):
+    if condition['condition'] == 'at_or_above':
+        return price >= condition['price_cny']
+    return price <= condition['price_cny']
+
+
+def stayed_on_trigger_side(conn, bank, condition, after, point):
+    from .jd_live_buy_watch import quote_tape
+
+    return all(price_met(condition, buy) for _, buy, _ in quote_tape(conn, bank, after, point))
+
+
+def unchanged_buy_observation(conn, bank, advice, condition, point):
+    input_at = stamp(advice.get('input_quote_at'))
+    input_price = advice.get('input_buy_quote_cny')
+    return (input_at is not None and input_at <= point[0] and input_price is not None
+            and price_met(condition, input_price)
+            and stayed_on_trigger_side(conn, bank, condition, input_at, point))
+
+
+def buy_observation_latched(conn, account, advice, condition, watch, now):
+    """A bank price already seen by the model needs a new crossing to request a review."""
+    quote = account['quote']
+    point = (stamp(quote['quoted_at']), now, quote['buy_price_cny'], quote.get('sell_price_cny'))
+    previous_at = stamp(watch.get('last_quote_at'))
+    input_at = stamp(advice.get('input_quote_at'))
+    if previous_at and (not input_at or previous_at >= input_at):
+        return watch.get('latched') and stayed_on_trigger_side(conn, account['bank'], condition, previous_at, point)
+    if not input_at or advice.get('input_buy_quote_cny') is None:
+        return bool(watch.get('latched'))
+    return unchanged_buy_observation(conn, account['bank'], advice, condition, point)
+
+
 def monitor_prices(store,account,advice,now):
     from .ai_events import read,write
     from .controls import active,control
+    from .jd_live_buy_guard import plain_buy_observation
     from .jd_live_readonly import PRODUCTS
     for condition in advice.get('review_conditions',[]):
         if condition.get('buy_review') or condition.get('bank_breakout'):continue
@@ -231,7 +265,7 @@ def monitor_prices(store,account,advice,now):
         if state['status'] not in ('monitoring','latched','queued','reviewed'):continue
         quote=account['quote'];price=quote.get(condition['quote_side']+'_price_cny')
         if not isinstance(price,(float,int)) or isinstance(price,bool) or price<=0:continue
-        met=price>=condition['price_cny'] if condition['condition']=='at_or_above' else price<=condition['price_cny']
+        met=price_met(condition,price)
         # The collector and monitor can observe the same tick. Commit event + latch atomically.
         with store.conn:
             store.conn.execute('BEGIN IMMEDIATE')
@@ -239,7 +273,10 @@ def monitor_prices(store,account,advice,now):
             if not active(store.conn,advice['analyst']) or (switch.get('changed_at') and advice['created_at']<=switch['changed_at']):continue
             key=watch_key(store.conn,advice['analyst'],account['bank'],condition);watch=read_watch(store.conn,key)
             if watch.get('last_quote_at') and stamp(quote['quoted_at'])<=stamp(watch['last_quote_at']):continue
-            if met and not watch.get('latched'):
+            latched = watch.get('latched')
+            if met and plain_buy_observation(condition):
+                latched = buy_observation_latched(store.conn, account, advice, condition, watch, now)
+            if met and not latched:
                 event_id=f'live-price:{advice["analyst"]}:{account["bank"]}:{advice["id"]}:{condition_key(condition)}'
                 reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
                 events=read(store.conn,advice['analyst'])

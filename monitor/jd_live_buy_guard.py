@@ -16,10 +16,11 @@ def stored_price_condition(conn, model, data):
     row = conn.execute('SELECT advice_json,snapshot_revision FROM jd_live_advice WHERE id=? AND analyst=? AND bank=?',
                        (data.get('advice_id'), model, data.get('bank'))).fetchone()
     if not row:
-        return None, None
-    condition = next((c for c in json.loads(row[0]).get('review_conditions', [])
+        return None, None, {}
+    advice = json.loads(row[0])
+    condition = next((c for c in advice.get('review_conditions', [])
                       if condition_key(c) == data.get('condition_key')), None)
-    return condition, row[1]
+    return condition, row[1], advice
 
 
 def plain_buy_observation(condition):
@@ -47,7 +48,7 @@ def remember_reviewed_price_observations(conn, model, context, event_ids, genera
         data = event.get('data') or {}
         if data.get('quote_side') != 'buy' or data.get('order_key') or not (at := stamp(data.get('quoted_at'))):
             continue
-        condition, revision = stored_price_condition(conn, model, data)
+        condition, revision, _ = stored_price_condition(conn, model, data)
         if not condition or not plain_buy_observation(condition):
             continue
         direction = condition['condition']
