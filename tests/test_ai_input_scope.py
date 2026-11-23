@@ -110,7 +110,11 @@ class InputScopeTests(unittest.TestCase):
                      'price_cny': 805, 'threshold_cny': 805, 'bank_breakout': {'hold_minutes': 3}}
         event = {'id': 'live-buy-confirmed:codex:zheshang:test',
                  'data': {'bank': 'zheshang', 'routes': [route, automatic]}}
-        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005, 'total_grams': 42}
+        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005, 'total_grams': 42,
+                   'recent_bank_quotes': {'as_of': quote['quoted_at'], 'earlier_sampled_ranges': [
+                       {'to': '2026-11-23T01:00:00+00:00', 'sell_high_cny': 811.5},
+                       {'to': '2026-11-23T02:05:00+00:00', 'sell_high_cny': 890},
+                   ]}}
         original = {'live_readonly_accounts': {'accounts': {'zheshang': account,
                     'minsheng': {**account, 'sell_fee_rate': .01}}}, 'trigger_events': [event]}
         result = compact_context(original)
@@ -119,7 +123,9 @@ class InputScopeTests(unittest.TestCase):
         self.assertEqual(payoffs['pullback'], {
             'weak_target_net_cny_per_gram': round(812 * .995 - 806, 4),
             'risk_exit_net_cny_per_gram': -10.0, 'hold_only_at_exit_delta_cny': -208.95})
-        self.assertEqual(payoffs['continuation'], {'at_breakout_level_net_cny_per_gram': round(805 * .995 - 806, 2)})
+        self.assertEqual(payoffs['continuation'], {'at_breakout_level_net_cny_per_gram': round(805 * .995 - 806, 2),
+                                                   'earlier_sampled_sell_high_cny': 811.5,
+                                                   'at_earlier_sell_high_net_cny_per_gram': round(811.5 * .995 - 806, 2)})
         self.assertNotIn('entry_review_payoffs_at_input', by_bank['minsheng'])
         self.assertNotIn('entry_review_payoffs_at_input', account)
         self.assertEqual(compact_context(result), result)
@@ -138,6 +144,13 @@ class InputScopeTests(unittest.TestCase):
         changed['live_readonly_accounts']['accounts']['zheshang']['quote']['buy_price_cny'] = 808
         latest = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']['entry_review_payoffs_at_input']
         self.assertEqual(set(latest), {'continuation'})
+        changed['live_readonly_accounts']['accounts']['zheshang']['quote']['buy_price_cny'] = 812
+        above = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']['entry_review_payoffs_at_input']
+        self.assertNotIn('earlier_sampled_sell_high_cny', above['continuation'])
+        changed['live_readonly_accounts']['accounts']['zheshang']['quote']['buy_price_cny'] = 806
+        changed['live_readonly_accounts']['accounts']['zheshang']['recent_bank_quotes']['as_of'] = confirmed
+        stale = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']['entry_review_payoffs_at_input']
+        self.assertNotIn('earlier_sampled_sell_high_cny', stale['continuation'])
         for holding, expected in ((0, 0.0), (None, None)):
             with self.subTest(holding=holding):
                 account['total_grams'] = holding

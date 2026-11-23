@@ -118,16 +118,18 @@ class PublicTests(unittest.TestCase):
         account = self.context['live_readonly_accounts']['accounts']['zheshang']
         account['recent_bank_quotes'] = {
             'buy_price_windows_15m': [{'low': 865.32, 'high': 870.08, 'last': 869.44}],
-            'recent_samples': [[-120, 868.05]], 'break_even_buy_at_sampled_sell_high_cny': 866.91}
+            'recent_samples': [[-120, 868.05]], 'break_even_buy_at_sampled_sell_high_cny': 866.91,
+            'earlier_sampled_ranges': [{'buy_low_cny': 862.17, 'sell_high_cny': 876.25}]}
         account['previous_advice'] = [{'review_conditions': [{'buy_review': {'zone': {'floor_cny': 866.12}},
                                                             'trigger_below_sampled_1h_low_cny_per_gram': 7.02}]}]
         account['new_buy_break_even_sell_cny'] = 872.93
         account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52,
                                                                'weak_target_net_cny_per_gram': 2.47},
-                                                   'breakout': {'at_breakout_level_net_cny_per_gram': -3.66}}
+                                                   'breakout': {'at_breakout_level_net_cny_per_gram': -3.66,
+                                                                'at_earlier_sell_high_net_cny_per_gram': 4.72}}
         account['new_buy_capacity_at_input'] = {'cash_after_buy_orders_cny': 12042.32, 'cash_limited_grams': 14.35}
         account['participation_review'] = {'waiting': {'net_return_pct': -1.237}}
-        for price in (865.32, 868.05, 866.12, 866.91, 872.93, 234.52, 3.66, 12042.32, 7.02, 2.47):
+        for price in (865.32, 868.05, 866.12, 866.91, 872.93, 234.52, 3.66, 12042.32, 7.02, 2.47, 862.17, 876.25, 4.72):
             d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
             self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
         d = content(); d['analysis']['outlook'] = '等待期扣费回报为-1.237%。'

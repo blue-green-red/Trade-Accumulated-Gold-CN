@@ -93,6 +93,15 @@ def prepare_bank_entry_context(out, conn=None):
                 if retest is None:
                     continue
                 payoff = {'at_breakout_level_net_cny_per_gram': round(retest['net_sell_price_cny'] - buy, 2)}
+                evidence = account.get('recent_bank_quotes') or {}
+                if stamp(evidence.get('as_of')) == quoted_at:
+                    earlier_high = max((high for record in evidence.get('earlier_sampled_ranges', [])
+                                        if (end := stamp(record.get('to'))) and end < quoted_at
+                                        and (high := number(record.get('sell_high_cny')))), default=None)
+                    if earlier_high and earlier_high > max(buy, breakout, number(quote.get('sell_price_cny')) or 0):
+                        upper = cost_reference(earlier_high, fee)
+                        payoff.update(earlier_sampled_sell_high_cny=earlier_high,
+                                      at_earlier_sell_high_net_cny_per_gram=round(upper['net_sell_price_cny'] - buy, 2))
             else:
                 review = route.get('buy_review') or {}
                 zone = review.get('zone')
