@@ -545,6 +545,8 @@ class BuyAuditTests(unittest.TestCase):
                         json.dumps({'action': action, 'input_sell_fee_rate': .005})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
                         {'id': event_id, 'data': {'bank': 'zheshang', 'advice_id': 3, 'routes': paths}}]}
+                    if not covered:
+                        context.pop('event_coverage')
                     store.conn.execute('INSERT INTO state VALUES(?,?,?)',
                         (f'ai_model_input:{run}:codex', json.dumps(context), START.isoformat()))
                 original = (START - timedelta(minutes=1)).isoformat()

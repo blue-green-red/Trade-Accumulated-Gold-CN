@@ -373,12 +373,14 @@ def observed_reviews(conn, bank, model, limit, now):
     cases = []
     summary = defaultdict(lambda: defaultdict(int))
     for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, _ in rows:
-        if not events or not sent:
+        if not events:
             continue
-        event_ids = set(json.loads(sent).get(model, []))
+        # Current Codex archives are scoped to the submitted events and omit the duplicate coverage list.
+        sent_ids = set(json.loads(sent).get(model, [])) if sent is not None else None
         value = json.loads(raw) if raw else {}
         fee = number(value.get('input_sell_fee_rate'))
-        events = [e for e in json.loads(events) if e['id'] in event_ids and e['id'].startswith(ENTRY_EVENT_PREFIX)
+        events = [e for e in json.loads(events)
+                  if (sent_ids is None or e['id'] in sent_ids) and e['id'].startswith(ENTRY_EVENT_PREFIX)
                   and e.get('data', {}).get('bank') == bank]
         if not events:
             continue

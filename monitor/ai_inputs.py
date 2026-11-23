@@ -42,7 +42,7 @@ def compare_previous_pullbacks(account):
 def prepare_bank_entry_context(out):
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
     from .jd_live_conditions import stamp
-    from .trade_costs import bank_review_payoff, cost_reference, number
+    from .trade_costs import bank_review_unit_payoff, cost_reference, number
 
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
     for account in accounts.values():
@@ -82,8 +82,10 @@ def prepare_bank_entry_context(out):
                 recovery, cap = number(review.get('recovery_price_cny')), number(review.get('max_buy_price_cny'))
                 if not zone or recovery is None or cap is None or not recovery <= buy <= cap:
                     continue
-                payoff = bank_review_payoff(buy, review.get('grams'), zone, fee,
-                                           current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
+                unit = bank_review_unit_payoff(buy, zone, fee,
+                                               current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
+                payoff = {key: round(value, 4 if key.endswith('_per_gram') else 2)
+                          for key, value in unit.items()} if unit is not None else None
             if payoff is not None:
                 account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
 
