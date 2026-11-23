@@ -1,11 +1,57 @@
 """Link staged entries to exit boundaries; advisory checks never change bank orders."""
+import json
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .trade_costs import number
-from .jd_live_conditions import stamp
+from .jd_live_conditions import condition_key, stamp
 
 EXIT_ROLES = ('risk_limit', 'thesis_invalidation')
 OBSERVATION_ROLES = ('stress_test', 'entry_reference')
+
+
+def exit_observation(condition, boundary):
+    return (boundary is not None and condition.get('condition') == 'at_or_below'
+            and condition.get('price_cny') == boundary and not condition.get('order_key')
+            and not condition.get('buy_review') and not condition.get('checks'))
+
+
+def queued_exit_protection(conn, model, event_ids, now):
+    """Reserve an urgent review for a verified exit boundary on an existing holding."""
+    from .ai_events import read
+    from .jd_live_readonly import accounts
+
+    price_ids = {eid for eid in event_ids if eid.startswith('live-price:')}
+    if not price_ids or not conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_advice'").fetchone():
+        return False
+    for event in read(conn, model)['pending']:
+        if event['id'] not in price_ids:
+            continue
+        data = event.get('data') or {}
+        bank = data.get('bank')
+        price = number(data.get('price_cny'))
+        if data.get('quote_side') != 'sell' or data.get('order_key') or price is None or price <= 0:
+            continue
+        latest = conn.execute('SELECT id,snapshot_revision,advice_json,created_at,expires_at FROM jd_live_advice '
+                              'WHERE analyst=? AND bank=? ORDER BY id DESC LIMIT 1', (model, bank)).fetchone()
+        if not latest or latest[0] != data.get('advice_id'):
+            continue
+        quoted_at = stamp(data.get('quoted_at'))
+        created, expires = stamp(latest[3]), stamp(latest[4])
+        if not quoted_at or not created or not expires or not created <= quoted_at < expires:
+            continue
+        advice = json.loads(latest[2])
+        path = advice.get('position_path') or {}
+        boundary = number(path.get('boundary_price_cny'))
+        if (boundary is None or price > boundary or path.get('boundary_role') not in EXIT_ROLES
+                or path.get('checks') or (number(path.get('input_grams')) or 0) <= 0):
+            continue
+        if not any(exit_observation(c, boundary) and c['quote_side'] == 'sell'
+                   and condition_key(c) == data.get('condition_key') for c in advice.get('review_conditions', [])):
+            continue
+        account = next(iter(accounts(conn, now, include_advice=False, selected_bank=bank)), {})
+        if account.get('connected') and account.get('revision') == latest[1]:
+            return True
+    return False
 
 
 class PositionPath(BaseModel):
@@ -120,13 +166,15 @@ def validate(value,source,now,require=False):
             if review.get('decision')=='recommend' and same_order(review,order):
                 local(review,'推荐买单进入退出边界，应先复评和确认撤改','限价评估：')
     if boundary is not None and scenario and not scenario.get('checks'):
-        # Reuse the existing bounded, account-level review watcher rather than another scheduler.
+        # The exit condition belongs to the validated path and uses the shared review watcher.
         conditions=value.get('review_conditions',[])
-        if not any(c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key') for c in conditions):
-            if len(conditions)<4:
+        matching=[c for c in conditions if exit_observation(c,boundary)]
+        if not any(c['quote_side']=='sell' for c in matching):
+            if matching:
+                matching[0]['quote_side']='sell'
+            else:
                 conditions.append({'condition':'at_or_below','price_cny':boundary,'quote_side':'sell','order_key':None,
                     'reason':'建仓边界：暂停旧追加，核对保护成交与旧买单，刷新账户后重评。','checks':[]})
-            else:checks.append('建仓边界缺少账户级价格复评条件，需调整现有复评条件')
     path['checks']=checks
     warnings.extend('建仓路径：'+c for c in checks)
     if checks and value['action']=='buy':warnings.append('本轮新增买入的建仓路径未通过校验')

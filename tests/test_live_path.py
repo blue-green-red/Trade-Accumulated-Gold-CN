@@ -1,12 +1,19 @@
 """Synthetic staged paths: boundary precedence, real-order reservations, and coverage after adds."""
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from datetime import timedelta
 import unittest
+from unittest.mock import patch
 
+from monitor.ai import ensure_schema as ensure_ai_schema
+from monitor.ai_events import read
+from monitor.cadence import allowed
+from monitor.config import Settings
 from monitor.jd_live_advice import LiveAdvice
 from monitor.jd_live_path import PositionPath,format_path
 from monitor.jd_live_readonly import model_input,accounts
+from monitor.jd_live_review import request_reviews
 from monitor.jd_live_semantics import notification_parts,blocking_checks
 from monitor.public_ai import privacy_ok
 from test_live_entry import review
@@ -47,6 +54,45 @@ class LivePathTests(unittest.TestCase):
         self.assertIn('目标黄金仓位100%',format_path(v))
         self.assertIn('非本轮追加指令',format_path(v))
         self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
+
+    def test_exit_review_has_a_slot_and_can_use_the_protection_reserve(self):
+        ensure_ai_schema(self.f.s)
+        ordinary = [{'condition': 'at_or_above', 'price_cny': price, 'quote_side': 'sell', 'reason': '普通行情观察。'}
+                    for price in (790, 800, 810, 815)]
+        self.f.s.set_state('ai_status:codex', {'available': True})
+        advice = self.saved(review_conditions=ordinary)
+        conditions = advice['review_conditions']
+        self.assertEqual(len(conditions), 5)
+        self.assertEqual((conditions[-1]['condition'], conditions[-1]['quote_side'], conditions[-1]['price_cny']),
+                         ('at_or_below', 'sell', 820))
+        self.assertEqual(advice['position_path']['checks'], [])
+
+        now = fixtures.NOW + timedelta(seconds=1)
+        self.f.data['quote'].update(buy_price_cny=819, sell_price_cny=819, quoted_at=now.isoformat())
+        self.f.snapshot()
+        settings = replace(Settings(), ai_max_runs_per_day=2, ai_urgent_reserve=1, ai_short_review_minutes=-1)
+        with patch('monitor.trading_hours.trading_session', return_value={'is_open': True}):
+            request_reviews(self.f.s, now, settings=settings)
+        conn = self.f.s.conn
+        events = [event for event in read(conn, 'codex')['pending'] if event['id'].startswith('live-price:')]
+        exit_id, = [event['id'] for event in events if event['data']['threshold_cny'] == 820]
+        normal_ids = [event['id'] for event in events if event['id'] != exit_id]
+        self.assertTrue(normal_ids)
+        with conn:
+            conn.execute("INSERT INTO ai_runs(analyst,started_at,status) VALUES(?,?,'completed')", ('codex', now.isoformat()))
+        self.assertFalse(allowed(settings, conn, 'codex', now, normal_ids))
+        self.assertFalse(allowed(settings, conn, 'codex', now, ['live-buy-confirmed:codex:zheshang:test']))
+        self.assertTrue(allowed(settings, conn, 'codex', now, normal_ids + [exit_id]))
+
+        with conn:
+            conn.execute("INSERT INTO ai_runs(analyst,started_at,status) VALUES(?,?,'completed')", ('codex', now.isoformat()))
+        self.assertFalse(allowed(settings, conn, 'codex', now, [exit_id]))
+
+    def test_exit_boundary_at_the_same_buy_observation_price_is_monitored_on_sell_quote(self):
+        condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 820, 'reason': '核对退出边界。'}
+        advice = self.saved(review_conditions=[condition])
+        converted, = advice['review_conditions']
+        self.assertEqual(converted['quote_side'], 'sell')
 
     def test_actual_add_above_boundary_is_allowed_but_protection_does_not_expand_to_unfilled_buys(self):
         v=self.saved(action='buy',grams=5,price_condition='reference',price_cny=850)

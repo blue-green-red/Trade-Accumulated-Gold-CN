@@ -22,10 +22,14 @@ def usage(conn, model, now):
 def allowed(settings, conn, model, now, event_ids=(), manual=False):
     if manual: return True
     used=usage(conn,model,now)
-    urgent=any(key.startswith(URGENT_PREFIXES) for key in event_ids)
     maximum=max(1,settings.ai_max_runs_per_day)
     reserve=min(maximum-1,max(0,settings.ai_urgent_reserve))
-    return used < (maximum if urgent else maximum-reserve)
+    if used >= maximum: return False
+    if used < maximum-reserve: return True
+    event_ids=tuple(event_ids)
+    if any(key.startswith(URGENT_PREFIXES) for key in event_ids): return True
+    from .jd_live_path import queued_exit_protection
+    return queued_exit_protection(conn,model,event_ids,now)
 
 
 def request_periodic(settings, store, analysts, snap, now):
