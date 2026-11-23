@@ -323,6 +323,15 @@ def first_observed_quote(conn, bank, start, cutoff):
         'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
 
 
+def confirmation_receipt(conn, bank, quoted, price, archived_at):
+    if quoted is None or price is None:
+        return None
+    row = conn.execute('SELECT observed_at FROM jd_live_quote_samples WHERE bank=? AND quoted_at=? '
+                       'AND buy_price_cny=? AND observed_at>=quoted_at AND observed_at<=?',
+                       (bank, utc_text(quoted), price, utc_text(archived_at))).fetchone()
+    return stamp(row[0]) if row else None
+
+
 def observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, exit_quote,
                          grams, entry_checks):
     confirmation_key = f'at_confirmation_{grams:g}g'
@@ -355,11 +364,11 @@ def observed_entry_marks(conn, bank, confirmed, price, fee, published, publicati
 
 
 def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, published=None, publication_quote=None,
-                   grams=GRAMS, entry_checks=(None, None)):
+                   grams=GRAMS, entry_checks=(None, None), confirmed_observed_at=None):
     result = {'minutes': minutes}
     if not confirmed or price is None:
         return {**result, 'status': 'signal_unavailable'}
-    target = confirmed + timedelta(minutes=minutes)
+    target = (confirmed_observed_at or confirmed) + timedelta(minutes=minutes)
     session = trading_session(target)
     if not session['is_open']:
         return {**result, 'status': 'market_closed'}
@@ -381,7 +390,7 @@ def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publ
 
 
 def observed_review_horizons(conn, bank, confirmed, price, fee, published, publication_quote, now,
-                             *, grams=GRAMS, entry_checks=(None, None)):
+                             *, grams=GRAMS, entry_checks=(None, None), confirmed_observed_at=None):
     """Mark fixed-size hypothetical additions at common trading-day horizons."""
     horizons = []
     entry_keys = (f'at_confirmation_{grams:g}g', f'after_analysis_{grams:g}g')
@@ -391,7 +400,7 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
             row.update({key: unavailable('signal_unavailable') for key in entry_keys})
             horizons.append(row)
             continue
-        target, deadline = trading_horizon(confirmed, days)
+        target, deadline = trading_horizon(confirmed_observed_at or confirmed, days)
         row['target_at'] = utc_text(target)
         cutoff = min(now, deadline)
         exit_quote = first_observed_quote(conn, bank, target, cutoff)
@@ -493,21 +502,30 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 else:
                     path_outcome = outcome
                 price = number(route.get('price_cny'))
-                entry_checks = tuple(capacity_error or ('insufficient_input_cash' if entry and grams * entry > cash + 1e-8 else None)
-                                     for entry in (price, mark[1] if mark else None))
+                observed_at = confirmation_receipt(conn, bank, confirmed, price, archived_at)
+                confirmation_error, publication_error = (
+                    capacity_error or ('insufficient_input_cash' if entry and grams * entry > cash + 1e-8 else None)
+                    for entry in (price, mark[1] if mark else None))
+                if observed_at is None:
+                    confirmation_error = 'confirmation_quote_missing'
+                entry_checks = confirmation_error, publication_error
                 paths.append({'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                               **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
-                              'seconds_to_start': elapsed_seconds(confirmed, started),
-                              'seconds_to_completion': elapsed_seconds(confirmed, finished),
+                              'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
+                              'quote_delivery_seconds': elapsed_seconds(confirmed, observed_at),
+                              'seconds_to_start': elapsed_seconds(observed_at, started),
+                              'seconds_to_completion': elapsed_seconds(observed_at, finished),
                               'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
                               'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now,
                                                                  fee=fee, published=released, publication_quote=mark,
-                                                                 grams=grams, entry_checks=entry_checks)
+                                                                 grams=grams, entry_checks=entry_checks,
+                                                                 confirmed_observed_at=observed_at)
                                                   for minutes in (15, 60)],
                               'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
                                                                                  released, mark, now, grams=grams,
-                                                                                 entry_checks=entry_checks)})
+                                                                                 entry_checks=entry_checks,
+                                                                                 confirmed_observed_at=observed_at)})
                 if (branch, path_outcome) not in counted:
                     summary[branch][path_outcome] += 1
                     counted.add((branch, path_outcome))

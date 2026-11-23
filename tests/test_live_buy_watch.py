@@ -616,7 +616,7 @@ class BuyAuditTests(unittest.TestCase):
                     if not covered:
                         context.pop('event_coverage')
                     store.conn.execute('INSERT INTO state VALUES(?,?,?)',
-                        (f'ai_model_input:{run}:codex', json.dumps(context), START.isoformat()))
+                        (f'ai_model_input:{run}:codex', json.dumps(context), started.isoformat()))
                 original = (START - timedelta(minutes=1)).isoformat()
                 store.conn.execute('INSERT INTO ai_views(ts,model,trigger,view_json,analyst,run_id) VALUES(?,?,?,?,?,?)',
                                    (original, 'codex', 'test', '{}', 'codex', 'origin'))
@@ -627,10 +627,13 @@ class BuyAuditTests(unittest.TestCase):
                 store.conn.execute('INSERT INTO state VALUES(?,?,?)',
                     ('ai_model_input:origin:codex', json.dumps({'live_readonly_accounts': {'accounts': {
                         'zheshang': {'recent_bank_quotes': evidence}}}}), original))
+            receipt = START + timedelta(seconds=20)
+            record(store.conn, 'zheshang', (START, receipt, 806, 806))
             record(store.conn, 'zheshang', point(1, 830))
             record(store.conn, 'minsheng', point(2, 818))
             record(store.conn, 'zheshang', point(3, 807))
             record(store.conn, 'minsheng', point(15, 819))
+            record(store.conn, 'zheshang', point(15, 804))
             record(store.conn, 'zheshang', (*point(16, 805.5)[:3], 805.25))
             record(store.conn, 'zheshang', point(64, 810))
             during=START+timedelta(minutes=1)
@@ -653,9 +656,11 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual((newer['advice_action'], newer['outcome']), ('buy', 'not_covered'))
             self.assertEqual(older['outcome'], 'no_buy_suggested')
             self.assertEqual(older['analysis_seconds'], 90.0)
-            self.assertEqual(older['paths'][0]['seconds_to_start'], 30.0)
+            self.assertEqual(datetime.fromisoformat(older['paths'][0]['confirmation_observed_at']), receipt)
+            self.assertEqual(older['paths'][0]['quote_delivery_seconds'], 20.0)
+            self.assertEqual(older['paths'][0]['seconds_to_start'], 10.0)
             self.assertEqual(older['paths'][0]['quote_change_to_publication_cny'], 1)
-            self.assertEqual(older['paths'][0]['seconds_to_completion'], 120.0)
+            self.assertEqual(older['paths'][0]['seconds_to_completion'], 100.0)
             self.assertEqual([q['status'] for q in older['paths'][0]['quote_followups']], ['pending', 'pending'])
 
             final = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
@@ -666,6 +671,17 @@ class BuyAuditTests(unittest.TestCase):
                 'at_confirmation': round(10 * (805.25 * .995 - 806), 2),
                 'after_analysis': round(10 * (805.25 * .995 - 807), 2), 'wait': 0.0})
             self.assertEqual(at_60, {'minutes': 60, 'status': 'quote_missing'})
+            with store.conn:
+                store.conn.execute('UPDATE jd_live_quote_samples SET observed_at=? WHERE bank=? AND quoted_at=?',
+                    (two.isoformat(), 'zheshang', START.isoformat(timespec='microseconds')))
+            late = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))['cases'][1]['paths'][0]
+            self.assertIsNone(late['confirmation_observed_at'])
+            self.assertIsNone(late['seconds_to_start'])
+            self.assertEqual(late['quote_followups'][0]['at_confirmation_10g']['status'], 'confirmation_quote_missing')
+            self.assertIsNone(late['quote_followups'][0]['hypothetical_10g_net_cny']['at_confirmation'])
+            with store.conn:
+                store.conn.execute('UPDATE jd_live_quote_samples SET observed_at=? WHERE bank=? AND quoted_at=?',
+                    (receipt.isoformat(timespec='microseconds'), 'zheshang', START.isoformat(timespec='microseconds')))
             friday = datetime(2026, 11, 20, 18, 25, tzinfo=timezone.utc)
             after_close = followup_quote(store.conn, 'zheshang', friday, 806, 15, friday + timedelta(hours=1))
             self.assertEqual(after_close, {'minutes': 15, 'status': 'market_closed'})
