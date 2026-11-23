@@ -1,4 +1,4 @@
-"""Sticky market invalidation for an in-flight six-account decision, without restarting CLI jobs."""
+"""Sticky price invalidation for an in-flight analysis, without restarting CLI jobs."""
 import json
 import math
 from datetime import datetime
@@ -67,6 +67,71 @@ def finish(conn,model,attempt):
     check(state,read(conn,'ai_live_market'))
     save(conn,'ai_price_guard:'+model,state)
     return state
+
+
+def bank_moves_during_analysis(conn, inputs, now, threshold):
+    """Compare each bank's own input with quotes received before publication."""
+    from .jd_live_buy_watch import sample, utc_text
+    from .jd_live_conditions import stamp
+    from .jd_live_readonly import PRODUCTS, accounts
+    from .trade_costs import number as price
+
+    bank_inputs = (inputs or {}).get('accounts') or {}
+    if not bank_inputs or not math.isfinite(threshold) or threshold < 0:
+        return {}
+    failures = {}
+    cutoff = utc_text(now)
+    for account in accounts(conn, now, include_advice=False):
+        bank = account['bank']
+        source = bank_inputs.get(bank) or {}
+        origin = source.get('quote') or {}
+        anchor = stamp(origin.get('quoted_at'))
+        buy, sell = price(origin.get('buy_price_cny')), price(origin.get('sell_price_cny'))
+        if source.get('status') != 'fresh' or origin.get('status') != 'fresh' or not anchor or not (buy or sell):
+            continue
+        # The last verified snapshot may commit before its separate quote-sample write.
+        rows = list(conn.execute('''SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny
+            FROM jd_live_quote_samples WHERE bank=? AND quoted_at>? AND quoted_at<=?
+            AND observed_at BETWEEN quoted_at AND ? ORDER BY quoted_at''', (bank, utc_text(anchor), cutoff, cutoff)))
+        if (point := sample(account, now)) and point[0] > anchor:
+            current_at = utc_text(point[0])
+            if (not rows or rows[-1][0] < current_at
+                    or rows[-1][0] == current_at and tuple(rows[-1][2:]) != point[2:]):
+                rows.append((current_at, cutoff, point[2], point[3]))
+        for quoted_at, observed_at, current_buy, current_sell in rows:
+            for side, base, raw in (('buy', buy, current_buy), ('sell', sell, current_sell)):
+                current = price(raw)
+                if not base or not current:
+                    continue
+                change = (current / base - 1) * 100
+                if abs(change) + 1e-9 < threshold:
+                    continue
+                direction = '上涨' if change >= 0 else '下跌'
+                label = '买价' if side == 'buy' else '卖价'
+                failures[bank] = {'reason': f'分析期间{PRODUCTS[bank][1]}{label}较输入{direction}{abs(change):.3f}%，需按最新报价复评',
+                                  'quote_side': side, 'input_price_cny': base, 'input_quote_at': utc_text(anchor),
+                                  'price_cny': current, 'quoted_at': quoted_at, 'observed_at': observed_at,
+                                  'change_pct': round(change, 6)}
+                break
+            if bank in failures:
+                break
+    return failures
+
+
+def bank_refreshes(conn, model, attempt, failures, now):
+    """Queue one current retry per affected bank, within the publication transaction."""
+    from .ai_events import read as read_events, write
+
+    if not failures:
+        return
+    events = read_events(conn, model)
+    prefix = f'live-bank-price-guard:{model}:'
+    events['pending'] = [event for event in events['pending'] if not (event['id'].startswith(prefix)
+                         and (event.get('data') or {}).get('bank') in failures)]
+    for bank, evidence in failures.items():
+        events['pending'].append({'id': f'{prefix}{bank}:{attempt}', 'reason': evidence['reason'],
+            'min_gap_minutes': 0, 'observed_at': now.isoformat(), 'data': {'bank': bank, **evidence}})
+    write(conn, model, events)
 
 
 def request_refresh(conn,model,state):

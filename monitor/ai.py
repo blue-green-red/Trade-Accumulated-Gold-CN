@@ -461,8 +461,18 @@ class AIAnalyst:
         view_ts = utc_now().isoformat(timespec="microseconds")
         published_at = datetime.fromisoformat(view_ts)
         entry_warnings={}
+        bank_guards={}
         submitted, reviewed_entries = [], []
         if context.get("live_readonly_accounts"):
+            from .price_guard import bank_moves_during_analysis
+            if not guard.get('invalidated_at'):
+                bank_guards = bank_moves_during_analysis(store.conn, entry_context['live_readonly_accounts'],
+                                                         published_at, self.settings.ai_inflight_max_move_pct)
+            if bank_guards:
+                data['_live_bank_price_guards'] = bank_guards
+                stale_ids = {event['id'] for event in entry_context['trigger_events']
+                             if (event.get('data') or {}).get('bank') in bank_guards}
+                covered_ids = [event_id for event_id in covered_ids if event_id not in stale_ids]
             from .jd_live_buy_guard import (confirmation_key, entry_events, retire_failed_events,
                                            validate_entry_routes, with_active_routes)
             submitted = list(entry_events(entry_context, covered_ids))
@@ -501,7 +511,7 @@ class AIAnalyst:
                 now=published_at,
                 invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
                 entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids),
-                submitted_price_events=price_events)
+                submitted_price_events=price_events, bank_price_guards=bank_guards)
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):
             pending_entry_ids = set()
@@ -519,6 +529,9 @@ class AIAnalyst:
             if context.get('live_readonly_accounts') and data.get('live_account_advice'):
                 from .jd_live_buy_watch import carry_entry_observations
                 carry_entry_observations(store.conn, self.analyst, cur.lastrowid, published_at)
+        if bank_guards:
+            from .price_guard import bank_refreshes
+            bank_refreshes(store.conn, self.analyst, attempt, bank_guards, published_at)
         store.conn.commit()
         if public_status == "unavailable":
             log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)

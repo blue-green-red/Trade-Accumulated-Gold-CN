@@ -87,6 +87,73 @@ class BuyGuardTests(unittest.TestCase):
         self.assertIn('zheshang', review_failures(self.conn, context, [key], now))
         self.assertEqual(review_failures(self.conn, context, [], now), {})
 
+    def test_inflight_bank_move_after_input_blocks_only_that_banks_advice_even_after_rebound(self):
+        from test_public_ai import content
+
+        self.update_quote(0, 800)
+        self.update_quote(0, 810, bank='minsheng')
+        analyst = AIAnalyst(self.settings, self.store, 'codex', 'codex')
+        events = [{'id': f'account:{bank}', 'data': {'bank': bank}} for bank in ('zheshang', 'minsheng')]
+        events.append({'id': 'macro:shared', 'data': {}})
+        for event in events:
+            enqueue(self.conn, 'codex', '待复评', 0, event['id'], event['data'])
+        context = {'live_readonly_accounts': model_input(self.conn, START), 'xauusd': 4000,
+                   'snapshot_at': START.isoformat(), 'trigger_events': events,
+                   'event_coverage': {'codex': [event['id'] for event in events]}}
+        advice = {'action': 'hold', 'reason': '本轮继续持有。', 'risk_note': '继续观察本行报价。',
+                  'position_path': {'target_position_pct': None, 'boundary_scenario_index': None, 'exit_scope': 'plan',
+                                    'continuation': '企稳后再按本行最新报价复评。'}}
+        public = content()
+        public['decision_basis']['review_triggers'][0]['at'] = (START + timedelta(hours=1)).isoformat()
+        response = ClaudeCodeResult.model_validate({**result().model_dump(), 'research_notes': '测试', 'sources': [],
+            'live_account_advice': {'zheshang': advice, 'minsheng': advice}, 'public_content': public})
+        finish = START + timedelta(minutes=2)
+
+        def backend(*_):
+            self.update_quote(1, 800, sell_price=796.8)
+            self.update_quote(2, 800)
+            return 'notes', [], response
+
+        with patch.object(analyst, '_run_codex', side_effect=backend), patch('monitor.ai.utc_now', return_value=finish):
+            view = analyst.analyze(context, '市场复评', run_id='bank-price-guard')
+        failure = view['_live_bank_price_guards']['zheshang']
+        self.assertEqual((failure['quote_side'], failure['price_cny'], failure['change_pct']), ('sell', 796.8, -.4))
+        self.assertEqual(datetime.fromisoformat(failure['quoted_at']), START + timedelta(minutes=1))
+        by_bank = {a['bank']: a['advice'][0] for a in accounts(self.conn, finish)}
+        self.assertEqual(by_bank['zheshang']['checks'], [failure['reason']])
+        self.assertEqual(by_bank['zheshang']['action_status'], 'review_required')
+        self.assertNotIn('buy_watch', by_bank['zheshang'])
+        self.assertEqual(by_bank['minsheng']['checks'], [])
+        self.assertEqual(self.conn.execute('SELECT status FROM public_ai_reports WHERE view_id=?', (view['_view_id'],)).fetchone()[0], 'ready')
+        queue = read(self.conn, 'codex')
+        self.assertEqual(set(queue['covered']), {'account:minsheng', 'macro:shared'})
+        self.assertEqual([e['id'] for e in queue['pending']], ['account:zheshang', 'live-bank-price-guard:codex:zheshang:1'])
+        self.assertEqual(notification_events(self.conn, 'codex', view['_view_id']), [])
+
+        context.update(live_readonly_accounts=model_input(self.conn, finish), snapshot_at=finish.isoformat(),
+                       trigger_events=queue['pending'], event_coverage={'codex': [e['id'] for e in queue['pending']]})
+        with patch.object(analyst, '_run_codex', return_value=('notes', [], response)), \
+                patch('monitor.ai.utc_now', return_value=finish + timedelta(seconds=30)):
+            followup = analyst.analyze(context, '按新报价复评', run_id='bank-price-updated')
+        self.assertNotIn('_live_bank_price_guards', followup)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+    def test_inflight_bank_guard_respects_observation_time_and_checks_the_latest_snapshot(self):
+        from monitor.price_guard import bank_moves_during_analysis
+
+        self.update_quote(0, 800)
+        inputs = model_input(self.conn, START)
+        early = START + timedelta(seconds=15)
+        now = START + timedelta(minutes=1)
+        record(self.conn, 'zheshang', (early, now + timedelta(seconds=1), 850, 850))
+        self.assertEqual(bank_moves_during_analysis(self.conn, inputs, now, .4), {})
+        data = json.loads(self.conn.execute("SELECT data_json FROM jd_live_snapshots WHERE bank='zheshang'").fetchone()[0])
+        data['quote'].update(buy_price_cny=803.2, sell_price_cny=800, quoted_at=now.isoformat())
+        record_success(self.conn, 'zheshang', data, now.isoformat())
+        self.assertEqual(self.conn.execute('SELECT count(*) FROM jd_live_quote_samples').fetchone()[0], 2)
+        failure = bank_moves_during_analysis(self.conn, inputs, now, .4)['zheshang']
+        self.assertEqual((failure['quote_side'], failure['price_cny'], failure['change_pct']), ('buy', 803.2, .4))
+
     def test_cap_breach_and_gap_invalidates_even_after_latest_quote_recovers(self):
         self.update_quote(0, 806)
         setup = {'recovery_price_cny': 805, 'max_buy_price_cny': 807}

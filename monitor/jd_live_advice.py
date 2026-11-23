@@ -95,7 +95,7 @@ def prompt_for(context):
 
 
 def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None,entry_routes=None,
-         submitted_price_events=()):
+         submitted_price_events=(),bank_price_guards=None):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
     from .jd_live_readonly import enabled_banks,buy_minimums
@@ -118,6 +118,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
             fields=incomplete_fields(value)
             if fields:warnings.append('分析文字未完整结束，需复核：'+'、'.join(fields))
         if invalidation_note:warnings.append(invalidation_note)
+        if bank_guard := (bank_price_guards or {}).get(bank):
+            warnings.append(bank_guard['reason'])
         value['risk_profile']={**(inputs.get('risk_profile') or {}),'risk_budget_cny':(source.get('account_risk') or {}).get('risk_budget_cny')}
         value['input_account_risk']=source.get('account_risk')
         value['input_position_pct']=source.get('position_pct')
@@ -182,7 +184,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
             from .jd_live_buy_guard import block_entries
             block_entries(value,warning,include_reviews=bank in (entry_warnings or {}))
         from .jd_live_buy_watch import set_watch
-        set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))
+        if not bank_guard:
+            set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))
         value['validation_version']=1
         conn.execute('INSERT OR IGNORE INTO jd_live_advice(bank,analyst,view_id,created_at,expires_at,snapshot_revision,advice_json) VALUES(?,?,?,?,?,?,?)',
             (bank,analyst,view_id,now.isoformat(),(now+timedelta(minutes=value['valid_for_minutes'])).isoformat(),source['revision'],json.dumps(value,ensure_ascii=False)))
