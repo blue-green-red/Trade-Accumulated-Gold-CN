@@ -123,7 +123,8 @@ class PublicTests(unittest.TestCase):
         account['new_buy_break_even_sell_cny'] = 872.93
         account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52},
                                                    'breakout': {'at_breakout_level_net_cny_per_gram': -3.66}}
-        for price in (865.32, 868.05, 866.12, 872.93, 234.52, 3.66):
+        account['new_buy_capacity_at_input'] = {'cash_after_buy_orders_cny': 12042.32, 'cash_limited_grams': 14.35}
+        for price in (865.32, 868.05, 866.12, 872.93, 234.52, 3.66, 12042.32):
             d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
             self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
 

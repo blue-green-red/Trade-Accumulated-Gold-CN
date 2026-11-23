@@ -73,6 +73,33 @@ class LiveAccountTests(unittest.TestCase):
         unknown=model_input(self.c,NOW)['accounts']['zheshang']
         self.assertNotIn('new_buy_break_even_sell_cny',unknown)
 
+    def test_new_buy_budget_reserves_all_pending_buys_before_limiting_prompt_details(self):
+        data=parse_account('zheshang',payload())
+        orders=[{'order_key':f'{i:024x}','action':'buy','kind':'limit_buy','status':'pending',
+                 'grams':2,'price_cny':800} for i in range(1,7)]
+        data.update(cash_cny=15000,cash_source='jd_electronic_account_api',
+                    quote={'buy_price_cny':850,'sell_price_cny':850,'quoted_at':NOW.isoformat()},
+                    coverage={'pending_orders':'available'},component_times={'pending_orders':NOW.isoformat()},
+                    pending_order_count=6,pending_orders={'records':orders,'total_count':6,'complete':True})
+        record_success(self.c,'zheshang',data,NOW.isoformat())
+        inputs=model_input(self.c,NOW)
+        account=inputs['accounts']['zheshang']
+        self.assertEqual(len(account['pending_orders']['records']),5)
+        self.assertEqual(account['new_buy_capacity_at_input'],{'cash_after_buy_orders_cny':5400,'cash_limited_grams':6.35})
+        save(self.c,'codex',1,{'zheshang':{**advice(),'action':'buy','grams':6.36,
+             'price_cny':849,'price_condition':'reference'}},inputs,NOW)
+        current=accounts(self.c,NOW)[0]['advice'][0]
+        self.assertIn('新增买入与待成交买单的预算合计超过本户可用资金',current['checks'])
+        self.assertEqual(current['action_status'],'review_required')
+        save(self.c,'codex',2,{'zheshang':{**advice(),'action':'buy','grams':6.36,
+             'price_cny':849,'price_condition':'at_or_below'}},inputs,NOW)
+        current=accounts(self.c,NOW)[0]['advice'][0]
+        self.assertNotIn('新增买入与待成交买单的预算合计超过本户可用资金',current['checks'])
+
+        data['pending_orders']['complete']=False
+        record_success(self.c,'zheshang',data,NOW.isoformat())
+        self.assertNotIn('new_buy_capacity_at_input',model_input(self.c,NOW)['accounts']['zheshang'])
+
     def test_advice_expiry_account_revision_and_model_switch(self):
         data=parse_account('zheshang',payload());record_success(self.c,'zheshang',data,NOW.isoformat())
         inputs=model_input(self.c,NOW);value=LiveAdviceSet(zheshang={**advice(),

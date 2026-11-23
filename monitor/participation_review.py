@@ -99,7 +99,12 @@ def simulation(conn,account,quote,as_of,fee,spread):
 
 def bank_cash(account):
     cash=number(account.get('cash_cny'));orders=account.get('pending_orders') or {}
-    if cash is None or orders.get('status')!='fresh' or orders.get('complete') is not True:return None
+    if cash is None or orders.get('status')!='fresh':return None
+    if orders.get('complete') is not True:
+        if orders.get('source_complete') is True and orders.get('omitted_count'):
+            free_cash=number((account.get('new_buy_capacity_at_input') or {}).get('cash_after_buy_orders_cny'))
+            if free_cash is not None and free_cash<=cash:return free_cash
+        return None
     from .jd_live_path import remaining
     for o in orders.get('records',[]):
         if o.get('status') not in ('pending','partially_filled') or o.get('action')!='buy':continue

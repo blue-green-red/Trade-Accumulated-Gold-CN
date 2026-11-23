@@ -284,6 +284,7 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
 
 def model_input(conn,now=None):
     from .jd_live_buy_watch import quote_context
+    from .participation_review import bank_cash
     now=now or datetime.now(timezone.utc)
     rows=accounts(conn,now,include_advice=True)
     if not any(r.get('fetched_at') for r in rows):return None
@@ -302,6 +303,12 @@ def model_input(conn,now=None):
             buy,fee=number(quote.get('buy_price_cny')),number(row.get('sell_fee_rate'))
             if buy and fee is not None and fee < 1:
                 values[row['bank']]['new_buy_break_even_sell_cny']=round(buy/(1-fee),2)
+            # Reserve against the full pending-order list before shortening the model input.
+            if buy and (free_cash:=bank_cash(row)) is not None:
+                values[row['bank']]['new_buy_capacity_at_input']={
+                    'cash_after_buy_orders_cny':free_cash,
+                    'cash_limited_grams':math.floor(free_cash*100/buy)/100,
+                }
         active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
         previous=[];counts={}
         for value in row['advice']+row['advice_history']:
@@ -345,7 +352,7 @@ def model_input(conn,now=None):
         # First use / newly enabled models have no historical advice to carry the feedback.
         from .controls import MODELS,active
         if any(active(conn,name) and name not in counts for name in MODELS):
-            from .participation_review import current,bank_cash
+            from .participation_review import current
             q=row.get('quote') or {}
             values[row['bank']]['participation_review']=(
                 {**current(bank_cash(row),row.get('total_grams'),q.get('sell_price_cny'),row.get('sell_fee_rate'),total_cash=row.get('cash_cny')),'as_of':q.get('quoted_at')}

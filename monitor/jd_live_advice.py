@@ -141,6 +141,12 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
             if source.get('cash_cny') is None:warnings.append('可用资金未知，执行前需确认预算')
             elif source['cash_cny']<=0:warnings.append('当前确认现金为0，买入需先明确资金来源或卖出后再评估')
             elif value['grams'] and value['price_cny'] and value['grams']*value['price_cny']>source['cash_cny']+1e-8:warnings.append('建议数量按参考价估算超过本账户可用资金')
+            elif ((free_cash:=value.get('input_participation_cash_cny')) is not None and value['grams']):
+                entry = value['price_cny'] or 0
+                if value['price_condition']!='at_or_below' and value['input_quote_status']=='fresh':
+                    entry=max(entry,price((source.get('quote') or {}).get('buy_price_cny')) or 0)
+                if entry and value['grams']*entry>free_cash+1e-8:
+                    warnings.append('新增买入与待成交买单的预算合计超过本户可用资金')
         if value['action'] in ('buy','sell') and value['price_condition']!='none' and value['price_cny'] is None:warnings.append('价格条件缺少价格')
         from .jd_live_conditions import validate_structure
         warnings.extend(validate_structure(value,source,now,minimum_buy_grams=minimums.get(bank)))

@@ -200,7 +200,7 @@ def privacy_ok(content, context):
         if isinstance(value, dict):
             for k, v in value.items():
                 if k in ('reference_amounts_cny','up_delta_cny','down_delta_cny','buy_hold_delta_cny','price_only_delta_cny',
-                         'exit_cost_cny','entry_review_payoffs_at_input'):
+                         'exit_cost_cny','entry_review_payoffs_at_input','new_buy_capacity_at_input'):
                     for n in numbers(v):yield abs(n)
                 elif k == 'recent_bank_quotes' and isinstance(v, dict):
                     for window in v.get('buy_price_windows_15m', []):

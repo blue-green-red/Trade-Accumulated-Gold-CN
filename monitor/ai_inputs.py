@@ -23,6 +23,8 @@ def prepare_bank_entry_context(out):
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
     for account in accounts.values():
         account.pop('entry_review_payoffs_at_input', None)
+        if account.get('status') != 'fresh' or (account.get('quote') or {}).get('status') != 'fresh':
+            account.pop('new_buy_capacity_at_input', None)
     for event in out.get('trigger_events', []):
         if not event.get('id', '').startswith(ENTRY_EVENT_PREFIX):
             continue
