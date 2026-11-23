@@ -4,7 +4,7 @@ from hashlib import sha256
 from datetime import timedelta, timezone
 from statistics import median
 
-from .jd_live_conditions import condition_key, stamp, unchanged_buy_observation
+from .jd_live_conditions import condition_key, renewed_pullback_deadline, stamp, unchanged_buy_observation
 from .trade_costs import cost_reference, number
 
 MAX_GAP = timedelta(minutes=3)
@@ -603,6 +603,12 @@ def pending_events(conn, model, now):
                             conn, data['bank'], origin, condition, (quoted, observed, buy, None)):
                         return None
                     current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
+                    if data.get('renewed_pullback'):
+                        latest = conn.execute('SELECT max(id) FROM jd_live_advice WHERE bank=? AND analyst=?',
+                                              (data['bank'], model)).fetchone()[0]
+                        if (latest != data['advice_id'] or not current
+                                or not renewed_pullback_deadline(conn, current[0], origin, condition, now)):
+                            return None
                     if current and current[0].get('revision') == revision and reviewed_price_observation(
                             conn, model, current[0], condition['condition'], now):
                         return None

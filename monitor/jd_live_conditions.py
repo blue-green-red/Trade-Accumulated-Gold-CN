@@ -149,6 +149,41 @@ def read_watch(conn,key):
     return json.loads(row[0]) if row else {}
 
 
+def renewed_pullback_deadline(conn, account, advice, condition, now):
+    """Keep a rejected low-price observation eligible when fresh bank quotes improve its economics."""
+    from datetime import timedelta
+    from .jd_live_buy_guard import plain_buy_observation
+    from .jd_live_buy_watch import active_window, observation_only, quote_tape, sample
+    from .trade_costs import cost_reference, number
+
+    watch = advice.get('buy_watch') or {}
+    published, expiry = stamp(advice.get('created_at')), stamp(advice.get('expires_at'))
+    deadline = stamp(watch.get('expires_at'))
+    if (not published or not expiry or not deadline or not expiry <= now < deadline
+            or not observation_only(advice) or not active_window(advice, account)
+            or condition['condition'] != 'at_or_below' or not plain_buy_observation(condition)):
+        return None
+    targets = [target for candidate in advice.get('limit_buy_reviews', [])
+               if candidate.get('decision') == 'not_worthwhile' and candidate.get('entry_price_cny') == condition['price_cny']
+               and (target := number(candidate.get('target_price_cny')))]
+    point = sample(account, now)
+    if not targets or not point or point[0] <= published:
+        return None
+    state = read_watch(conn, f'live-buy-watch:{advice["analyst"]}:{account["bank"]}')
+    if state.get('plan_id') == watch['id'] and state.get('invalidated_at'):
+        return None
+    after = max(published, point[0] - timedelta(hours=1))
+    quotes = quote_tape(conn, account['bank'], after, point)
+    boundary = number((advice.get('position_path') or {}).get('boundary_price_cny'))
+    if boundary is not None and any(sell <= boundary for _, _, sell in quotes):
+        return None
+    sell_high = max(sell for _, _, sell in quotes)
+    net = cost_reference(sell_high, account.get('sell_fee_rate'))
+    if sell_high > max(targets) and net and net['net_sell_price_cny'] > condition['price_cny']:
+        return deadline
+    return None
+
+
 def condition_state(conn,account,advice,condition,now,latest=True):
     """Derived display status, including historical triggers; never schedules work from a GET."""
     from .jd_live_readonly import age
@@ -179,7 +214,10 @@ def condition_state(conn,account,advice,condition,now,latest=True):
             result['status']=advice.get('action_status') if advice.get('action_status') in ('account_changed','data_unavailable') else 'review_required'
             return result
     if not independent and advice.get('action_status',advice['status'])!='current' and not boundary_review:
-        result['status']=advice.get('action_status',advice['status']);return result
+        renewed = latest and renewed_pullback_deadline(conn, account, advice, condition, now)
+        if not renewed:
+            result['status']=advice.get('action_status',advice['status']);return result
+        result.update(expires_at=renewed.isoformat(), renewed_pullback=True)
     if condition.get('checks'):result['status']='review_required';return result
     if not trading_session(now)['is_open']:result['status']='market_closed';return result
     quote=account.get('quote') or {}
@@ -336,12 +374,15 @@ def monitor_prices(store,account,advice,now):
                 reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{trigger_price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
                 if recovered:
                     reason += f'，随后回升至{price:g}元/克'
+                if state.get('renewed_pullback'):
+                    reason += '，本行近期回补报价已提高'
                 events=read(store.conn,advice['analyst'])
                 if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
                     events['pending'].append({'id':event_id,'reason':reason,'min_gap_minutes':0,'observed_at':now.isoformat(),
                         'data':{'bank':account['bank'],'advice_id':advice['id'],'condition_key':condition_key(condition),
                                 'quote_side':condition['quote_side'],'price_cny':trigger_price,'threshold_cny':condition['price_cny'],
-                                'quoted_at':trigger_at,'order_key':condition.get('order_key'),'reason':condition['reason']}})
+                                'quoted_at':trigger_at,'order_key':condition.get('order_key'),'reason':condition['reason'],
+                                **({'renewed_pullback': True} if state.get('renewed_pullback') else {})}})
                     write(store.conn,advice['analyst'],events)
                     watch.update(triggered_at=now.isoformat(),event_id=event_id,advice_id=advice['id'])
             watch.update(latched=met,last_quote_at=quote['quoted_at'],last_price_cny=price)

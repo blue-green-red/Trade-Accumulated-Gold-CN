@@ -13,11 +13,12 @@ ENTRY_EVENT_PREFIX = 'live-buy-confirmed:'
 def stored_price_condition(conn, model, data):
     from .jd_live_conditions import condition_key
 
-    row = conn.execute('SELECT advice_json,snapshot_revision FROM jd_live_advice WHERE id=? AND analyst=? AND bank=?',
+    row = conn.execute('SELECT advice_json,snapshot_revision,created_at,expires_at FROM jd_live_advice WHERE id=? AND analyst=? AND bank=?',
                        (data.get('advice_id'), model, data.get('bank'))).fetchone()
     if not row:
         return None, None, {}
     advice = json.loads(row[0])
+    advice.update(created_at=row[2], expires_at=row[3], analyst=model, snapshot_revision=row[1])
     condition = next((c for c in advice.get('review_conditions', [])
                       if condition_key(c) == data.get('condition_key')), None)
     return condition, row[1], advice

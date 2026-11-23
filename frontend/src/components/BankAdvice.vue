@@ -443,6 +443,9 @@ const proposalState = (order) => {
           }}
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
+        <div v-if="c.monitoring?.renewed_pullback" class="sub">
+          本行近期回补报价已提高，触价后重新评估。
+        </div>
         <div v-if="c.bank_breakout" class="sub">
           突破后至少 {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
           跨满 {{ c.monitoring?.continuation_minutes ?? 3 }} 分钟且刷新突破后的高点时复评。

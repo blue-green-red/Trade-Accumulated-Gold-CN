@@ -155,6 +155,37 @@ class StructuredAdviceTests(unittest.TestCase):
         self.assertFalse(any(e['id'].startswith('live-price:') for e in pending_events(self.s.conn, 'codex', now)))
         self.assertFalse(self.price_events())
 
+    def test_rejected_low_price_can_be_reviewed_after_expiry_when_fee_room_improves(self):
+        from monitor.jd_live_buy_watch import pending_events, record
+
+        condition = self.condition(price_cny=850, quote_side='buy')
+        candidate = {'decision': 'not_worthwhile', 'entry_price_cny': 850, 'target_price_cny': 853,
+                     'risk_exit_cny': 840, 'grams': 10, 'basis': '旧回补幅度有限。', 'reason': '扣费空间不足。'}
+        for seconds, price in ((-180, 851), (-120, 852), (-60, 854)):
+            at = NOW + timedelta(seconds=seconds)
+            record(self.s.conn, 'zheshang', (at, at, price, price))
+        self.saved(self.value(valid_for_minutes=15, review_conditions=[condition], limit_buy_reviews=[candidate]))
+        self.assertIsNotNone(self.latest()['buy_watch'])
+        self.price(849, 16 * 60)
+        request_reviews(self.s, NOW + timedelta(minutes=16))
+        self.assertFalse(self.price_events())
+
+        high_at = NOW + timedelta(minutes=17)
+        record(self.s.conn, 'zheshang', (high_at, high_at, 860, 860))
+        self.price(849, 18 * 60)
+        now = NOW + timedelta(minutes=18)
+        request_reviews(self.s, now)
+        request_reviews(self.s, now)
+        event, = self.price_events()
+        self.assertTrue(event['data']['renewed_pullback'])
+        self.assertEqual(event['data']['price_cny'], 849)
+        self.assertIn(event['id'], [event['id'] for event in pending_events(self.s.conn, 'codex', now)])
+        row = self.latest(now)
+        self.assertEqual(row['status'], 'expired')
+        self.assertTrue(row['review_conditions'][0]['monitoring']['renewed_pullback'])
+        cutoff = datetime.fromisoformat(row['buy_watch']['expires_at'])
+        self.assertFalse(any(e['id'] == event['id'] for e in pending_events(self.s.conn, 'codex', cutoff)))
+
     def test_stale_quote_changed_account_and_closed_session_do_not_trigger(self):
         self.saved(self.value(review_conditions=[self.condition()]));self.price(849,10)
         request_reviews(self.s,NOW+timedelta(seconds=200));self.assertFalse(self.price_events())
