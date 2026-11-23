@@ -48,7 +48,13 @@ def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
 
 def active_routes(conn, account, routes, now):
     point = sample(account, now)
-    anchored = [(route, anchor) for route in routes if (anchor := stamp(route.get('confirmed_at')))]
+    anchored = []
+    for route in routes:
+        anchor = stamp(route.get('confirmed_at'))
+        expiry = route.get('signal_expires_at')
+        deadline = stamp(expiry)
+        if anchor and (expiry is None or (deadline is not None and now < deadline)):
+            anchored.append((route, anchor))
     if not anchored or not point:
         return []
     quotes = quote_tape(conn, account['bank'], min(anchor for _, anchor in anchored), point)
@@ -89,7 +95,7 @@ def review_failures(conn, context, event_ids, now):
             warnings[bank] = '原买入触发缺少确认时间，需用新报价重新评估'
             continue
         if not active_routes(conn, account, routes, now):
-            warnings[bank] = '分析期间买入触发已失守、超价、触及退出边界或报价中断，须按新行情复评'
+            warnings[bank] = '分析期间买入触发已到期、失守、超价、触及退出边界或报价中断，须按新行情复评'
     return warnings
 
 
@@ -237,7 +243,7 @@ def current_entry_state(conn, account, advice, now):
     routes = advice.get('entry_trigger_routes')
     checks = advice.setdefault('checks', [])
     if routes and len(active_routes(conn, account, routes, now)) != len(routes):
-        warning = '本轮买入依据已失守、超价、触及退出边界或报价中断，请用新行情复评'
+        warning = '本轮买入依据已到期、失守、超价、触及退出边界或报价中断，请用新行情复评'
         size = len(checks)
         block_entries(advice, warning, include_reviews=False)
         if len(checks) > size:

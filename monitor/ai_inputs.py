@@ -22,7 +22,8 @@ def market_context(context):
     for event in out.get('trigger_events',[]):
         if event.get('id','').startswith(ENTRY_EVENT_PREFIX):
             for route in (event.get('data') or {}).get('routes',[]):
-                route.pop('position_boundary_cny',None)
+                for key in ('position_boundary_cny','signal_expires_at','source_advice_id'):
+                    route.pop(key,None)
     if out.get('trading_accounts') or out.get('live_readonly_accounts'):
         signals=out.get('signals_tradingview')
         if isinstance(signals,dict):

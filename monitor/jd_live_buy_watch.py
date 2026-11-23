@@ -141,6 +141,23 @@ def watch_deadline(advice, condition):
     return stamp((watch or {}).get('expires_at') or advice.get('expires_at'))
 
 
+def queued_route(route, advice, source_advice_id, now):
+    """Keep the original cutoff within the current plan's validity."""
+    source = route.get('source_advice_id', source_advice_id)
+    if not extended(route) and source != advice['id']:
+        return None
+    deadline = watch_deadline(advice, route)
+    expiry = route.get('signal_expires_at')
+    original = stamp(expiry)
+    if expiry is not None and original is None:
+        return None
+    if deadline and original:
+        deadline = min(deadline, original)
+    if not deadline or now >= deadline:
+        return None
+    return {**route, 'signal_expires_at': utc_text(deadline)}
+
+
 def set_watch(conn, bank, analyst, value, source, now, minimum):
     """Keep a live window across identical advice and reopen it once expired."""
     from .controls import control
@@ -330,12 +347,14 @@ def advance_watch(previous, condition, at, buy):
     return step
 
 
-def confirmed_route(condition, stage, price, boundary):
+def confirmed_route(condition, stage, price, boundary, advice):
     review = condition.get('buy_review')
     mode = stage.get('confirmation_mode')
     return {'condition_key': condition_key(condition), 'condition': condition['condition'],
             'threshold_cny': condition['price_cny'], 'touched_at': stage['touched_at'], 'hold_since': stage['hold_since'],
             'confirmed_at': stage['confirmed_at'], 'price_cny': price,
+            'signal_expires_at': utc_text(watch_deadline(advice, condition)),
+            **({'source_advice_id': advice['id']} if not extended(condition) else {}),
             **({'position_boundary_cny': boundary} if boundary is not None else {}),
             **({'confirmation_mode': mode} if mode else {}),
             **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})}
@@ -451,7 +470,7 @@ def carry_breakout_observations(conn, model, view_id, now):
                     stage.update(stage='episode_reviewed', confirmed_at=receipt['confirmed_at'], event_id=receipt['event_id'])
                 else:
                     event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
-                    route = confirmed_route(condition, stage, confirmation_price, boundary)
+                    route = confirmed_route(condition, stage, confirmation_price, boundary, new)
                     events['pending'].append(review_event(event_id, bank, advice_id, watch, [route], now))
                     changed = True
         save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
@@ -488,7 +507,7 @@ def pending_events(conn, model, now):
                                   'ORDER BY id DESC LIMIT 1', (data.get('bank'), model)).fetchone()
             if not latest:
                 return None
-            advice = json.loads(latest[2])
+            advice = {**json.loads(latest[2]), 'id': latest[0], 'expires_at': latest[1]}
             watch = advice.get('buy_watch') or {}
             if data.get('plan_id'):
                 if (watch.get('id') != data['plan_id']
@@ -500,7 +519,8 @@ def pending_events(conn, model, now):
             if not current or current[0].get('revision') != latest[3]:
                 return None
             if confirmation:
-                routes = data.get('routes', [])
+                routes = [current_route for route in data.get('routes', [])
+                          if (current_route := queued_route(route, advice, data.get('advice_id'), now))]
                 boundary = (advice.get('position_path') or {}).get('boundary_price_cny')
                 if watch and boundary is not None:
                     routes = [{'position_boundary_cny': boundary, **route} for route in routes]
@@ -581,7 +601,7 @@ def request(store, account, advice, now, point):
                     updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
                                             'confirmed_at': receipt['confirmed_at'], 'event_id': receipt['event_id']}
                     continue
-                confirmed.append(confirmed_route(condition, step, buy, boundary if watch else None))
+                confirmed.append(confirmed_route(condition, step, buy, boundary if watch else None, advice))
             updated[fingerprint] = step
         if updated == current['routes'] and not current.get('invalidated_at'):
             return

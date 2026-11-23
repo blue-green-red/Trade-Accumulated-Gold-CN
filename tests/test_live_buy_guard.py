@@ -115,6 +115,26 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(pending_events(self.conn, 'codex', after_recovery), [])
         self.assertIn('zheshang', review_failures(self.conn, context, [key], after_recovery))
 
+    def test_queued_paths_keep_their_own_deadlines_in_a_shared_watch(self):
+        short = self.route(804, buy_review={'recovery_price_cny': 805, 'max_buy_price_cny': 808})
+        breakout = self.route(bank_breakout={'retest_ceiling_cny': 806, 'hold_minutes': 3})
+        context, key = self.prepare_signal([short, breakout])
+        short_end = START + timedelta(minutes=1)
+        watch_end = START + timedelta(hours=1)
+        with self.conn:
+            self.conn.execute('UPDATE jd_live_advice SET expires_at=?,advice_json=? WHERE id=1', (
+                short_end.isoformat(), json.dumps({'buy_watch': {'id': 'test-plan', 'expires_at': watch_end.isoformat()}})))
+            events = read(self.conn, 'codex')
+            events['pending'][0]['data']['plan_id'] = 'test-plan'
+            write(self.conn, 'codex', events)
+        submitted, = pending_events(self.conn, 'codex', START)
+        context['trigger_events'] = [{**submitted, 'data': {**submitted['data'], 'routes': [submitted['data']['routes'][0]]}}]
+        self.update_quote(1, 806)
+        pending, = pending_events(self.conn, 'codex', short_end)
+        self.assertEqual(pending['id'], key)
+        self.assertEqual([r['condition_key'] for r in pending['data']['routes']], [breakout['condition_key']])
+        self.assertIn('zheshang', review_failures(self.conn, context, [key], short_end))
+
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)
         context, key = self.context([self.route()])
@@ -478,7 +498,7 @@ class BuyGuardTests(unittest.TestCase):
             view = analyst.analyze(context, '突破条件', run_id='guard-fixture')
         latest = accounts(self.conn, finish, selected_bank='zheshang')[0]['advice'][0]
         self.assertEqual(latest['action_status'], 'review_required')
-        self.assertEqual(latest['checks'], ['分析期间买入触发已失守、超价、触及退出边界或报价中断，须按新行情复评'])
+        self.assertEqual(latest['checks'], ['分析期间买入触发已到期、失守、超价、触及退出边界或报价中断，须按新行情复评'])
         self.assertEqual(notification_events(self.conn, 'codex', view['_view_id']), [])
         self.assertNotIn(key, read(self.conn, 'codex')['covered'])
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
@@ -521,6 +541,18 @@ class BuyGuardTests(unittest.TestCase):
         self.update_quote(2, 802.9)
         advice = accounts(self.conn, START + timedelta(minutes=2), selected_bank='zheshang')[0]['advice'][0]
         self.assertEqual(advice['action_status'], 'review_required')
+
+    def test_published_buy_is_paused_at_its_trigger_deadline(self):
+        self.update_quote(0, 806)
+        expires = START + timedelta(minutes=1)
+        self.save_advice(routes=[self.route(signal_expires_at=expires.isoformat())])
+        self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=START)), 1)
+
+        self.update_quote(1, 806)
+        advice = accounts(self.conn, expires, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(advice['action_status'], 'review_required')
+        self.assertIn('到期', advice['entry_pause_reason'])
+        self.assertEqual(notification_events(self.conn, 'codex', 1, now=expires), [])
 
     def test_price_limit_is_rechecked_without_rewriting_original_advice(self):
         self.update_quote(0, 806)
