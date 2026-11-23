@@ -133,6 +133,27 @@ class PreflightTests(unittest.TestCase):
         client.recover.assert_not_called()
         with slot(self.path) as after:self.assertTrue(after)
 
+    def test_review_error_cannot_invalidate_committed_bank_snapshots(self):
+        self.populate()
+        def query(operation, bank):
+            if operation in ('indexData', 'indexDataStd'):
+                return payload(bank)
+            if operation == 'cash_balance':
+                body = ({'errorCode': '00000', 'datas': {'availBalance': 14}} if bank == 'zheshang'
+                        else {'datas': {'code': 'DS00000', 'availableBalance': 14}})
+                return {'resultData': body}
+            return {'resultData': {'datas': {}}}
+
+        client = Mock()
+        client.query.side_effect = query
+        with patch('monitor.jd_live_review.request_reviews', side_effect=TypeError('fixture review error')), \
+                self.assertLogs('monitor.jd_live_sync', level='ERROR') as emitted:
+            self.assertEqual(sync_once(self.s, client, {'core'}), 'completed')
+        self.assertIn('复评检查失败', emitted.output[0])
+        for account in accounts(self.s.conn, datetime.now(timezone.utc), include_advice=False):
+            self.assertTrue(account['connected'])
+            self.assertEqual(account['cash_cny'], 14)
+
     def test_wal_allows_reader_snapshot_and_collector_commit_together(self):
         self.assertEqual(self.s.conn.execute('PRAGMA journal_mode').fetchone()[0],'wal')
         reader=sqlite3.connect(f'file:{self.path}?mode=ro',uri=True,timeout=.1)

@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime,timezone
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -16,6 +17,7 @@ import requests
 from .jd_live_readonly import PRODUCTS,enabled_banks,ensure_schema,parse_account,record_success,record_failure,number
 from .store import Store
 
+log = logging.getLogger(__name__)
 ROOT=Path(__file__).resolve().parents[1]
 PROFILE=ROOT/'monitor/data/jd-remote-browser/chrome-profile'
 QUERY_PATHS={
@@ -257,7 +259,11 @@ def refresh(store,client,groups=None,now=None):
         except PermissionError:record_failure(store.conn,bank,'login_required')
         except Exception:record_failure(store.conn,bank,'unavailable')
     from .jd_live_review import request_reviews
-    request_reviews(store,observed_now(),after_sync=True)
+    try:
+        request_reviews(store,observed_now(),after_sync=True)
+    except Exception:
+        store.conn.rollback()
+        log.exception('真实账户同步完成后的复评检查失败')
 
 
 def request_refresh(conn,components=None,source='manual'):
