@@ -671,9 +671,32 @@ class BuyAuditTests(unittest.TestCase):
                 'at_confirmation': round(10 * (805.25 * .995 - 806), 2),
                 'after_analysis': round(10 * (805.25 * .995 - 807), 2), 'wait': 0.0})
             self.assertEqual(at_60, {'minutes': 60, 'status': 'quote_missing'})
+            summary = final['timing_comparison']['breakout_continuation']
+            self.assertEqual(summary['15m'], {
+                'reviewed_episodes': 1, 'paired_samples': 1, 'confirmation_better': 1,
+                'after_analysis_better': 0, 'same': 0, 'confirmation_above_wait': 0,
+                'after_analysis_above_wait': 0, 'mean_confirmation_edge_cny': 10.0})
+            self.assertEqual((summary['60m']['reviewed_episodes'], summary['60m']['paired_samples']), (1, 0))
             with store.conn:
+                store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=2',
+                                   (json.dumps({'_covered_event_ids': [newer['event_id']]}),))
+                store.conn.execute('UPDATE jd_live_advice SET created_at=? WHERE id=2',
+                                   ((two + timedelta(minutes=2)).isoformat(),))
+                store.conn.execute('UPDATE ai_runs SET completed_at=? WHERE id=2',
+                                   ((two + timedelta(minutes=2)).isoformat(),))
+            record(store.conn, 'zheshang', point(4, 805))
+            repeated = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
+            self.assertEqual(repeated['by_branch']['breakout_continuation'], {'no_buy_suggested': 1, 'buy_suggested': 1})
+            self.assertNotEqual(repeated['cases'][0]['paths'][0]['quote_followups'][0]['after_analysis_10g']['entry_cny_per_gram'],
+                                at_15['after_analysis_10g']['entry_cny_per_gram'])
+            self.assertEqual(repeated['timing_comparison']['breakout_continuation'], summary)
+            with store.conn:
+                store.conn.execute('UPDATE jd_live_advice SET created_at=? WHERE id=2', (two.isoformat(),))
+                store.conn.execute('UPDATE ai_runs SET completed_at=? WHERE id=2', (two.isoformat(),))
+                store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=2',
+                                   (json.dumps({'_covered_event_ids': []}),))
                 store.conn.execute('UPDATE jd_live_quote_samples SET observed_at=? WHERE bank=? AND quoted_at=?',
-                    (two.isoformat(), 'zheshang', START.isoformat(timespec='microseconds')))
+                    (two.isoformat(timespec='microseconds'), 'zheshang', START.isoformat(timespec='microseconds')))
             late = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))['cases'][1]['paths'][0]
             self.assertIsNone(late['confirmation_observed_at'])
             self.assertIsNone(late['seconds_to_start'])
@@ -749,6 +772,9 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(after_15['hypothetical_20g_net_cny'], {
                 'at_confirmation': round(20 * (805.25 * .995 - 806), 2), 'after_analysis': None, 'wait': 0.0})
             self.assertEqual(after_15['after_analysis_20g']['status'], 'insufficient_input_cash')
+            one_side_only = sized['timing_comparison']['buy_price_drop_touch']['15m']
+            self.assertEqual((one_side_only['reviewed_episodes'], one_side_only['paired_samples']), (1, 0))
+            self.assertIsNone(one_side_only['mean_confirmation_edge_cny'])
             below_minimum = observed_reviews(store.conn, 'zheshang', 'codex', 4,
                                              START + timedelta(minutes=65), grams=5)
             lower_readout = next(x for x in below_minimum['cases'] if x['event_id'] == lower_id)['paths'][0]

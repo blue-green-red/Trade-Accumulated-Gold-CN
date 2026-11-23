@@ -416,11 +416,42 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
     return horizons
 
 
+def compare_review_timings(episodes, grams):
+    confirmation_key = f'at_confirmation_{grams:g}g'
+    publication_key = f'after_analysis_{grams:g}g'
+    by_branch = defaultdict(lambda: defaultdict(list))
+    for path in episodes:
+        horizons = [(f"{row['minutes']}m", row) for row in path['quote_followups']]
+        horizons.extend((f"{row['trading_days']}d", row) for row in path['trading_day_followups'])
+        for label, row in horizons:
+            early, late = row.get(confirmation_key, {}), row.get(publication_key, {})
+            pair = (early['net_cny'], late['net_cny']) if early.get('status') == late.get('status') == 'valued' else None
+            by_branch[path['branch']][label].append(pair)
+
+    result = {}
+    for branch, horizons in by_branch.items():
+        result[branch] = {}
+        for label, pairs in horizons.items():
+            matched = [pair for pair in pairs if pair is not None]
+            count = len(matched)
+            early_better = sum(early > late for early, late in matched)
+            late_better = sum(late > early for early, late in matched)
+            result[branch][label] = {
+                'reviewed_episodes': len(pairs), 'paired_samples': count,
+                'confirmation_better': early_better, 'after_analysis_better': late_better,
+                'same': count - early_better - late_better,
+                'confirmation_above_wait': sum(early > 0 for early, _ in matched),
+                'after_analysis_above_wait': sum(late > 0 for _, late in matched),
+                'mean_confirmation_edge_cny': round(sum(early - late for early, late in matched) / count, 2) if count else None,
+            }
+    return result
+
+
 def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     """Actual review events and outcomes, with a separately labeled quote comparison."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
     if tables != {'ai_runs', 'ai_views'}:
-        return {'status': 'history_unavailable', 'cases': [], 'by_branch': {}}
+        return {'status': 'history_unavailable', 'cases': [], 'by_branch': {}, 'timing_comparison': {}}
     rows = conn.execute("""
         SELECT r.id,r.run_id,r.status,r.started_at,r.completed_at,
                json_extract(v.view_json,'$._covered_event_ids'),
@@ -436,6 +467,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     """, (f'$.live_readonly_accounts.accounts.{bank}', model, utc_text(now), limit, bank)).fetchall()
     cases = []
     summary = defaultdict(lambda: defaultdict(int))
+    episodes = {}
     for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, archived_at in rows:
         if not events or not (archived_at:=stamp(archived_at)) or archived_at>now:
             continue
@@ -509,23 +541,31 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 if observed_at is None:
                     confirmation_error = 'confirmation_quote_missing'
                 entry_checks = confirmation_error, publication_error
-                paths.append({'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
-                              **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
-                              'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
-                              'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
-                              'quote_delivery_seconds': elapsed_seconds(confirmed, observed_at),
-                              'seconds_to_start': elapsed_seconds(observed_at, started),
-                              'seconds_to_completion': elapsed_seconds(observed_at, finished),
-                              'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
-                              'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now,
-                                                                 fee=fee, published=released, publication_quote=mark,
-                                                                 grams=grams, entry_checks=entry_checks,
-                                                                 confirmed_observed_at=observed_at)
-                                                  for minutes in (15, 60)],
-                              'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
-                                                                                 released, mark, now, grams=grams,
-                                                                                 entry_checks=entry_checks,
-                                                                                 confirmed_observed_at=observed_at)})
+                path = {
+                    'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
+                    **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
+                    'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
+                    'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
+                    'quote_delivery_seconds': elapsed_seconds(confirmed, observed_at),
+                    'seconds_to_start': elapsed_seconds(observed_at, started),
+                    'seconds_to_completion': elapsed_seconds(observed_at, finished),
+                    'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
+                    'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now, fee=fee,
+                                                       published=released, publication_quote=mark, grams=grams,
+                                                       entry_checks=entry_checks, confirmed_observed_at=observed_at)
+                                        for minutes in (15, 60)],
+                    'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
+                                                                     released, mark, now, grams=grams,
+                                                                     entry_checks=entry_checks,
+                                                                     confirmed_observed_at=observed_at),
+                }
+                paths.append(path)
+                if released and confirmed and path_outcome in (
+                        'buy_suggested', 'conditional_buy_suggested', 'no_buy_suggested', 'not_buy_basis'):
+                    episode = (branch, key[0] or e['id'], confirmed)
+                    publication = released, attempt
+                    if episode not in episodes or publication < episodes[episode][0]:
+                        episodes[episode] = (publication, path)
                 if (branch, path_outcome) not in counted:
                     summary[branch][path_outcome] += 1
                     counted.add((branch, path_outcome))
@@ -536,7 +576,8 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                           'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
     archived = sum(1 for row in rows if (at:=stamp(row[-1])) and at<=now)
     return {'status': 'available' if archived else 'input_archives_unavailable',
-            'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary}
+            'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary,
+            'timing_comparison': compare_review_timings((path for _, path in episodes.values()), grams)}
 
 
 def report(conn, bank, model, limit, now, *, grams=GRAMS):
