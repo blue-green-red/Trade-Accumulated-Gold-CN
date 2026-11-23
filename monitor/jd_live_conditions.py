@@ -180,7 +180,8 @@ def condition_state(conn,account,advice,condition,now,latest=True):
             confirmation=(result['condition_key'],stage['confirmed_at'])
             queued=any(e['id']==event_id and any(confirmation_key(r)==confirmation for r in e['data']['routes'])
                        for e in pending)
-            status='queued' if queued else 'reviewed'
+            reviewed=stage.get('reviewed_confirmation_at')==stage['confirmed_at']
+            status='queued' if queued else 'reviewed' if reviewed else 'review_required'
         elif stage.get('stage')=='episode_reviewed':
             status='reviewed'
             event_id=stage['event_id']

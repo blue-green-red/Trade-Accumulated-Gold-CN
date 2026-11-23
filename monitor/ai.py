@@ -487,9 +487,14 @@ class AIAnalyst:
         if not guard.get("invalidated_at"):
             pending_entry_ids = set()
             if context.get("live_readonly_accounts"):
-                from .jd_live_buy_guard import entry_events, remember_reviewed_breakouts, remove_submitted_confirmations
+                from .jd_live_buy_guard import (
+                    entry_events, remember_reviewed_breakouts, remember_reviewed_confirmations,
+                    remove_submitted_confirmations,
+                )
                 remember_reviewed_breakouts(store.conn,self.analyst,entry_context,covered_ids,self._generation)
-                pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, entry_events(entry_context, covered_ids))
+                submitted = list(entry_events(entry_context, covered_ids))
+                remember_reviewed_confirmations(store.conn, self.analyst, submitted)
+                pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, submitted)
             acknowledge(store.conn, self.analyst, [event_id for event_id in covered_ids if event_id not in pending_entry_ids])
         store.conn.commit()
         if public_status == "unavailable":

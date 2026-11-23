@@ -145,6 +145,29 @@ def matching_entry_event(event, current):
     return with_active_routes(event, routes)
 
 
+def remember_reviewed_confirmations(conn, model, submitted):
+    """Mark the exact completed observation for each current watch condition."""
+    from .price_guard import read, save
+
+    for event in submitted:
+        data = event['data']
+        key = f'live-buy-watch:{model}:{data["bank"]}'
+        current = read(conn, key)
+        identity = data.get('plan_id', data.get('advice_id'))
+        if not identity or current.get('plan_id', current.get('advice_id')) != identity:
+            continue
+        changed = False
+        for route in data.get('routes', []):
+            condition, confirmed_at = confirmation_key(route)
+            step = current.get('routes', {}).get(condition, {})
+            if (confirmed_at and step.get('confirmed_at') == confirmed_at
+                    and step.get('reviewed_confirmation_at') != confirmed_at):
+                step['reviewed_confirmation_at'] = confirmed_at
+                changed = True
+        if changed:
+            save(conn, key, current)
+
+
 def remove_submitted_confirmations(conn, model, submitted):
     """Remove only exact confirmations from submitted events, under the publication write lock."""
     from .ai_events import read, write

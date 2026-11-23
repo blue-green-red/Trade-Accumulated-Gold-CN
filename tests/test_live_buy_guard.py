@@ -134,6 +134,11 @@ class BuyGuardTests(unittest.TestCase):
         finish = START + timedelta(minutes=2)
         late = self.route(804, confirmed_at=(START + timedelta(minutes=1)).isoformat(), confirmation_mode='continuation',
                           bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 805})
+        watch_key = 'live-buy-watch:codex:zheshang'
+        first = context['trigger_events'][0]['data']['routes'][0]
+        stages = {route['condition_key']: {'stage': 'confirmed', 'confirmed_at': route['confirmed_at']}
+                  for route in (first, late)}
+        self.store.set_state(watch_key, {'advice_id': 1, 'routes': stages})
 
         def backend(*_):
             self.update_quote(1, 806)
@@ -152,6 +157,9 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(events['pending'][0]['data']['routes'], [late])
         self.assertEqual(events['pending'][0]['data']['quoted_at'], late['confirmed_at'])
         self.assertIn('突破后持续走高', events['pending'][0]['reason'])
+        steps = read_watch(self.conn, watch_key)['routes']
+        self.assertEqual(steps[first['condition_key']]['reviewed_confirmation_at'], first['confirmed_at'])
+        self.assertNotIn('reviewed_confirmation_at', steps[late['condition_key']])
         context['trigger_events'] = pending_events(self.conn, 'codex', finish)
 
         with patch.object(analyst, '_run_codex', return_value=('notes', [], response)), \
@@ -159,6 +167,8 @@ class BuyGuardTests(unittest.TestCase):
             view = analyst.analyze(context, '后到的复评信号', run_id='second-review')
         self.assertEqual(view['_covered_event_ids'], [key])
         self.assertEqual(read(self.conn, 'codex'), {'pending': [], 'covered': [key]})
+        self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
+                         late['confirmed_at'])
 
     def test_sell_and_existing_protection_can_still_pass_independent_validation(self):
         advice = {'action': 'sell', 'checks': [], 'suggested_orders': [
