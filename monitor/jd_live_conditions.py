@@ -133,7 +133,8 @@ def condition_state(conn,account,advice,condition,now,latest=True):
             and not condition.get('order_key') and not condition.get('buy_review')):
         result['status']='review_required';return result
     boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
-    from .jd_live_buy_watch import active_window, eligible, extended, pending_plan_review, watch_deadline, watch_id
+    from .jd_live_buy_watch import (active_window, eligible, extended, pending_plan_review, watch_deadline, watch_id,
+                                    watch_progress, watch_route_key, watch_routes)
     independent=latest and advice.get('buy_watch') and extended(condition)
     if independent:
         result['expires_at']=watch_deadline(advice,condition).isoformat()
@@ -161,16 +162,29 @@ def condition_state(conn,account,advice,condition,now,latest=True):
     events=read(conn,advice['analyst'])
     pending=events['pending']
     if condition.get('buy_review') or condition.get('bank_breakout'):
-        current=read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}')
+        from .jd_live_buy_guard import confirmation_key
+        current=watch_progress(read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}'))
         identity=watch_id(advice)
         same_plan=latest and current.get('plan_id',current.get('advice_id'))==identity
-        stage=current.get('routes',{}).get(result['condition_key'],{}) if same_plan else {}
+        review=pending_plan_review(events,account['bank'],identity)
+        queued_keys={confirmation_key(r) for r in review['data']['routes']} if review else set()
+        stages=current.get('routes',{}) if same_plan else {}
+        route_keys=[watch_route_key(route) for route in watch_routes([condition])]
+        def display_priority(key):
+            step=stages.get(key,{})
+            if (until:=stamp(step.get('observation_expires_at'))) and now>=until:
+                return (-1,'','')
+            confirmed=step.get('confirmed_at')
+            return (step.get('stage')=='confirmed' and (key,confirmed) in queued_keys,
+                    confirmed or '', step.get('last_at') or '')
+        route_key=max(route_keys,key=display_priority)
+        stage=stages.get(route_key,{})
         carried_until=stamp(stage.get('observation_expires_at'))
         if carried_until and now>=carried_until:
             stage={}
         elif carried_until and independent:
             result['expires_at']=min(watch_deadline(advice,condition),carried_until).isoformat()
-        previous_review=current.get('reviewed_routes',{}).get(result['condition_key']) if same_plan else None
+        previous_review=current.get('reviewed_routes',{}).get(route_key) if same_plan else None
         event_id=stage.get('event_id',f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{identity}')
         status='monitoring' if eligible(condition,account.get('minimum_buy_grams')) else 'review_required'
         if current.get('plan_id')==identity and current.get('invalidated_at'):
@@ -178,10 +192,7 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if stage.get('stage')=='above_cap':status='price_limit_exceeded'
         if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
-            from .jd_live_buy_guard import confirmation_key
-            confirmation=(result['condition_key'],stage['confirmed_at'])
-            review=pending_plan_review(events,account['bank'],identity)
-            queued=review and any(confirmation_key(r)==confirmation for r in review['data']['routes'])
+            queued=(route_key,stage['confirmed_at']) in queued_keys
             reviewed=stage.get('reviewed_confirmation_at')==stage['confirmed_at']
             if queued:
                 status,event_id='queued',review['id']

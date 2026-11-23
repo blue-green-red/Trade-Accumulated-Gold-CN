@@ -13,7 +13,8 @@ from monitor.ai_inputs import compact_context
 from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakouts, remember_reviewed_confirmations,
-                                       remember_reviewed_price_observations, review_failures, retire_failed_events)
+                                       remember_reviewed_price_observations, remove_submitted_confirmations,
+                                       review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
 from monitor.jd_live_buy_watch import carry_entry_observations, pending_events, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, condition_state, read_watch
@@ -253,6 +254,81 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
             request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_retest_can_trigger_after_continuation_across_advice_in_the_same_move(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5), (1, 806.3), (3, 807)])
+        first, = pending_events(self.conn, 'codex', START + timedelta(minutes=3))
+        continuation, = first['data']['routes']
+        self.assertEqual(continuation['confirmation_mode'], 'continuation')
+        context = {'trigger_events': [first], 'live_readonly_accounts': {'accounts': {
+            'zheshang': {'revision': advice['snapshot_revision']}}}}
+        with self.conn:
+            remember_reviewed_breakouts(self.conn, 'codex', context, [first['id']], 0)
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
+
+        self.observe_watch(advice, [(4, 805.6)])
+        at = START + timedelta(minutes=4)
+        successor = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.observe_watch(successor, [(5, 805.5), (7, 805.7)])
+        now = START + timedelta(minutes=7)
+        event, = pending_events(self.conn, 'codex', now)
+        retest, = event['data']['routes']
+        self.assertEqual(retest['confirmation_mode'], 'retest')
+        self.assertNotEqual(retest['condition_key'], continuation['condition_key'])
+        self.assertEqual(retest['price_cny'], 805.7)
+        self.assertEqual(retest['signal_expires_at'], advice['buy_watch']['expires_at'])
+        account = accounts(self.conn, now, include_advice=False)[0]
+        state = condition_state(self.conn, account, successor, successor['review_conditions'][-1], now)
+        self.assertEqual((state['status'], state['confirmation_mode']), ('queued', 'retest'))
+
+    def test_later_continuation_stays_pending_when_earlier_retest_is_acknowledged(self):
+        self.update_quote(0, 805.7)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.7), (1, 805.4), (2, 805.45), (4, 805.45)])
+        first, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        retest, = first['data']['routes']
+        self.assertEqual(retest['confirmation_mode'], 'retest')
+        self.observe_watch(advice, [(5, 806.2)])
+        now = START + timedelta(minutes=5)
+        event, = pending_events(self.conn, 'codex', now)
+        self.assertEqual(event['id'], first['id'])
+        self.assertEqual({r['confirmation_mode'] for r in event['data']['routes']}, {'retest', 'continuation'})
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            self.assertEqual(remove_submitted_confirmations(self.conn, 'codex', [first]), {first['id']})
+        remaining, = pending_events(self.conn, 'codex', now)
+        continuation, = remaining['data']['routes']
+        self.assertEqual(continuation['confirmation_mode'], 'continuation')
+        self.assertNotEqual(continuation['condition_key'], retest['condition_key'])
+
+    def test_legacy_pending_retest_keeps_its_confirmation_when_loading_the_split_watch(self):
+        self.update_quote(0, 805.7)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.7), (1, 805.4), (2, 805.45), (4, 805.45)])
+        event_state = read(self.conn, 'codex')
+        event, = event_state['pending']
+        route, = event['data']['routes']
+        key = 'live-buy-watch:codex:zheshang'
+        watch = read_watch(self.conn, key)
+        legacy_key = condition_key(advice['review_conditions'][-1])
+        watch['routes'] = {legacy_key: watch['routes'][route['condition_key']]}
+        route['condition_key'] = legacy_key
+        self.store.set_state(key, watch)
+        with self.conn:
+            write(self.conn, 'codex', event_state)
+
+        self.observe_watch(advice, [(5, 805.8)])
+        now = START + timedelta(minutes=5)
+        event, = pending_events(self.conn, 'codex', now)
+        retest, = event['data']['routes']
+        self.assertNotEqual(retest['condition_key'], legacy_key)
+        self.assertEqual(retest['confirmed_at'], (START + timedelta(minutes=4)).isoformat(timespec='microseconds'))
+        self.assertEqual(retest['price_cny'], 805.45)
 
     def test_pullback_can_trigger_after_breakout_was_reviewed_in_the_same_window(self):
         self.update_quote(0, 805.5)

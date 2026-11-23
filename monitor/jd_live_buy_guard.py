@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 import json
 
-from .jd_live_buy_watch import MAX_GAP, quote_tape, sample
+from .jd_live_buy_watch import MAX_GAP, breakout_key, entry_review_reason, quote_tape, sample, watch_progress
 from .jd_live_conditions import stamp
 
 
@@ -60,15 +60,18 @@ def remember_reviewed_price_observations(conn, model, context, event_ids, genera
                          'confirmed_at': data['quoted_at'], 'threshold_cny': condition['price_cny']})
 
 
-def reviewed_breakout(conn, model, account, threshold, now):
+def reviewed_breakout(conn, model, account, threshold, now, mode=None):
     """Return the previously reviewed breakout while its quote sequence still holds."""
     from .controls import control
     from .price_guard import read
-    receipt = read(conn, f"live-breakout-reviewed:{model}:{account['bank']}")
-    if (receipt.get('threshold_cny') != threshold or receipt.get('revision') != account.get('revision')
-            or receipt.get('generation') != control(conn, model)['generation']):
-        return None
-    return receipt if active_routes(conn, account, [receipt], now) else None
+    key = f"live-breakout-reviewed:{model}:{account['bank']}"
+    generation = control(conn, model)['generation']
+    for receipt_key in ((f'{key}:{mode}', key) if mode else (key,)):
+        receipt = read(conn, receipt_key)
+        if (receipt.get('threshold_cny') == threshold and receipt.get('revision') == account.get('revision')
+                and receipt.get('generation') == generation and active_routes(conn, account, [receipt], now)):
+            return receipt
+    return None
 
 
 def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
@@ -81,11 +84,13 @@ def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
         revision = (inputs.get(bank) or {}).get('revision')
         if not revision:
             continue
-        key = f'live-breakout-reviewed:{model}:{bank}'
-        previous = read(conn, key)
         for route in data.get('routes', []):
             if not route.get('bank_breakout') or not (confirmed := stamp(route.get('confirmed_at'))):
                 continue
+            key = f'live-breakout-reviewed:{model}:{bank}'
+            if mode := route.get('confirmation_mode'):
+                key = f'{key}:{mode}'
+            previous = read(conn, key)
             old = stamp(previous.get('confirmed_at'))
             if (old and old >= confirmed and previous.get('generation') == generation
                     and previous.get('revision') == revision):
@@ -169,19 +174,18 @@ def route_valid(route, anchor: datetime, quotes, latest_at):
 
 
 def confirmation_key(route):
-    return route.get('condition_key'), route.get('confirmed_at')
+    key = route.get('condition_key')
+    return (breakout_key(key, route.get('confirmation_mode')) if key else key), route.get('confirmed_at')
 
 
 def with_active_routes(event, routes):
     if routes == event['data']['routes']:
         return event
     latest = max(routes, key=lambda route: stamp(route['confirmed_at']))
-    label = '突破后持续走高' if any(r.get('confirmation_mode') == 'continuation' for r in routes) else '观察条件已企稳'
-    from .jd_live_readonly import PRODUCTS
     bank = event['data']['bank']
     return {**event, 'data': {**event['data'], 'routes': routes,
                              'price_cny': latest.get('price_cny'), 'quoted_at': latest['confirmed_at']},
-            'reason': f'真实账户{label}，重新评估：{PRODUCTS[bank][1]}'}
+            'reason': entry_review_reason(bank, routes)}
 
 
 def matching_entry_event(event, current):
@@ -202,7 +206,7 @@ def remember_reviewed_confirmations(conn, model, submitted):
     for event in submitted:
         data = event['data']
         key = f'live-buy-watch:{model}:{data["bank"]}'
-        current = read(conn, key)
+        current = watch_progress(read(conn, key))
         identity = data.get('plan_id', data.get('advice_id'))
         if not identity or current.get('plan_id', current.get('advice_id')) != identity:
             continue
