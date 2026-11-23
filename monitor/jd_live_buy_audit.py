@@ -2,7 +2,7 @@
 import argparse
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance, eligible, extended, utc_text
@@ -169,6 +169,34 @@ def advice_outcome(run_status, event_id, covered, value):
     return 'no_buy_suggested'
 
 
+def elapsed_seconds(start, end):
+    return round((end - start).total_seconds(), 1) if start and end and end >= start else None
+
+
+def first_observed_quote(conn, bank, start, cutoff):
+    if cutoff < start:
+        return None
+    return conn.execute(
+        'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
+        'WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=? '
+        'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
+
+
+def followup_quote(conn, bank, confirmed, price, minutes, now):
+    result = {'minutes': minutes}
+    if not confirmed or price is None:
+        return {**result, 'status': 'signal_unavailable'}
+    target = confirmed + timedelta(minutes=minutes)
+    session = trading_session(target)
+    if not session['is_open']:
+        return {**result, 'status': 'market_closed'}
+    deadline = min(target + MAX_GAP, stamp(session['close_at']) - timedelta(microseconds=1))
+    quote = first_observed_quote(conn, bank, target, min(deadline, now))
+    if not quote:
+        return {**result, 'status': 'pending' if now < deadline else 'quote_missing'}
+    return {**result, 'status': 'observed', 'quoted_at': quote[0], 'change_cny_per_gram': round(quote[1] - price, 2)}
+
+
 def observed_reviews(conn, bank, model, limit, now):
     """Actual events passed to the model and their advice outcomes. No simulated entries."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
@@ -198,15 +226,10 @@ def observed_reviews(conn, bank, model, limit, now):
         if not events:
             continue
         released = stamp(published)
+        started = stamp(start)
         finished = stamp(finish)
         covered_ids = json.loads(covered) if covered is not None else None
-        mark = None
-        if released:
-            mark = conn.execute(
-                'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
-                'WHERE bank=? AND quoted_at>=? AND observed_at>=quoted_at AND observed_at<=? '
-                'ORDER BY quoted_at LIMIT 1',
-                (bank, utc_text(released), utc_text(min(now, released + MAX_GAP)))).fetchone()
+        mark = first_observed_quote(conn, bank, released, min(now, released + MAX_GAP)) if released else None
         counted = set()
         for e in events:
             outcome = advice_outcome(status, e['id'], covered_ids, value)
@@ -215,15 +238,18 @@ def observed_reviews(conn, bank, model, limit, now):
                 branch = review_branch(route)
                 confirmed = stamp(route.get('confirmed_at'))
                 price = number(route.get('price_cny'))
-                elapsed = (finished - confirmed).total_seconds() if confirmed and finished else None
                 paths.append({'branch': branch, 'threshold_cny': route.get('threshold_cny'),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
-                              'seconds_to_completion': round(elapsed, 1) if elapsed is not None and elapsed >= 0 else None,
-                              'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None})
+                              'seconds_to_start': elapsed_seconds(confirmed, started),
+                              'seconds_to_completion': elapsed_seconds(confirmed, finished),
+                              'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
+                              'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now)
+                                                  for minutes in (15, 60)]})
                 if (branch, outcome) not in counted:
                     summary[branch][outcome] += 1
                     counted.add((branch, outcome))
             cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
+                          'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
     archived = sum(row[-1] for row in rows)

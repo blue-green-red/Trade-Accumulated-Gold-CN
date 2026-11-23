@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import evaluate, observed_reviews
+from monitor.jd_live_buy_audit import evaluate, followup_quote, observed_reviews
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -411,6 +411,7 @@ class BuyAuditTests(unittest.TestCase):
             self.addCleanup(store.conn.close)
             ensure_schema(store.conn)
             ensure_ai_schema(store)
+            started = START + timedelta(seconds=30)
             two = START + timedelta(minutes=2)
             three = START + timedelta(minutes=3)
             bank_rule = {'hold_minutes': 3, 'retest_ceiling_cny': 807}
@@ -427,7 +428,7 @@ class BuyAuditTests(unittest.TestCase):
                     store.conn.execute('INSERT INTO ai_views(ts,model,trigger,view_json,analyst) VALUES(?,?,?,?,?)',
                         (two.isoformat(), 'codex', 'test', json.dumps({'_covered_event_ids': [event_id] if covered else []}), 'codex'))
                     store.conn.execute('INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status,completed_at,view_rowid) '
-                        'VALUES(?,?,?,?,?,?,?)', ('codex', START.isoformat(), 'fixture', run, 'completed', two.isoformat(), i))
+                        'VALUES(?,?,?,?,?,?,?)', ('codex', started.isoformat(), 'fixture', run, 'completed', two.isoformat(), i))
                     store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
                         two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1', json.dumps({'action': action})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
@@ -437,6 +438,9 @@ class BuyAuditTests(unittest.TestCase):
             record(store.conn, 'zheshang', point(1, 830))
             record(store.conn, 'minsheng', point(2, 818))
             record(store.conn, 'zheshang', point(3, 807))
+            record(store.conn, 'minsheng', point(15, 819))
+            record(store.conn, 'zheshang', point(16, 805.5))
+            record(store.conn, 'zheshang', point(64, 810))
             result = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))
             self.assertEqual(result['examined_runs'], 2)
             self.assertEqual(result['by_branch']['breakout_continuation'], {'no_buy_suggested': 1, 'not_covered': 1})
@@ -444,8 +448,20 @@ class BuyAuditTests(unittest.TestCase):
             newer, older = result['cases']
             self.assertEqual((newer['advice_action'], newer['outcome']), ('buy', 'not_covered'))
             self.assertEqual(older['outcome'], 'no_buy_suggested')
+            self.assertEqual(older['analysis_seconds'], 90.0)
+            self.assertEqual(older['paths'][0]['seconds_to_start'], 30.0)
             self.assertEqual(older['paths'][0]['quote_change_to_publication_cny'], 1)
             self.assertEqual(older['paths'][0]['seconds_to_completion'], 120.0)
+            self.assertEqual([q['status'] for q in older['paths'][0]['quote_followups']], ['pending', 'pending'])
+
+            final = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
+            at_15, at_60 = final['cases'][1]['paths'][0]['quote_followups']
+            self.assertEqual((at_15['status'], at_15['change_cny_per_gram']), ('observed', -.5))
+            self.assertEqual(datetime.fromisoformat(at_15['quoted_at']), START + timedelta(minutes=16))
+            self.assertEqual(at_60, {'minutes': 60, 'status': 'quote_missing'})
+            friday = datetime(2026, 11, 20, 18, 25, tzinfo=timezone.utc)
+            after_close = followup_quote(store.conn, 'zheshang', friday, 806, 15, friday + timedelta(hours=1))
+            self.assertEqual(after_close, {'minutes': 15, 'status': 'market_closed'})
 
     def test_same_horizon_only_post_publication_quotes_with_observed_fee(self):
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
