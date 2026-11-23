@@ -100,6 +100,20 @@ def bank_breakout_condition(windows):
             'reason': '本行买价突破近期高位后，持续走高或回踩守稳时重新评估。', 'checks': []}
 
 
+def earlier_bank_breakout(ranges, nearby, current_buy):
+    buy = number(current_buy)
+    if not buy:
+        return None
+    ceiling = nearby['bank_breakout']['retest_ceiling_cny']
+    high = min((level for row in ranges if (level := number(row.get('buy_high_cny')))
+                and level > ceiling and level >= buy), default=None)
+    if high is None:
+        return None
+    return {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': high,
+            'bank_breakout': {'earlier_high': True}, 'checks': [],
+            'reason': '突破本行更早高位后持续走高，再评估延续空间。'}
+
+
 def quote_context(conn, account, now):
     """Compact price history and fee-adjusted rebound reference aligned to the current bank quote."""
     current = sample(account, now)
@@ -313,16 +327,8 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
         prior = {bool(c['bank_breakout'].get('earlier_high')): c for c in previous.get('review_conditions', [])
                  if prior_active and c.get('bank_breakout')}
         nearby = prior.get(False) or bank_breakout_condition(evidence['buy_price_windows_15m'])
-        earlier = prior.get(True)
-        buy = number(source['quote'].get('buy_price_cny'))
-        if earlier is None and buy:
-            ceiling = nearby['bank_breakout']['retest_ceiling_cny']
-            earlier_high = min((high for row in evidence.get('earlier_sampled_ranges', [])
-                                if (high := number(row.get('buy_high_cny'))) and high > ceiling and high >= buy), default=None)
-            if earlier_high is not None:
-                earlier = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': earlier_high,
-                           'bank_breakout': {'earlier_high': True}, 'checks': [],
-                           'reason': '突破本行更早高位后持续走高，再评估延续空间。'}
+        earlier = prior.get(True) or earlier_bank_breakout(evidence.get('earlier_sampled_ranges', []), nearby,
+                                                          source['quote'].get('buy_price_cny'))
         for generated in (c for c in (nearby, earlier) if c is not None):
             key = condition_key(generated)
             distinct = bool(generated['bank_breakout'].get('earlier_high'))

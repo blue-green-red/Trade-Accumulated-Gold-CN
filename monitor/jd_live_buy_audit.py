@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 from .config import BJ, Settings
 from .jd_live_buy_watch import (BREAKOUT_MODES, MAX_GAP, WATCH_WINDOW, advance, advance_watch, bank_breakout_condition,
-                               breakout_retest_price_status, buy_price_windows, eligible, utc_text,
+                               breakout_retest_price_status, buy_price_windows, earlier_bank_breakout, earlier_sampled_ranges,
+                               eligible, utc_text,
                                plain_buy_discards, plain_buy_suppressions, watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
@@ -56,7 +57,7 @@ def market_breakout_episodes(points):
         gap = bool(window and (at - window[-1][0] > MAX_GAP or received - window[-1][1] > MAX_GAP))
         if condition and (gap or received >= began + WATCH_WINDOW or buy < condition['price_cny']):
             ending = 'sampling_gap' if gap else 'window_expired' if received >= began + WATCH_WINDOW else 'fell_below_level'
-            yield condition['price_cny'], began, confirmations, ending, point if ending == 'fell_below_level' else None
+            yield condition, began, confirmations, ending, point if ending == 'fell_below_level' else None
             condition = None
         if gap:
             window.clear()
@@ -81,7 +82,54 @@ def market_breakout_episodes(points):
         while window[0][0] <= at - WATCH_WINDOW:
             window.popleft()
     if condition:
-        yield condition['price_cny'], began, confirmations, 'as_of', None
+        yield condition, began, confirmations, 'as_of', None
+
+
+def market_earlier_breakout_windows(conn, bank, points, episodes, now):
+    """Replay one higher-price watch at a time, using evidence available before the near break."""
+    received_times = [point[1] for point in points]
+    next_window = None
+    for nearby, began, _, _, _ in episodes:
+        if next_window is not None and began < next_window:
+            continue
+        index = bisect_left(received_times, began)
+        quoted, received, buy, _ = points[index - 1]
+        ranges = earlier_sampled_ranges(conn, bank, quoted - WATCH_WINDOW, received)
+        condition = earlier_bank_breakout(ranges, nearby, buy)
+        if condition is None:
+            continue
+        session = trading_session(began)
+        if not session['is_open']:
+            continue
+        close = stamp(session.get('close_at'))
+        deadline = min(began + WATCH_WINDOW, close) if close else began + WATCH_WINDOW
+        next_window = deadline
+        samples = points[index:bisect_left(received_times, deadline, index)]
+        state = {}
+        first_touch = entry = loss = last = None
+        complete = complete_sampling(began, min(deadline, now), samples)
+        for point in samples:
+            at, observed, buy, _ = point
+            connected = last is None or (at - last[0] <= MAX_GAP and observed - last[1] <= MAX_GAP)
+            last = point
+            if not connected:
+                complete = False
+                if entry is not None:
+                    break
+                state = {}
+            if entry is not None:
+                if buy < condition['price_cny']:
+                    loss = point
+                    break
+                continue
+            state = advance(state, condition, at, buy, breakout_mode='continuation')
+            if first_touch is None and state.get('touched_at'):
+                first_touch = observed
+            if state.get('stage') == 'confirmed':
+                entry = point
+        yield {'threshold_cny': condition['price_cny'], 'starts_at': utc_text(began), 'expires_at': utc_text(deadline),
+               'first_touch_at': utc_text(first_touch) if first_touch else None,
+               'complete': complete and now >= deadline}, entry, loss
 
 
 def market_breakout_horizon(points, times, entry, fee, now, *, minutes=None, days=None, loss_point=None):
@@ -144,20 +192,28 @@ def market_breakout_baseline(conn, bank, now, fee):
     cases = []
     endings = defaultdict(int)
     unconfirmed_endings = defaultdict(int)
-    for threshold, began, confirmations, ending, loss_point in market_breakout_episodes(points):
-        if began < since:
-            continue
+    episodes = [episode for episode in market_breakout_episodes(points) if episode[1] >= since]
+
+    def outcome_case(branch, threshold, began, entry, loss_point):
+        outcomes = {label: (market_breakout_horizon(points, times, entry, fee, now, loss_point=loss_point, **period)
+                            if fee is not None else unavailable('fee_unknown')) for label, period in horizons.items()}
+        return {'branch': branch, 'threshold_cny': threshold, 'breakout_at': began,
+                'confirmed_at': utc_text(entry[1]), 'confirmed_buy_cny': entry[2], 'outcomes_per_gram': outcomes}
+
+    for condition, began, confirmations, ending, loss_point in episodes:
         endings[ending] += 1
         if not confirmations:
             unconfirmed_endings[ending] += 1
         for mode, entry in confirmations.items():
-            outcomes = {label: (market_breakout_horizon(points, times, entry, fee, now, loss_point=loss_point, **period)
-                                if fee is not None else unavailable('fee_unknown')) for label, period in horizons.items()}
-            cases.append({'branch': f'breakout_{mode}', 'threshold_cny': threshold, 'breakout_at': utc_text(began),
-                          'confirmed_at': utc_text(entry[1]), 'confirmed_buy_cny': entry[2], 'outcomes_per_gram': outcomes})
+            cases.append(outcome_case(f'breakout_{mode}', condition['price_cny'], utc_text(began), entry, loss_point))
+    earlier_windows = []
+    for window, entry, loss_point in market_earlier_breakout_windows(conn, bank, points, episodes, now):
+        window['confirmed_at'] = utc_text(entry[1]) if entry else None
+        earlier_windows.append(window)
+        if entry:
+            cases.append(outcome_case('breakout_extension', window['threshold_cny'], window['first_touch_at'], entry, loss_point))
     by_branch = {}
-    for mode in BREAKOUT_MODES:
-        branch = f'breakout_{mode}'
+    for branch in ('breakout_continuation', 'breakout_retest', 'breakout_extension'):
         selected = [row for row in cases if row['branch'] == branch]
         by_branch[branch] = {'confirmations': len(selected), 'horizons': {}}
         for label in horizons:
@@ -165,11 +221,13 @@ def market_breakout_baseline(conn, bank, now, fee):
             by_branch[branch]['horizons'][label] = market_breakout_summary(observed)
     paired = defaultdict(dict)
     for row in cases:
-        paired[row['breakout_at']][row['branch']] = row['confirmed_buy_cny']
+        if row['branch'] != 'breakout_extension':
+            paired[row['breakout_at']][row['branch']] = row['confirmed_buy_cny']
     both = [pair for pair in paired.values() if len(pair) == 2]
     differences = [pair['breakout_continuation'] - pair['breakout_retest'] for pair in both]
     return {'from': utc_text(since), 'to': utc_text(now), 'fee_rate': fee, 'cases': cases, 'by_branch': by_branch,
             'episode_endings': endings, 'unconfirmed_episode_endings': unconfirmed_endings,
+            'earlier_high_windows': earlier_windows,
             'paired_entry_prices': {'episodes': len(both), 'retest_lower': sum(diff > 0 for diff in differences),
                                     'continuation_lower': sum(diff < 0 for diff in differences),
                                     'equal': sum(diff == 0 for diff in differences)},

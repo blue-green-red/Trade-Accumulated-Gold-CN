@@ -105,6 +105,32 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual([(entries, state, lost) for _, _, entries, state, lost in market_breakout_episodes(with_gap_after_start)],
                          [({}, 'sampling_gap', None)])
 
+    def test_market_earlier_high_replays_after_near_failure_and_excludes_late_evidence(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'earlier-breakout.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            # Earlier same-bank buy highs were already received before the nearby break.
+            for minute, price in ((-120, 802), (-100, 803), (-80, 802)):
+                at, seen, buy, sell = point(minute, price)
+                day = timedelta(days=3)
+                record(store.conn, 'zheshang', (at - day, seen - day, buy, sell + 2))
+            delayed_at = START - timedelta(days=3, minutes=90)
+            record(store.conn, 'zheshang', (delayed_at, point(90, 801)[1], 900, 900))
+            for minute, quote in enumerate(self.market_breakout_points()):
+                prices = {71: 803.1, 72: 803.2, 73: 803.2, 74: 803.4}
+                record(store.conn, 'zheshang', point(minute, prices[minute]) if minute in prices else quote)
+            result = market_breakout_baseline(store.conn, 'zheshang', point(128, 800)[1], .004)
+        window, = result['earlier_high_windows']
+        self.assertEqual(window['threshold_cny'], 803)
+        self.assertEqual(datetime.fromisoformat(window['starts_at']), point(60, 800)[1])
+        self.assertEqual(datetime.fromisoformat(window['first_touch_at']), point(71, 803.1)[1])
+        extension, = [case for case in result['cases'] if case['branch'] == 'breakout_extension']
+        self.assertEqual(datetime.fromisoformat(extension['confirmed_at']), point(74, 803.4)[1])
+        self.assertEqual(result['by_branch']['breakout_extension']['confirmations'], 1)
+        lost = extension['outcomes_per_gram']['15m']['exit_on_breakout_loss']
+        self.assertEqual(lost['sell_cny'], 800)
+
     def test_dip_requires_recovery_and_sustained_distinct_quotes(self):
         self.assertEqual(self.advance_all([(0, 799), (1, 803), (1, 803)]), 'holding')
         self.assertEqual(self.advance_all([(0, 799), (1, 803), (2, 801), (3, 803), (4, 804)]), 'holding')
