@@ -779,6 +779,10 @@ def request(store, account, advice, now, point):
                 deadline = None
             if (candidate := candidate_deadline(advice, condition)) and not previous:
                 route_tape = [quote for quote in route_tape if quote[0] >= published]
+            if (condition.get('bank_breakout') and fingerprint in reviewed
+                    and any(buy < condition['price_cny'] for _, buy, _ in route_tape)):
+                # A new breakout can be reviewed after a verified break below the level.
+                del reviewed[fingerprint]
             step, confirmation_price = advance_observation(condition, route_tape, previous)
             if step and candidate:
                 step['observation_expires_at'] = utc_text(min(deadline, candidate) if deadline else candidate)

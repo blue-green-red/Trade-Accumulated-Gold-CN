@@ -940,6 +940,38 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual([event['id'] for event in queued], ['live-buy-confirmed:codex:zheshang:2'])
         self.assertEqual(queued[0]['data']['routes'][0]['confirmation_mode'], 'continuation')
 
+    def test_same_watch_reviews_a_new_breakout_only_after_a_verified_recross(self):
+        from monitor.jd_live_buy_guard import remember_reviewed_confirmations
+
+        self.update_quote(0, 806.4)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 806.4), (1, 805.2), (2, 805.3), (4, 806.5)])
+        first, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        self.assertEqual({r['confirmation_mode'] for r in first['data']['routes']}, {'continuation', 'retest'})
+        context = {'trigger_events': [first], 'live_readonly_accounts': {'accounts': {
+            'zheshang': {'revision': advice['snapshot_revision']}}}}
+        with self.conn:
+            remember_reviewed_breakouts(self.conn, 'codex', context, [first['id']], 0)
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
+
+        # A feed gap and renewed upward motion above the old level are still silent.
+        self.observe_watch(advice, [(5, 806.6), (9, 806.6), (10, 805.3), (11, 805.4), (13, 806.7)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        self.observe_watch(advice, [(14, 805), (15, 806.7)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+        self.update_quote(16, 804.95)
+        self.observe_watch(advice, [(17, 806.7), (18, 805.2), (19, 805.4), (21, 806.9)])
+        again, = pending_events(self.conn, 'codex', START + timedelta(minutes=21))
+        self.assertEqual(again['data']['plan_id'], first['data']['plan_id'])
+        self.assertNotEqual(again['id'], first['id'])
+        self.assertEqual({r['confirmation_mode'] for r in again['data']['routes']}, {'continuation', 'retest'})
+        self.assertTrue(all(datetime.fromisoformat(r['touched_at']) == START + timedelta(minutes=17)
+                            for r in again['data']['routes']))
+        self.observe_watch(advice, [(22, 807.0)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [again])
+
     def test_queue_keeps_the_independent_entry_when_the_breakout_was_reviewed(self):
         rule = {'retest_ceiling_cny': 806, 'hold_minutes': 3}
         context, previous = self.prepare_signal([self.route(805, bank_breakout=rule)])
