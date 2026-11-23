@@ -441,6 +441,31 @@ def failed_breakout(at, buy):
     return {'stage': 'breakout_failed', 'last_at': utc_text(at), 'last_price_cny': buy}
 
 
+def track_after_floor_loss(state, condition, at, buy):
+    review = condition['buy_review']
+    floor = review['zone']['floor_cny']
+    recovery = review['recovery_price_cny']
+    cap = review['max_buy_price_cny']
+    previous = state.get('after_floor_loss') or {}
+    last = stamp(state.get('last_at'))
+    lowest = min(buy, previous.get('lowest_buy_cny', state.get('last_price_cny', buy)))
+    progress = {'lowest_buy_cny': lowest}
+    if buy < floor:
+        progress['status'] = 'below_floor'
+    elif buy < recovery:
+        progress['status'] = 'above_floor_below_recovery'
+    elif buy > cap:
+        progress['status'] = 'above_buy_cap'
+    else:
+        since = stamp(previous.get('hold_since')) if last and at - last <= MAX_GAP else None
+        since = since or at
+        seconds = int((at - since).total_seconds())
+        progress.update(status='recovery_held' if seconds >= review['hold_minutes'] * 60 else 'holding_recovery',
+                        hold_since=utc_text(since), held_seconds=seconds)
+    return {**state, 'stage': 'pullback_lost', 'hold_since': None, 'confirmed_at': None,
+            'last_at': utc_text(at), 'last_price_cny': buy, 'after_floor_loss': progress}
+
+
 def advance_breakout(state, condition, at, buy, *, breakout_mode=None):
     threshold = condition['price_cny']
     stage = state.get('stage')
@@ -491,7 +516,7 @@ def advance(state, condition, at, buy, *, breakout_mode=None):
             return state
         state = {}
     if stage == 'pullback_lost' and not bank_breakout:
-        return state
+        return track_after_floor_loss(state, condition, at, buy) if zoned_pullback(condition) else state
     if stage == 'pullback_lost':
         # Existing observation plans can resume after the older terminal failure.
         state = failed_breakout(previous_at or at, state.get('last_price_cny'))
@@ -512,13 +537,15 @@ def advance(state, condition, at, buy, *, breakout_mode=None):
         if not (buy >= trigger if breakout else buy <= trigger):
             return state
         if floor is not None and buy < floor:
-            return {**state, 'stage': 'pullback_lost'}
+            return (track_after_floor_loss(state, condition, at, buy) if zoned_pullback(condition)
+                    else {**state, 'stage': 'pullback_lost'})
         state.update(stage='above_cap' if buy > cap and not zone else 'touched',
                      touched_at=utc_text(at))
         state['peak' if breakout else 'trough']=buy
         return state
     if floor is not None and buy < floor:
-        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
+        return (track_after_floor_loss(state, condition, at, buy) if zoned_pullback(condition)
+                else {**state, 'stage': 'pullback_lost', 'hold_since': None})
     if buy > cap and not (zone and stage == 'touched'):
         return {**state, 'stage': 'above_cap', 'hold_since': None}
     if breakout and stage == 'touched':
@@ -561,6 +588,8 @@ def advance_watch(previous, condition, at, buy):
         step['stage'] = 'above_cap'
     elif review and review.get('zone') and buy < review['recovery_price_cny']:
         stage = 'pullback_lost' if buy < review['zone']['floor_cny'] else 'retest'
+        if stage == 'pullback_lost' and zoned_pullback(condition):
+            return track_after_floor_loss(step, condition, at, buy)
         step.update(stage=stage, hold_since=None, confirmed_at=None)
     return step
 

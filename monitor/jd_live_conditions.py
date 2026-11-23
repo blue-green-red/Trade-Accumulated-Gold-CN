@@ -296,6 +296,11 @@ def condition_state(conn,account,advice,condition,now,latest=True):
             data={'status':status,'confirmation_stage':phase,
                   'triggered_at':stage.get('confirmed_at'),'last_quote_at':stage.get('last_at'),
                   'last_price_cny':stage.get('last_price_cny'),'event_id':event_id if stage.get('confirmed_at') else None}
+            quote=account.get('quote') or {}
+            if (phase=='pullback_lost' and current.get('invalidated_at') is None and quote.get('status')=='fresh'
+                    and (at:=stamp(stage.get('last_at'))) and at==stamp(quote.get('quoted_at'))
+                    and (progress:=stage.get('after_floor_loss'))):
+                data['after_floor_loss']={k:progress[k] for k in ('status','lowest_buy_cny','held_seconds') if k in progress}
             if independent and carried_until and now<carried_until<deadline:
                 data['expires_at']=carried_until.isoformat()
             return data,stage.get('confirmation_mode')

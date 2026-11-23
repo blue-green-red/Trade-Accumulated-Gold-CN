@@ -293,6 +293,8 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
                     gap, progress.get('closest_trigger_gap_cny_per_gram', gap))
                 progress['quote_samples_examined'] = progress.get('quote_samples_examined', 0) + 1
                 progress['last_stage'] = states[i].get('stage') or 'awaiting_trigger'
+                if recovery := states[i].get('after_floor_loss'):
+                    progress['after_floor_loss'] = recovery
             if states[i].get('stage') == 'confirmed':
                 episode = states[i].get('touched_at') or states[i]['confirmed_at']
                 if rejected and episode in rejected:

@@ -150,6 +150,47 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(self.advance_all([(0, 804), (1, 797), (2, 803), (4, 804)],
                                          condition=condition), 'pullback_lost')
 
+    def test_lost_pullback_exposes_recovery_evidence_but_never_confirms_again(self):
+        from monitor.jd_live_readonly import review_condition_input
+
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'reclaim.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            condition = zoned_route()
+            expires = (START + timedelta(minutes=30)).isoformat()
+            advice = {'id': 1, 'analyst': 'codex', 'action': 'hold', 'status': 'current',
+                      'action_status': 'current', 'snapshot_revision': 'v1',
+                      'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': [condition]}
+            account = verified_watch_account(store.conn, minimum_buy_grams=10)
+            with store.conn:
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
+                                   ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', '{}'))
+
+            def observe(minute, price):
+                quote = point(minute, price)
+                account['quote'] = {'status': 'fresh', 'quoted_at': quote[0].isoformat(),
+                                    'buy_price_cny': price, 'sell_price_cny': price}
+                record(store.conn, 'zheshang', quote)
+                request(store, account, advice, quote[1], quote)
+                monitoring = condition_state(store.conn, account, advice, condition, quote[1])
+                return review_condition_input(store.conn, account, advice, {**condition, 'monitoring': monitoring}, None)
+
+            self.assertEqual(observe(0, 797)['monitoring']['after_floor_loss']['status'], 'below_floor')
+            self.assertEqual(observe(1, 801)['monitoring']['after_floor_loss']['status'], 'above_floor_below_recovery')
+            self.assertEqual(observe(2, 803)['monitoring']['after_floor_loss']['held_seconds'], 0)
+            held = observe(4, 804)['monitoring']
+            self.assertEqual(held['status'], 'pullback_lost')
+            self.assertEqual(held['after_floor_loss'],
+                             {'status': 'recovery_held', 'lowest_buy_cny': 797, 'held_seconds': 120})
+            self.assertEqual(observe(8, 804)['monitoring']['after_floor_loss']['held_seconds'], 0)
+            self.assertEqual(observe(9, 805)['monitoring']['after_floor_loss']['status'], 'above_buy_cap')
+            self.assertEqual(observe(10, 795)['monitoring']['after_floor_loss']['lowest_buy_cny'], 795)
+            account['quote']['quoted_at'] = point(11, 803)[0].isoformat()
+            monitoring = condition_state(store.conn, account, advice, condition, point(11, 803)[1])
+            self.assertNotIn('after_floor_loss', monitoring)
+            self.assertEqual(read(store.conn, 'codex')['pending'], [])
+
     def test_upper_edge_can_exceed_the_recovery_price_and_entry_cap(self):
         condition = zoned_route()
         condition['price_cny'] = 805
@@ -688,8 +729,13 @@ class BuyAuditTests(unittest.TestCase):
                 points = [point(i, p) for i, p in zip((1, 3, 5, 7), prices)]
                 row, = independent_branch_replay(value, START, end, points, end + timedelta(minutes=1))
                 self.assertEqual(row['confirmation']['status'], 'no_confirmation')
-                self.assertEqual(row['observation_progress'], {'last_stage': phase,
-                    'closest_trigger_gap_cny_per_gram': gap, 'quote_samples_examined': len(points)})
+                progress = row['observation_progress'].copy()
+                recovery = progress.pop('after_floor_loss', None)
+                self.assertEqual(progress, {'last_stage': phase, 'closest_trigger_gap_cny_per_gram': gap,
+                                            'quote_samples_examined': len(points)})
+                if phase == 'pullback_lost':
+                    self.assertEqual(recovery['lowest_buy_cny'], 797)
+                    self.assertEqual((recovery['status'], recovery['held_seconds']), ('recovery_held', 120))
 
     def test_replay_requires_a_new_dip_and_hold_after_an_above_cap_quote(self):
         end = START + timedelta(minutes=15)
