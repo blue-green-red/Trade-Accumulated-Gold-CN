@@ -1,3 +1,4 @@
+import json
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,7 @@ from unittest.mock import Mock, patch
 from monitor.__main__ import Monitor
 from monitor.ai import AIAnalyst, ClaudeCodeResult
 from monitor.ai_events import acknowledge, enqueue, read, write
+from monitor.ai_inputs import compact_context
 from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
@@ -30,21 +32,22 @@ class BuyGuardTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.settings = replace(Settings(), db_path=Path(tmp.name) / 'guard.db', ai_trading_mode='live_only',
                                 ai_analysts=('codex',), ai_urgent_reserve=0, ai_schedule_bj=(),
-                                codex_cli='missing-codex', clawx_api_key='')
+                                codex_cli='missing-codex', clawx_api_key='', ai_optimize=True)
         self.store = Store(self.settings.db_path)
         self.conn = self.store.conn
         self.addCleanup(self.conn.close)
         ensure_schema(self.conn)
 
-    def update_quote(self, minute, price, bank='zheshang'):
+    def update_quote(self, minute, price, bank='zheshang', *, sell_price=None):
         at = START + timedelta(minutes=minute)
+        sell_price = price if sell_price is None else sell_price
         snapshot = parse_account(bank, payload(bank))
         snapshot.update(cash_cny=20_000, cash_source='jd_electronic_account_api',
-                        quote={'buy_price_cny': price, 'sell_price_cny': price, 'quoted_at': at.isoformat()},
+                        quote={'buy_price_cny': price, 'sell_price_cny': sell_price, 'quoted_at': at.isoformat()},
                         pending_order_count=0, pending_orders={'records': [], 'total_count': 0, 'complete': True},
                         coverage={'pending_orders': 'available'}, component_times={'pending_orders': at.isoformat()})
         record_success(self.conn, bank, snapshot, at.isoformat())
-        record(self.conn, bank, (at, at, price, price))
+        record(self.conn, bank, (at, at, price, sell_price))
 
     def context(self, routes):
         event_id = 'live-buy-confirmed:codex:zheshang:test-plan'
@@ -90,6 +93,27 @@ class BuyGuardTests(unittest.TestCase):
         context['trigger_events'][0]['data']['routes'] = [self.route()]
         self.update_quote(6, 806)
         self.assertIn('zheshang', review_failures(self.conn, context, [key], START + timedelta(minutes=6)))
+
+    def test_exit_boundary_clears_pending_confirmation_even_after_a_rebound(self):
+        context, key = self.prepare_signal([self.route()])
+        with self.conn:
+            self.conn.execute('UPDATE jd_live_advice SET advice_json=? WHERE id=1', (json.dumps({
+                'buy_watch': {'id': 'test-plan', 'expires_at': (START + timedelta(minutes=15)).isoformat()},
+                'position_path': {'boundary_price_cny': 805.75},
+            }),))
+        self.update_quote(1, 805.75, bank='minsheng')
+        self.update_quote(1, 806, sell_price=805.8)
+        queued = pending_events(self.conn, 'codex', START + timedelta(minutes=1))
+        self.assertEqual([e['id'] for e in queued], [key])
+        context['trigger_events'] = queued
+        compact = compact_context(context)
+        self.assertNotIn('position_boundary_cny', compact['trigger_events'][0]['data']['routes'][0])
+        self.assertEqual(queued[0]['data']['routes'][0]['position_boundary_cny'], 805.75)
+        self.update_quote(2, 806, sell_price=805.75)
+        self.update_quote(3, 806.1)
+        after_recovery = START + timedelta(minutes=3)
+        self.assertEqual(pending_events(self.conn, 'codex', after_recovery), [])
+        self.assertIn('zheshang', review_failures(self.conn, context, [key], after_recovery))
 
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)
@@ -245,7 +269,7 @@ class BuyGuardTests(unittest.TestCase):
 
     def test_publication_blocks_stale_buy_without_retrying_the_trigger(self):
         self.update_quote(0, 806)
-        context, key = self.context([self.route()])
+        context, key = self.context([self.route(position_boundary_cny=805.5)])
         analyst = AIAnalyst(self.settings, self.store, 'codex', 'codex')
         data = result().model_dump()
         data.update(research_notes='测试', sources=[])
@@ -259,8 +283,9 @@ class BuyGuardTests(unittest.TestCase):
         response = ClaudeCodeResult.model_validate(data)
         finish = START + timedelta(minutes=2)
 
-        def backend(*_):
-            self.update_quote(1, 804.9)
+        def backend(model_context, _):
+            self.assertNotIn('position_boundary_cny', model_context['trigger_events'][0]['data']['routes'][0])
+            self.update_quote(1, 806, sell_price=805.5)
             self.update_quote(2, 806.1)
             return 'notes', [], response
 
@@ -270,7 +295,7 @@ class BuyGuardTests(unittest.TestCase):
             view = analyst.analyze(context, '突破条件', run_id='guard-fixture')
         latest = accounts(self.conn, finish, selected_bank='zheshang')[0]['advice'][0]
         self.assertEqual(latest['action_status'], 'review_required')
-        self.assertEqual(latest['checks'], ['分析期间买入触发已失守、超价或报价中断，须按新行情复评'])
+        self.assertEqual(latest['checks'], ['分析期间买入触发已失守、超价、触及退出边界或报价中断，须按新行情复评'])
         self.assertEqual(notification_events(self.conn, 'codex', view['_view_id']), [])
         self.assertNotIn(key, read(self.conn, 'codex')['covered'])
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
@@ -335,12 +360,13 @@ class BuyGuardTests(unittest.TestCase):
         until = (START + timedelta(hours=1)).isoformat()
         orders = [{'kind': 'limit_buy', 'grams': 10, 'price_cny': 805, 'expires_at': until, 'reason': '观察后择价买入。'},
                   {'kind': 'limit_sell', 'grams': 2, 'price_cny': 820, 'expires_at': until, 'reason': '独立减仓。'}]
-        self.save_advice('hold', 'none', orders, routes=[self.route(805, bank_breakout={'hold_minutes': 3})])
+        route = self.route(805, bank_breakout={'hold_minutes': 3}, position_boundary_cny=805.5)
+        self.save_advice('hold', 'none', orders, routes=[route])
         set_subscription(self.conn, 'codex:live_zheshang', True)
         events = notification_events(self.conn, 'codex', 1, now=START)
         self.assertEqual(len(events), 1)
         self.assertIn('买入10克', events[0]['body'])
-        self.update_quote(1, 804.9)
+        self.update_quote(1, 806, sell_price=805.5)
         self.update_quote(2, 806)
         notifier = Mock()
         notifier.send.return_value = True

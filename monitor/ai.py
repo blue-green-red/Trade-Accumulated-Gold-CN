@@ -356,6 +356,9 @@ class AIAnalyst:
         from .analysis_archive import AnalysisArchive, record
         training=AnalysisArchive(store,self,attempt,run_id,trigger,context)
         usage['_archive']=training
+        # Publication guards use the submitted routes before model-input filtering.
+        entry_context = {"live_readonly_accounts": context.get("live_readonly_accounts"),
+                         "trigger_events": context.get("trigger_events", [])}
         before_chars=len(json.dumps(context,ensure_ascii=False,separators=(",",":")))
         if self.settings.ai_optimize:
             from .ai_inputs import compact_context
@@ -457,9 +460,9 @@ class AIAnalyst:
         entry_warnings={}
         if context.get("live_readonly_accounts"):
             from .jd_live_buy_guard import review_failures, retire_failed_events
-            entry_warnings=review_failures(store.conn,context,covered_ids,datetime.fromisoformat(view_ts))
+            entry_warnings=review_failures(store.conn,entry_context,covered_ids,datetime.fromisoformat(view_ts))
             if entry_warnings:
-                covered_ids=retire_failed_events(store.conn,self.analyst,context,covered_ids,entry_warnings)
+                covered_ids=retire_failed_events(store.conn,self.analyst,entry_context,covered_ids,entry_warnings)
         data["_performance"]=metrics
         data.update({"_snapshot_at": snapshot_at, "_started_at": started_at,
                      "_completed_at": view_ts, "_covered_event_ids": covered_ids})
@@ -479,12 +482,12 @@ class AIAnalyst:
             from .jd_live_buy_guard import submitted_routes
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],context["live_readonly_accounts"],
                 invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
-                entry_warnings=entry_warnings,entry_routes=submitted_routes(context,covered_ids))
+                entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids))
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):
             if context.get("live_readonly_accounts"):
                 from .jd_live_buy_guard import remember_reviewed_breakouts
-                remember_reviewed_breakouts(store.conn,self.analyst,context,covered_ids,self._generation)
+                remember_reviewed_breakouts(store.conn,self.analyst,entry_context,covered_ids,self._generation)
             acknowledge(store.conn, self.analyst, covered_ids)
         store.conn.commit()
         if public_status == "unavailable":

@@ -44,6 +44,8 @@ def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
                 continue
             previous = {'threshold_cny': route['threshold_cny'], 'confirmed_at': route['confirmed_at'],
                         'revision': revision, 'generation': generation, 'event_id': event['id']}
+            if route.get('position_boundary_cny') is not None:
+                previous['position_boundary_cny'] = route['position_boundary_cny']
             save(conn, key, previous)
 
 
@@ -52,12 +54,13 @@ def active_routes(conn, account, routes, now):
     anchored = [(route, anchor) for route in routes if (anchor := stamp(route.get('confirmed_at')))]
     if not anchored or not point:
         return []
-    tape = dict(conn.execute(
-        'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
+    rows = conn.execute(
+        'SELECT quoted_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
         'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at<=? ORDER BY quoted_at',
-        (account['bank'], utc_text(min(anchor for _, anchor in anchored)), utc_text(point[0]), utc_text(now))))
-    tape[utc_text(point[0])] = point[2]
-    quotes = [(stamp(at), price) for at, price in sorted(tape.items())]
+        (account['bank'], utc_text(min(anchor for _, anchor in anchored)), utc_text(point[0]), utc_text(now)))
+    tape = {at: (buy, sell) for at, buy, sell in rows}
+    tape[utc_text(point[0])] = point[2:]
+    quotes = [(stamp(at), buy, sell) for at, (buy, sell) in sorted(tape.items())]
     return [route for route, anchor in anchored if route_valid(route, anchor, quotes, point[0])]
 
 
@@ -91,7 +94,7 @@ def review_failures(conn, context, event_ids, now):
             warnings[bank] = '原买入触发缺少确认时间，需用新报价重新评估'
             continue
         if not active_routes(conn, account, routes, now):
-            warnings[bank] = '分析期间买入触发已失守、超价或报价中断，须按新行情复评'
+            warnings[bank] = '分析期间买入触发已失守、超价、触及退出边界或报价中断，须按新行情复评'
     return warnings
 
 
@@ -100,13 +103,15 @@ def route_valid(route, anchor: datetime, quotes, latest_at):
         return False
     low = route['threshold_cny']
     high = None
+    boundary = route.get('position_boundary_cny')
     if setup := route.get('buy_review'):
         low, high = setup['recovery_price_cny'], setup['max_buy_price_cny']
     previous = anchor
-    for at, price in quotes:
+    for at, buy, sell in quotes:
         if at < anchor:
             continue
-        if at - previous > MAX_GAP or price < low or (high is not None and price > high):
+        if (at - previous > MAX_GAP or buy < low or (high is not None and buy > high)
+                or (boundary is not None and sell <= boundary)):
             return False
         previous = at
     return True
@@ -184,7 +189,7 @@ def current_entry_state(conn, account, advice, now):
     routes = advice.get('entry_trigger_routes')
     checks = advice.setdefault('checks', [])
     if routes and not active_routes(conn, account, routes, now):
-        warning = '本轮买入依据已失守、超价或报价中断，请用新行情复评'
+        warning = '本轮买入依据已失守、超价、触及退出边界或报价中断，请用新行情复评'
         size = len(checks)
         block_entries(advice, warning, include_reviews=False)
         if len(checks) > size:

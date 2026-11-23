@@ -329,7 +329,8 @@ def pending_events(conn, model, now):
                                   'ORDER BY id DESC LIMIT 1', (data.get('bank'), model)).fetchone()
             if not latest:
                 return None
-            watch = json.loads(latest[2]).get('buy_watch') or {}
+            advice = json.loads(latest[2])
+            watch = advice.get('buy_watch') or {}
             if data.get('plan_id'):
                 if (watch.get('id') != data['plan_id']
                         or confirmation and now >= stamp(watch['expires_at'])):
@@ -340,7 +341,11 @@ def pending_events(conn, model, now):
             if not current or current[0].get('revision') != latest[3]:
                 return None
             if confirmation:
-                routes = active_routes(conn, current[0], data.get('routes', []), now)
+                routes = data.get('routes', [])
+                boundary = (advice.get('position_path') or {}).get('boundary_price_cny')
+                if watch and boundary is not None:
+                    routes = [{'position_boundary_cny': boundary, **route} for route in routes]
+                routes = active_routes(conn, current[0], routes, now)
                 routes = [r for r in routes if not r.get('bank_breakout')
                           or not reviewed_breakout(conn, model, current[0], r['threshold_cny'], now)]
                 return with_active_routes(event, routes) if routes else None
@@ -438,6 +443,7 @@ def request(store, account, advice, now, point):
                                   'threshold_cny': condition['price_cny'], 'touched_at': step['touched_at'],
                                   'hold_since': step['hold_since'], 'confirmed_at': step['confirmed_at'],
                                   'price_cny': buy,
+                                  **({'position_boundary_cny': boundary} if watch and boundary is not None else {}),
                                   **({'confirmation_mode': step['confirmation_mode']}
                                      if step.get('confirmation_mode') else {}),
                                   **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})})

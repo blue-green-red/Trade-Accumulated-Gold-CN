@@ -194,14 +194,15 @@ class BuyWatchTests(unittest.TestCase):
             deadline = (START + timedelta(minutes=15)).isoformat()
             advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
                       'snapshot_revision': 'v1', 'created_at': START.isoformat(), 'expires_at': deadline,
-                      'action': 'hold', 'valid_for_minutes': 15, 'review_conditions': list(model_conditions)}
+                      'action': 'hold', 'valid_for_minutes': 15, 'review_conditions': list(model_conditions),
+                      'position_path': {'boundary_price_cny': 799}}
             with store.conn:
                 set_watch(store.conn, 'zheshang', 'codex', advice, source, START, 10)
                 store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
                                    (1, 'zheshang', 'codex', 1, START.isoformat(), deadline, 'v1', json.dumps(advice)))
             self.assertEqual(advice['review_conditions'][:-1], model_conditions)
             self.assertEqual(advice['review_conditions'][-1]['price_cny'], 805)
-            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1', 'quote': {'sell_price_cny': 805}}
             for minute, price in [(0, 805.5), (1, 805.9), (3, 806.4), (4, 806.5)]:
                 quote = point(minute, price)
                 request(store, account, advice, quote[1], quote)
@@ -209,6 +210,7 @@ class BuyWatchTests(unittest.TestCase):
                 self.assertEqual(len(events), int(minute >= 3))
             self.assertLess(806.4 / 805 - 1, .004)
             self.assertEqual(events[0]['data']['routes'][0]['confirmation_mode'], 'continuation')
+            self.assertEqual(events[0]['data']['routes'][0]['position_boundary_cny'], 799)
             self.assertEqual(events[0]['min_gap_minutes'], 0)
             self.assertEqual(advice['action'], 'hold')
 

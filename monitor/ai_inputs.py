@@ -18,6 +18,11 @@ def fill_cause(reason):
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
+    for event in out.get('trigger_events',[]):
+        if event.get('id','').startswith(ENTRY_EVENT_PREFIX):
+            for route in (event.get('data') or {}).get('routes',[]):
+                route.pop('position_boundary_cny',None)
     if out.get('trading_accounts') or out.get('live_readonly_accounts'):
         signals=out.get('signals_tradingview')
         if isinstance(signals,dict):
