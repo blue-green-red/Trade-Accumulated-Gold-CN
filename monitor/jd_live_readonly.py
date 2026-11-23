@@ -293,12 +293,15 @@ def model_input(conn,now=None):
     for row in rows:
         if 'minimum_buy_grams' in row:
             values[row['bank']]['minimum_buy_grams'] = row['minimum_buy_grams']
-        from .trade_costs import position_comparison
+        from .trade_costs import number,position_comparison
         quote=row.get('quote') or {}
         values[row['bank']]['recent_bank_quotes']=quote_context(conn,row,now)
         if row['connected'] and quote.get('status')=='fresh':
             comparison=position_comparison(row.get('total_grams'),quote.get('sell_price_cny'),row.get('sell_fee_rate'))
             if comparison:values[row['bank']]['position_comparison']=comparison
+            buy,fee=number(quote.get('buy_price_cny')),number(row.get('sell_fee_rate'))
+            if buy and fee is not None and fee < 1:
+                values[row['bank']]['new_buy_break_even_sell_cny']=round(buy/(1-fee),2)
         active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
         previous=[];counts={}
         for value in row['advice']+row['advice_history']:

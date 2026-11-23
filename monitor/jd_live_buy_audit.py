@@ -177,12 +177,12 @@ def first_observed_quote(conn, bank, start, cutoff):
     if cutoff < start:
         return None
     return conn.execute(
-        'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
+        'SELECT quoted_at,buy_price_cny,sell_price_cny,observed_at FROM jd_live_quote_samples '
         'WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=? '
         'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
 
 
-def followup_quote(conn, bank, confirmed, price, minutes, now):
+def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publication_quote=None):
     result = {'minutes': minutes}
     if not confirmed or price is None:
         return {**result, 'status': 'signal_unavailable'}
@@ -194,11 +194,18 @@ def followup_quote(conn, bank, confirmed, price, minutes, now):
     quote = first_observed_quote(conn, bank, target, min(deadline, now))
     if not quote:
         return {**result, 'status': 'pending' if now < deadline else 'quote_missing'}
-    return {**result, 'status': 'observed', 'quoted_at': quote[0], 'change_cny_per_gram': round(quote[1] - price, 2)}
+    result.update(status='observed', quoted_at=quote[0], change_cny_per_gram=round(quote[1] - price, 2))
+    if fee is not None and fee < 1:
+        exit_net = quote[2] * (1 - fee)
+        after_analysis = (round(GRAMS * (exit_net - publication_quote[1]), 2)
+                          if publication_quote and stamp(publication_quote[3]) < target else None)
+        result['hypothetical_10g_net_cny'] = {'at_confirmation': round(GRAMS * (exit_net - price), 2),
+                                              'after_analysis': after_analysis, 'wait': 0.0}
+    return result
 
 
 def observed_reviews(conn, bank, model, limit, now):
-    """Actual events passed to the model and their advice outcomes. No simulated entries."""
+    """Actual review events and outcomes, with a separately labeled quote comparison."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
     if tables != {'ai_runs', 'ai_views'}:
         return {'status': 'history_unavailable', 'cases': [], 'by_branch': {}}
@@ -221,6 +228,7 @@ def observed_reviews(conn, bank, model, limit, now):
             continue
         event_ids = set(json.loads(sent).get(model, []))
         value = json.loads(raw) if raw else {}
+        fee = number(value.get('input_sell_fee_rate'))
         events = [e for e in json.loads(events) if e['id'] in event_ids and e['id'].startswith(ENTRY_EVENT_PREFIX)
                   and e.get('data', {}).get('bank') == bank]
         if not events:
@@ -243,7 +251,8 @@ def observed_reviews(conn, bank, model, limit, now):
                               'seconds_to_start': elapsed_seconds(confirmed, started),
                               'seconds_to_completion': elapsed_seconds(confirmed, finished),
                               'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
-                              'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now)
+                              'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now,
+                                                                 fee=fee, publication_quote=mark)
                                                   for minutes in (15, 60)]})
                 if (branch, outcome) not in counted:
                     summary[branch][outcome] += 1

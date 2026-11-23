@@ -59,6 +59,20 @@ class LiveAccountTests(unittest.TestCase):
         record_success(self.c,'zheshang',data,NOW.isoformat())
         row=accounts(self.c,NOW)[0]
         self.assertEqual(row['holding_pnl_cny'],-3000)
+
+    def test_model_uses_fresh_bank_buy_quote_and_its_own_fee_for_break_even(self):
+        data=parse_account('zheshang',payload())
+        data['quote']={'buy_price_cny':852,'sell_price_cny':851,'quoted_at':NOW.isoformat()}
+        record_success(self.c,'zheshang',data,NOW.isoformat())
+        fresh=model_input(self.c,NOW)['accounts']['zheshang']
+        self.assertEqual(fresh['new_buy_break_even_sell_cny'],round(852/.996,2))
+        stale=model_input(self.c,NOW+timedelta(minutes=4))['accounts']['zheshang']
+        self.assertNotIn('new_buy_break_even_sell_cny',stale)
+        data['sell_fee_rate']=None
+        record_success(self.c,'zheshang',data,NOW.isoformat())
+        unknown=model_input(self.c,NOW)['accounts']['zheshang']
+        self.assertNotIn('new_buy_break_even_sell_cny',unknown)
+
     def test_advice_expiry_account_revision_and_model_switch(self):
         data=parse_account('zheshang',payload());record_success(self.c,'zheshang',data,NOW.isoformat())
         inputs=model_input(self.c,NOW);value=LiveAdviceSet(zheshang={**advice(),

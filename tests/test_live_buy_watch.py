@@ -430,7 +430,8 @@ class BuyAuditTests(unittest.TestCase):
                     store.conn.execute('INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status,completed_at,view_rowid) '
                         'VALUES(?,?,?,?,?,?,?)', ('codex', started.isoformat(), 'fixture', run, 'completed', two.isoformat(), i))
                     store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
-                        two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1', json.dumps({'action': action})))
+                        two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1',
+                        json.dumps({'action': action, 'input_sell_fee_rate': .005})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
                         {'id': event_id, 'data': {'bank': 'zheshang', 'routes': paths}}]}
                     store.conn.execute('INSERT INTO state VALUES(?,?,?)',
@@ -439,7 +440,7 @@ class BuyAuditTests(unittest.TestCase):
             record(store.conn, 'minsheng', point(2, 818))
             record(store.conn, 'zheshang', point(3, 807))
             record(store.conn, 'minsheng', point(15, 819))
-            record(store.conn, 'zheshang', point(16, 805.5))
+            record(store.conn, 'zheshang', (*point(16, 805.5)[:3], 805.25))
             record(store.conn, 'zheshang', point(64, 810))
             result = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))
             self.assertEqual(result['examined_runs'], 2)
@@ -458,6 +459,9 @@ class BuyAuditTests(unittest.TestCase):
             at_15, at_60 = final['cases'][1]['paths'][0]['quote_followups']
             self.assertEqual((at_15['status'], at_15['change_cny_per_gram']), ('observed', -.5))
             self.assertEqual(datetime.fromisoformat(at_15['quoted_at']), START + timedelta(minutes=16))
+            self.assertEqual(at_15['hypothetical_10g_net_cny'], {
+                'at_confirmation': round(10 * (805.25 * .995 - 806), 2),
+                'after_analysis': round(10 * (805.25 * .995 - 807), 2), 'wait': 0.0})
             self.assertEqual(at_60, {'minutes': 60, 'status': 'quote_missing'})
             friday = datetime(2026, 11, 20, 18, 25, tzinfo=timezone.utc)
             after_close = followup_quote(store.conn, 'zheshang', friday, 806, 15, friday + timedelta(hours=1))
