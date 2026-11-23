@@ -21,12 +21,18 @@ class AnalysisArchiveTests(unittest.TestCase):
 
     def test_exact_codex_request_schema_context_and_resume_lineage(self):
         f=self.f
+        f.ctx['event_coverage']={'codex':['calendar:example']}
+        f.ctx['trigger_events']=[{'id':'calendar:example','data':{'actual':0}}]
         self.assertIsNotNone(f.a.analyze(f.ctx,'first',run_id='archive-first'))
         self.assertIsNotNone(f.a.analyze(f.ctx,'second',run_id='archive-second'))
         rows=self.rows();self.assertEqual([r['status'] for r in rows],['completed','completed'])
         first=dict(self.artifacts(rows[0]['id']))
         self.assertEqual(len(first['input_context']['trading_accounts']['accounts']['short_full']['recent_fills']),6)
         self.assertEqual(len(first['request']['context']['trading_accounts']['accounts']['short_full']['recent_fills']),3)
+        self.assertEqual(first['input_context']['event_coverage'],f.ctx['event_coverage'])
+        self.assertNotIn('event_coverage',first['model_context'])
+        self.assertNotIn('event_coverage',first['request']['context'])
+        self.assertEqual(first['request']['context']['trigger_events'],f.ctx['trigger_events'])
         self.assertEqual(first['request']['prompt'],f.calls[0][0][-1])
         self.assertEqual(first['request']['schema'],json.loads(Path(f.calls[0][0][f.calls[0][0].index('--output-schema')+1]).read_text()))
         second=dict(self.artifacts(rows[1]['id']))

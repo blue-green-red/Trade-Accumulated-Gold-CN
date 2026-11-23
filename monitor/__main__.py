@@ -335,21 +335,18 @@ class Monitor:
                         manual=claim(store.conn,name,run_id)
                         if not manual:return name,None
                     model_context = deepcopy(context)
-                    submitted = pending[name]
+                    submitted = kept = pending[name]
                     if any(e['id'].startswith(ENTRY_EVENT_PREFIX) for e in submitted):
                         current = {e['id']: e for e in pending_events(store.conn, name, utc_now())}
                         matched = {e['id']: fresh for e in submitted if e['id'].startswith(ENTRY_EVENT_PREFIX)
                                    and (fresh := matching_entry_event(e, current.get(e['id'])))}
                         kept = [matched.get(e['id'], e) for e in submitted
                                 if not e['id'].startswith(ENTRY_EVENT_PREFIX) or e['id'] in matched]
-                        model_context['event_coverage'][name] = [e['id'] for e in kept]
                         if name in automatic and not (trigger := self.analysts[name].due(store=store,pending=kept)):
                             log.info("%s 派发前买入复评信号已失效，取消自动分析",name)
                             return name,None
-                    else:
-                        matched = {}
-                    model_context['trigger_events'] = [matched.get(e['id'], e) for e in model_context['trigger_events']
-                        if not e['id'].startswith(ENTRY_EVENT_PREFIX) or e['id'] in matched]
+                    model_context['event_coverage'] = {name: [e['id'] for e in kept]}
+                    model_context['trigger_events'] = [{k: e[k] for k in ('id', 'reason', 'observed_at', 'data')} for e in kept]
                     store.set_state(f"ai_runtime:{name}", {"running": True, "queued": False, "started_at": utc_now().isoformat()})
                     for account in (model_context.get('live_readonly_accounts') or {}).get('accounts',{}).values():
                         account['previous_advice']=[v for v in account.get('previous_advice',[]) if v['analyst']==name]

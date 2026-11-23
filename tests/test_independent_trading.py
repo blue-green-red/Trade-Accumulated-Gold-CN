@@ -379,7 +379,7 @@ class TradingTests(unittest.TestCase):
         finally:
             monitor.store.conn.close()
 
-    def test_ai_runs_serially_with_equal_context_and_one_run_id(self):
+    def test_ai_runs_serially_with_equal_market_context_and_one_run_id(self):
         monitor = Monitor(self.settings, True)
         calls, active_calls, peak = [], 0, 0
         context = {"snapshot": [4000], "news": ["shared"]}
@@ -401,7 +401,10 @@ class TradingTests(unittest.TestCase):
             with patch.object(monitor, "ai_context", return_value=context):
                 monitor._ai_worker(snap(), {}, {"claude": "test", "codex": "test"})
             self.assertEqual([c[0] for c in calls], ["claude", "codex"])
-            self.assertEqual(calls[0][1], calls[1][1])
+            for name, received, _ in calls:
+                self.assertEqual(received['event_coverage'], {name: []})
+                self.assertEqual({k: v for k, v in received.items() if k != 'event_coverage'},
+                                 {**context, 'trigger_events': []})
             self.assertEqual(calls[0][2], calls[1][2])
             self.assertEqual(peak, 1)
             self.assertEqual(context["news"], ["shared"])

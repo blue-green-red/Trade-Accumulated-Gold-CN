@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from monitor.ai import AIAnalyst, MarketView
-from monitor.ai_events import read
+from monitor.ai_events import enqueue, read
 from monitor.config import Settings
 from monitor.controls import set_enabled
 from monitor.__main__ import Monitor
@@ -53,16 +53,44 @@ class EventTimingTests(unittest.TestCase):
     def test_only_successfully_covered_events_are_acknowledged(self):
         self.a.request_refresh("first", 0, event_id="one", payload={"actual": 0})
         ctx = self.context(["one"])
+        ctx['trigger_events'] = read(self.store.conn, 'codex')['pending']
+
         def backend(*args):
             self.a.request_refresh("arrived while analyzing", 0, event_id="two")
             return "notes", [], result()
-        self.a._run_codex = backend
-        self.a.analyze(ctx, "first")
+
+        self.a._run_codex = Mock(side_effect=backend)
+        self.a.analyze(ctx, "first", run_id='covered-one')
+        sent = self.a._run_codex.call_args.args[0]
+        self.assertNotIn('event_coverage', sent)
+        self.assertEqual(sent['trigger_events'][0]['data']['actual'], 0)
+        saved = self.store.get_state('ai_model_input:covered-one:codex')
+        self.assertEqual(saved['event_coverage'], {'codex': ['one']})
         state = read(self.store.conn, "codex")
         self.assertEqual([e["id"] for e in state["pending"]], ["two"])
         self.assertIn("one", state["covered"])
         self.assertFalse(self.a.request_refresh("duplicate", 0, event_id="one"))
         self.assertEqual(self.a.due(), "arrived while analyzing")
+
+    def test_worker_submits_only_each_models_own_trigger_payloads(self):
+        m = self.monitor()
+        self.addCleanup(m.store.conn.close)
+        m.analysts = {name: Mock() for name in ('codex', 'claude')}
+        for name, analyst in m.analysts.items():
+            analyst.analyze.return_value = None
+            enqueue(self.store.conn, name, '同编号的账户变化', 0, 'live-account:shared', {'origin': name})
+            enqueue(self.store.conn, name, '本模型的复评', 0, f'live-move:{name}', {'origin': name})
+
+        with patch.object(m, 'ai_context', return_value={'xauusd': 4000}), \
+                patch('monitor.jd_live_preflight.prepare', return_value={'can_analyze': True, 'status': 'ready'}):
+            m._ai_worker({}, {}, {'codex': '事件复评', 'claude': '事件复评'})
+
+        for name, analyst in m.analysts.items():
+            sent = analyst.analyze.call_args.args[0]
+            ids = ['live-account:shared', f'live-move:{name}']
+            self.assertEqual(sent['event_coverage'], {name: ids})
+            self.assertEqual([e['id'] for e in sent['trigger_events']], ids)
+            self.assertEqual([e['data']['origin'] for e in sent['trigger_events']], [name, name])
 
     def test_failure_and_switch_cancellation_do_not_acknowledge(self):
         self.a.request_refresh("first", 0, event_id="one")
