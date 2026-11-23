@@ -56,7 +56,7 @@ def market_breakout_episodes(points):
         gap = bool(window and (at - window[-1][0] > MAX_GAP or received - window[-1][1] > MAX_GAP))
         if condition and (gap or received >= began + WATCH_WINDOW or buy < condition['price_cny']):
             ending = 'sampling_gap' if gap else 'window_expired' if received >= began + WATCH_WINDOW else 'fell_below_level'
-            yield condition['price_cny'], began, confirmations, ending
+            yield condition['price_cny'], began, confirmations, ending, point if ending == 'fell_below_level' else None
             condition = None
         if gap:
             window.clear()
@@ -81,10 +81,10 @@ def market_breakout_episodes(points):
         while window[0][0] <= at - WATCH_WINDOW:
             window.popleft()
     if condition:
-        yield condition['price_cny'], began, confirmations, 'as_of'
+        yield condition['price_cny'], began, confirmations, 'as_of', None
 
 
-def market_breakout_horizon(points, times, entry, fee, now, *, minutes=None, days=None):
+def market_breakout_horizon(points, times, entry, fee, now, *, minutes=None, days=None, loss_point=None):
     if minutes is not None:
         target = entry[1] + timedelta(minutes=minutes)
         session = trading_session(target)
@@ -93,14 +93,41 @@ def market_breakout_horizon(points, times, entry, fee, now, *, minutes=None, day
         deadline = min(target + MAX_GAP, stamp(session['close_at']) - timedelta(microseconds=1))
     else:
         target, deadline = trading_horizon(entry[1], days)
+    loss_exit = {}
+    if loss_point and entry[1] < loss_point[1] <= target:
+        loss_exit['exit_on_breakout_loss'] = {'observed_at': utc_text(loss_point[1]), 'sell_cny': loss_point[3],
+                                             'net_cny': round(loss_point[3] * (1 - fee) - entry[2], 2)}
     start = bisect_left(times, entry[0])
     horizon = bisect_left(times, target, start)
     exit_point = next((point for point in points[horizon:bisect_right(times, deadline, horizon)]
                        if point[1] <= min(now, deadline)), None)
     if not exit_point:
-        return unavailable('pending' if now < deadline else 'horizon_quote_missing')
+        return {**unavailable('pending' if now < deadline else 'horizon_quote_missing'), **loss_exit}
     end = bisect_right(times, exit_point[0], horizon)
-    return mark(entry, exit_point, fee, points[start:end], 1)
+    samples = points[start:end]
+    outcome = mark(entry, exit_point, fee, samples, 1)
+    outcome.update(gross_price_change_cny=round(exit_point[3] - entry[2], 2),
+                   sell_fee_cny=round(exit_point[3] * fee, 2), **loss_exit)
+    if outcome['sampled_best_net_cny'] is not None:
+        best_sell = max(sample[3] for sample in samples)
+        outcome['sampled_best_gross_price_change_cny'] = round(best_sell - entry[2], 2)
+    return outcome
+
+
+def market_breakout_summary(observed):
+    complete = [row for row in observed if row['sampled_best_net_cny'] is not None]
+    losses = [row['exit_on_breakout_loss']['net_cny'] - row['net_cny']
+              for row in observed if 'exit_on_breakout_loss' in row]
+    return {'valued': len(observed), 'full_path_samples': len(complete),
+            'positive_at_horizon': sum(row['net_cny'] > 0 for row in observed),
+            'rallied_at_horizon_before_fee': sum(row['gross_price_change_cny'] > 0 for row in observed),
+            'rallied_at_horizon_but_not_profit_after_fee': sum(row['gross_price_change_cny'] > 0 and row['net_cny'] <= 0
+                                                             for row in observed),
+            'sampled_break_even': sum(row['sampled_first_break_even_at'] is not None for row in complete),
+            'sampled_rally_below_break_even': sum(row['sampled_best_gross_price_change_cny'] > 0
+                                                 and row['sampled_first_break_even_at'] is None for row in complete),
+            'exit_on_loss_comparison': {'pairs': len(losses), 'exit_better': sum(edge > 0 for edge in losses),
+                                        'hold_better': sum(edge < 0 for edge in losses)}}
 
 
 def market_breakout_baseline(conn, bank, now, fee):
@@ -117,14 +144,14 @@ def market_breakout_baseline(conn, bank, now, fee):
     cases = []
     endings = defaultdict(int)
     unconfirmed_endings = defaultdict(int)
-    for threshold, began, confirmations, ending in market_breakout_episodes(points):
+    for threshold, began, confirmations, ending, loss_point in market_breakout_episodes(points):
         if began < since:
             continue
         endings[ending] += 1
         if not confirmations:
             unconfirmed_endings[ending] += 1
         for mode, entry in confirmations.items():
-            outcomes = {label: (market_breakout_horizon(points, times, entry, fee, now, **period)
+            outcomes = {label: (market_breakout_horizon(points, times, entry, fee, now, loss_point=loss_point, **period)
                                 if fee is not None else unavailable('fee_unknown')) for label, period in horizons.items()}
             cases.append({'branch': f'breakout_{mode}', 'threshold_cny': threshold, 'breakout_at': utc_text(began),
                           'confirmed_at': utc_text(entry[1]), 'confirmed_buy_cny': entry[2], 'outcomes_per_gram': outcomes})
@@ -135,10 +162,7 @@ def market_breakout_baseline(conn, bank, now, fee):
         by_branch[branch] = {'confirmations': len(selected), 'horizons': {}}
         for label in horizons:
             observed = [r['outcomes_per_gram'][label] for r in selected if r['outcomes_per_gram'][label]['status'] == 'valued']
-            complete = [r for r in observed if r['sampled_best_net_cny'] is not None]
-            by_branch[branch]['horizons'][label] = {'valued': len(observed), 'full_path_samples': len(complete),
-                'positive_at_horizon': sum(r['net_cny'] > 0 for r in observed),
-                'sampled_break_even': sum(r['sampled_first_break_even_at'] is not None for r in complete)}
+            by_branch[branch]['horizons'][label] = market_breakout_summary(observed)
     paired = defaultdict(dict)
     for row in cases:
         paired[row['breakout_at']][row['branch']] = row['confirmed_buy_cny']

@@ -55,7 +55,7 @@ class BuyWatchTests(unittest.TestCase):
 
     def market_breakout_points(self):
         moves = {60: 800.2, 61: 800.4, 62: 800.4, 63: 800.5, 64: 800.01, 65: 800.02,
-                 66: 800.04, 67: 800.05, 68: 799, 69: 801.1, 70: 800.4}
+                 66: 800.04, 67: 800.05, 68: 799, 69: 801.1, 70: 800.4, 79: 801, 83: 801}
         return [point(minute, moves.get(minute, 800)) for minute in range(130)]
 
     def test_market_breakout_baseline_uses_independent_confirmations_and_paid_exit_side(self):
@@ -81,9 +81,17 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual((later['branch'], later['confirmed_buy_cny']), ('breakout_retest', 800.05))
         for case in (early, later):
             self.assertEqual(case['threshold_cny'], 800)
-            self.assertEqual(case['outcomes_per_gram']['15m']['net_cny'], round(800 * .996 - case['confirmed_buy_cny'], 2))
-        self.assertEqual(result['by_branch']['breakout_retest']['horizons']['60m'],
-                         {'valued': 1, 'full_path_samples': 1, 'positive_at_horizon': 0, 'sampled_break_even': 0})
+            outcome = case['outcomes_per_gram']['15m']
+            buy = case['confirmed_buy_cny']
+            self.assertEqual(outcome['net_cny'], round(801 * .996 - buy, 2))
+            self.assertEqual(outcome['gross_price_change_cny'], round(801 - buy, 2))
+            self.assertEqual(outcome['sell_fee_cny'], 3.20)
+            self.assertEqual(outcome['exit_on_breakout_loss']['sell_cny'], 799)
+            self.assertEqual(outcome['exit_on_breakout_loss']['net_cny'], round(799 * .996 - buy, 2))
+        retest = result['by_branch']['breakout_retest']['horizons']
+        self.assertEqual(retest['15m']['rallied_at_horizon_but_not_profit_after_fee'], 1)
+        self.assertEqual(retest['60m']['sampled_rally_below_break_even'], 1)
+        self.assertEqual(retest['60m']['exit_on_loss_comparison'], {'pairs': 1, 'exit_better': 0, 'hold_better': 1})
         self.assertEqual(later['outcomes_per_gram']['1d']['status'], 'pending')
         next_day = matured['cases'][0]['outcomes_per_gram']['1d']
         self.assertEqual(next_day['net_cny'], round(810 * .996 - 800.5, 2))
@@ -94,8 +102,8 @@ class BuyWatchTests(unittest.TestCase):
         with_gap_before_start = [p for i, p in enumerate(prices[:68]) if i not in range(48, 53)]
         self.assertEqual(list(market_breakout_episodes(with_gap_before_start)), [])
         with_gap_after_start = [p for i, p in enumerate(prices[:67]) if i not in range(61, 65)]
-        self.assertEqual([(entries, state) for _, _, entries, state in market_breakout_episodes(with_gap_after_start)],
-                         [({}, 'sampling_gap')])
+        self.assertEqual([(entries, state, lost) for _, _, entries, state, lost in market_breakout_episodes(with_gap_after_start)],
+                         [({}, 'sampling_gap', None)])
 
     def test_dip_requires_recovery_and_sustained_distinct_quotes(self):
         self.assertEqual(self.advance_all([(0, 799), (1, 803), (1, 803)]), 'holding')
