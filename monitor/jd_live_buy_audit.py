@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from .config import BJ, Settings
-from .jd_live_buy_watch import (BREAKOUT_MODES, MAX_GAP, WATCH_WINDOW, advance, advance_watch, bank_breakout_condition,
+from .jd_live_buy_watch import (BREAKOUT_MODES, MAX_GAP, WATCH_WINDOW, advance, advance_watch, archived_quote_samples, bank_breakout_condition,
                                breakout_retest_price_status, buy_price_windows, earlier_bank_breakout, earlier_sampled_ranges,
                                eligible, utc_text,
                                plain_buy_discards, plain_buy_suppressions, watch_deadline, watch_routes)
@@ -96,7 +96,8 @@ def market_earlier_breakout_windows(conn, bank, points, episodes, now):
             continue
         index = bisect_left(received_times, began)
         quoted, received, buy, _ = points[index - 1]
-        ranges = earlier_sampled_ranges(conn, bank, quoted - WATCH_WINDOW, received)
+        floor = max(buy, nearby['bank_breakout']['retest_ceiling_cny'])
+        ranges = earlier_sampled_ranges(conn, bank, quoted - WATCH_WINDOW, received, archived_above=floor)
         condition = earlier_bank_breakout(ranges, nearby, buy)
         if condition is None:
             continue
@@ -591,38 +592,6 @@ def first_observed_quote(conn, bank, start, cutoff):
         'SELECT quoted_at,buy_price_cny,sell_price_cny,observed_at FROM jd_live_quote_samples '
         'WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=? '
         'ORDER BY observed_at,quoted_at DESC LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
-
-
-def archived_quote_samples(conn, bank, model, now):
-    """Use only time-verifiable quotes from exact archived model inputs."""
-    path = f'$.live_readonly_accounts.accounts.{bank}'
-    oldest = utc_text(now - timedelta(days=40))
-    rows = conn.execute('''
-        SELECT json_extract(value,?),json_extract(value,?),updated_at
-        FROM state WHERE key LIKE ? AND updated_at BETWEEN ? AND ?
-          AND json_extract(value,?)='fresh' AND json_extract(value,?)='available'
-        ''', (f'{path}.quote', f'{path}.component_times.quote', f'ai_model_input:%:{model}',
-              oldest, utc_text(now), f'{path}.status', f'{path}.coverage.quote'))
-    samples, conflicts = {}, set()
-    for raw, received, archived in rows:
-        quote = json.loads(raw) if raw else {}
-        if quote.get('status') != 'fresh':
-            continue
-        quoted, observed, saved = map(stamp, (quote.get('quoted_at'), received, archived))
-        buy, sell = number(quote.get('buy_price_cny')), number(quote.get('sell_price_cny'))
-        if (not all((quoted, observed, saved, buy, sell)) or not quoted <= observed <= min(saved, quoted + MAX_GAP)
-                or not trading_session(quoted)['is_open']):
-            continue
-        label = utc_text(quoted)
-        previous = samples.get(label)
-        if previous and previous[1:3] != (buy, sell):
-            conflicts.add(label)
-        elif not previous or utc_text(observed) < previous[3]:
-            samples[label] = (label, buy, sell, utc_text(observed), 'analysis_archive')
-    conflicts.update(row[0] for row in conn.execute(
-        'SELECT quoted_at FROM jd_live_quote_samples WHERE bank=? AND quoted_at>=? AND observed_at<=?',
-        (bank, oldest, utc_text(now))))
-    return {key: samples[key] for key in sorted(samples.keys() - conflicts)}
 
 
 def first_review_quote(conn, bank, start, cutoff, archive):

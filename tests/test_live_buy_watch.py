@@ -493,6 +493,53 @@ class BuyWatchTests(unittest.TestCase):
             above = {**account, 'quote': {**account['quote'], 'buy_price_cny': 825, 'sell_price_cny': 825}}
             self.assertNotIn('earlier_above_hour_high', quote_context(store.conn, above, now)['sampled_sell_scenarios'])
 
+    def test_nearest_archived_bank_high_adds_evidence_without_counting_as_live_confirmation(self):
+        from monitor.jd_live_buy_watch import utc_text
+
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'archived-high.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            now = START + timedelta(minutes=22)
+
+            def archive(bank, model, at, buy, *, saved=None):
+                receipt = at + timedelta(seconds=10)
+                account = {'status': 'fresh', 'coverage': {'quote': 'available'},
+                           'component_times': {'quote': utc_text(receipt)}, 'quote': {
+                               'quoted_at': utc_text(at), 'status': 'fresh', 'buy_price_cny': buy, 'sell_price_cny': buy}}
+                key = f'ai_model_input:{bank}-{utc_text(at)}:{model}'
+                with store.conn:
+                    store.conn.execute('INSERT INTO state VALUES(?,?,?)',
+                                       (key, json.dumps({'live_readonly_accounts': {'accounts': {bank: account}}}),
+                                        utc_text(saved or receipt)))
+
+            after_open = START + timedelta(minutes=20)
+            friday = START - timedelta(days=3)
+            for i in range(3):
+                archive('zheshang', 'claude', friday + timedelta(minutes=i * 20), 812 + i)
+                archive('zheshang', 'codex', friday - timedelta(days=1) + timedelta(minutes=i * 20), 826 + i)
+                archive('zheshang', 'codex', friday - timedelta(days=2) + timedelta(minutes=i * 20), 809 + i,
+                        saved=now + timedelta(minutes=1))
+                archive('minsheng', 'codex', friday + timedelta(minutes=i * 20), 808 + i)
+                record(store.conn, 'zheshang', point(16 + i, 804 + i))
+            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1', 'status': 'fresh', 'sell_fee_rate': .004,
+                       'quote': {'status': 'fresh', 'quoted_at': utc_text(after_open),
+                                 'buy_price_cny': 807, 'sell_price_cny': 807}}
+            evidence = quote_context(store.conn, account, now)
+            older, = evidence['earlier_sampled_ranges']
+            self.assertEqual((older['buy_high_cny'], older['source'], older['n']), (814, 'analysis_archive', 3))
+            self.assertEqual(evidence['recent_samples'], [[-240, 804], [-180, 805], [-120, 806], [0, 807]])
+            self.assertEqual(evidence['sampled_sell_scenarios']['earlier_above_hour_high'],
+                             {'sell_price_cny': 814, 'net_cny_per_gram': round(814 * .996 - 807, 2)})
+            advice = {'action': 'hold', 'review_conditions': [], 'valid_for_minutes': 15}
+            set_watch(store.conn, 'zheshang', 'codex', advice, {**account, 'recent_bank_quotes': evidence}, now, 10)
+            branch, = [c for c in advice['review_conditions'] if c['bank_breakout'].get('earlier_high')]
+            self.assertEqual(branch['price_cny'], 814)
+            still_below = advance({}, branch, now, 813, breakout_mode='continuation')
+            self.assertNotEqual(still_below.get('stage'), 'confirmed')
+            with store.conn:
+                self.assertEqual(store.conn.execute("SELECT COUNT(*) FROM jd_live_quote_samples").fetchone()[0], 3)
+
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'test.db')

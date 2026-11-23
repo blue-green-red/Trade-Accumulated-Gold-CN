@@ -1,5 +1,6 @@
 """Staged, read-only buy reviews over timestamped bank quotes."""
 import json
+from collections import defaultdict
 from hashlib import sha256
 from datetime import timedelta, timezone
 from statistics import median
@@ -20,6 +21,26 @@ QUOTE_SCHEMA = """CREATE TABLE IF NOT EXISTS jd_live_quote_samples (
     buy_price_cny REAL NOT NULL, sell_price_cny REAL NOT NULL,
     PRIMARY KEY (bank, quoted_at)
 ) WITHOUT ROWID;"""
+
+ARCHIVE_KEY_RANGE = "key>='ai_model_input:' AND key<'ai_model_input;'"
+
+
+def archived_quote_fields(bank):
+    path = f'$.live_readonly_accounts.accounts.{bank}'
+    quote = f"json_extract(value,'{path}.quote')"
+    receipt = f"json_extract(value,'{path}.component_times.quote')"
+    scope = (f"{ARCHIVE_KEY_RANGE} AND json_extract(value,'{path}.status')='fresh' "
+             f"AND json_extract(value,'{path}.coverage.quote')='available'")
+    return quote, receipt, scope
+
+
+def ensure_archive_quote_indexes(conn):
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() is None:
+        return
+    for bank in ('zheshang', 'minsheng'):
+        quote, receipt, scope = archived_quote_fields(bank)
+        conn.execute(f'CREATE INDEX IF NOT EXISTS idx_jd_archived_quote_{bank} '
+                     f'ON state(updated_at,key,{quote},{receipt}) WHERE {scope}')
 
 
 def utc_text(value):
@@ -58,8 +79,44 @@ def quote_tape(conn, bank, after, point):
     return [(stamp(at), buy, sell) for at, (buy, sell) in sorted(quotes.items())]
 
 
-def earlier_sampled_ranges(conn, bank, before, now):
-    """Preserve the coverage of earlier Beijing-date samples, not official daily extrema."""
+def archived_quote_samples(conn, bank, model, now, *, since=None, before=None):
+    """Read exact account quotes with independently recorded receipt and archive times."""
+    from .trading_hours import trading_session
+
+    if bank not in ('zheshang', 'minsheng') or conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() is None:
+        return {}
+    quote_field, receipt_field, scope = archived_quote_fields(bank)
+    oldest = utc_text(since if since is not None else now - timedelta(days=40))
+    pattern = f'ai_model_input:%:{model}' if model else 'ai_model_input:%'
+    rows = conn.execute(f'SELECT {quote_field},{receipt_field},updated_at FROM state '
+                        f'WHERE {scope} AND updated_at BETWEEN ? AND ? AND key LIKE ?',
+                        (oldest, utc_text(now), pattern))
+    samples, conflicts = {}, set()
+    for raw, received, archived in rows:
+        quote = json.loads(raw) if raw else {}
+        if quote.get('status') != 'fresh':
+            continue
+        quoted, observed, saved = map(stamp, (quote.get('quoted_at'), received, archived))
+        buy, sell = number(quote.get('buy_price_cny')), number(quote.get('sell_price_cny'))
+        if (not all((quoted, observed, saved, buy, sell)) or not quoted <= observed <= min(saved, quoted + MAX_GAP)
+                or (since is not None and quoted < since) or (before is not None and quoted > before)
+                or not trading_session(quoted)['is_open']):
+            continue
+        label = utc_text(quoted)
+        previous = samples.get(label)
+        if previous and previous[1:3] != (buy, sell):
+            conflicts.add(label)
+        elif not previous or utc_text(observed) < previous[3]:
+            samples[label] = (label, buy, sell, utc_text(observed), 'analysis_archive')
+    conflicts.update(row[0] for row in conn.execute(
+        'SELECT quoted_at FROM jd_live_quote_samples WHERE bank=? AND quoted_at>=? AND observed_at<=?',
+        (bank, oldest, utc_text(now))))
+    return {key: samples[key] for key in sorted(samples.keys() - conflicts)}
+
+
+def earlier_sampled_ranges(conn, bank, before, now, *, archived_above=None):
+    """Return compact Beijing-date ranges and one higher, independently sourced archive range."""
     rows = conn.execute('''
         SELECT MIN(quoted_at),MAX(quoted_at),COUNT(*),MIN(buy_price_cny),MAX(buy_price_cny),MAX(sell_price_cny)
         FROM jd_live_quote_samples
@@ -76,6 +133,23 @@ def earlier_sampled_ranges(conn, bank, before, now):
                        'buy_high_cny': buy_high, 'sell_high_cny': sell_high})
         if len(ranges) == 2:
             break
+    if archived_above is not None:
+        from .trading_hours import BJ
+        by_date = defaultdict(list)
+        for row in archived_quote_samples(conn, bank, None, now, since=before - timedelta(days=7), before=before).values():
+            by_date[stamp(row[0]).astimezone(BJ).date()].append(row)
+        known_highs = {r['buy_high_cny'] for r in ranges}
+        candidates = []
+        for points in by_date.values():
+            if len(points) < 3 or stamp(points[-1][0]) - stamp(points[0][0]) < timedelta(minutes=15):
+                continue
+            high = max(point[1] for point in points)
+            if high > archived_above and high not in known_highs:
+                candidates.append({'from': points[0][0], 'to': points[-1][0], 'n': len(points),
+                                   'buy_low_cny': min(point[1] for point in points), 'buy_high_cny': high,
+                                   'sell_high_cny': max(point[2] for point in points), 'source': 'analysis_archive'})
+        if candidates:
+            ranges.append(min(candidates, key=lambda row: row['buy_high_cny']))
     return ranges
 
 
@@ -132,11 +206,13 @@ def quote_context(conn, account, now):
                'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
                'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
                                        for left, right in zip(points, points[1:])), default=None)}
-    ranges = earlier_sampled_ranges(conn, account['bank'], start, now) if has_samples else []
-    if ranges:
-        context['earlier_sampled_ranges'] = ranges
     sell_low = min(s for _, _, s in tape)
     sell_high = max(s for _, _, s in tape)
+    archived_above = max(buy, sell_high, bank_breakout_condition(context['buy_price_windows_15m'])[
+        'bank_breakout']['retest_ceiling_cny']) if available else None
+    ranges = earlier_sampled_ranges(conn, account['bank'], start, now, archived_above=archived_above) if has_samples else []
+    if ranges:
+        context['earlier_sampled_ranges'] = ranges
     fee = account.get('sell_fee_rate')
     if available and (ref := cost_reference(sell_high, fee)):
         context['break_even_buy_at_sampled_sell_high_cny'] = ref['net_sell_price_cny']
