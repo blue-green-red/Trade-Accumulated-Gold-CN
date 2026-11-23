@@ -566,22 +566,38 @@ def compare_review_timings(episodes, grams):
     return result
 
 
-def retest_price_evidence(conn, bank, route, confirmed, account, archived_at, released):
+def bank_quotes_during_review(conn, bank, account, archived_at, released, publication_quote):
     quote = account.get('quote') or {}
     input_at = stamp(quote.get('quoted_at'))
-    if (route.get('confirmation_mode') != 'retest' or account.get('status') != 'fresh' or quote.get('status') != 'fresh'
-            or not confirmed or not input_at or not confirmed <= input_at <= archived_at):
+    buy = number(quote.get('buy_price_cny'))
+    if (account.get('status') != 'fresh' or quote.get('status') != 'fresh' or not buy
+            or not input_at or input_at > archived_at):
         return {}
-    at_input = breakout_retest_price_status(route, number(quote.get('buy_price_cny')))
-    if not at_input:
+    data = {'input_quote_at': utc_text(input_at), 'input_buy_cny': buy}
+    if released and archived_at < released:
+        count, low, high = conn.execute('SELECT COUNT(*),MIN(buy_price_cny),MAX(buy_price_cny) FROM jd_live_quote_samples '
+                                        'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at>=quoted_at '
+                                        'AND observed_at>? AND observed_at<=?',
+                                        (bank, utc_text(input_at), utc_text(released), utc_text(archived_at), utc_text(released))).fetchone()
+        if count:
+            data.update(samples_during_analysis=count, lowest_buy_during_analysis_cny=low, highest_buy_during_analysis_cny=high)
+    if publication_quote:
+        data['first_buy_after_publication_cny'] = publication_quote[1]
+        data['buy_change_from_input_cny_per_gram'] = round(publication_quote[1] - buy, 2)
+    return data
+
+
+def retest_price_evidence(route, confirmed, quote_path):
+    input_at = stamp(quote_path.get('input_quote_at'))
+    if not confirmed or not input_at or confirmed > input_at:
+        return {}
+    if not (at_input := breakout_retest_price_status(route, quote_path.get('input_buy_cny'))):
         return {}
     data = {'retest_price_status_at_input': at_input}
-    if released and archived_at < released:
-        high, = conn.execute('SELECT MAX(buy_price_cny) FROM jd_live_quote_samples WHERE bank=? '
-                             'AND quoted_at>? AND quoted_at<=? AND observed_at>=quoted_at AND observed_at>? AND observed_at<=?',
-                             (bank, utc_text(input_at), utc_text(released), utc_text(archived_at), utc_text(released))).fetchone()
-        if sampled := breakout_retest_price_status(route, high):
-            data['sampled_above_retest_zone_during_analysis'] = sampled == 'above_retest_zone'
+    if sampled := breakout_retest_price_status(route, quote_path.get('highest_buy_during_analysis_cny')):
+        data['sampled_above_retest_zone_during_analysis'] = sampled == 'above_retest_zone'
+    if after := breakout_retest_price_status(route, quote_path.get('first_buy_after_publication_cny')):
+        data['retest_price_status_after_publication'] = after
     return data
 
 
@@ -640,6 +656,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
         covered_ids = json.loads(covered) if covered is not None else None
         valid_confirmations = json.loads(valid) if valid is not None else {}
         mark = first_review_quote(conn, bank, released, min(now, released + MAX_GAP), archive) if released else None
+        quote_path = bank_quotes_during_review(conn, bank, account, archived_at, released, mark)
         counted = set()
         for e in events:
             outcome = advice_outcome(status, e['id'], covered_ids, value)
@@ -684,7 +701,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 path = {
                     'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                     **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
-                    **retest_price_evidence(conn, bank, route, confirmed, account, archived_at, released),
+                    **retest_price_evidence(route, confirmed, quote_path),
                     'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                     'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
                     'confirmation_quote_source': quote_source(confirmed_quote),
@@ -717,7 +734,8 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
                           'post_publication_quote_at': mark[0] if mark else None,
-                          'post_publication_quote_source': quote_source(mark), 'paths': paths})
+                          'post_publication_quote_source': quote_source(mark),
+                          **({'bank_quote_path':quote_path} if quote_path else {}), 'paths': paths})
     archived = sum(1 for row in rows if (at:=stamp(row[-1])) and at<=now)
     return {'status': 'available' if archived else 'input_archives_unavailable',
             'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary,

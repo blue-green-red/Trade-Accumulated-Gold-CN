@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import (evaluate, first_observed_quote, followup_quote, independent_branch_replay,
+from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, first_observed_quote, followup_quote, independent_branch_replay,
                                        observed_review_horizons, observed_reviews, report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
@@ -685,12 +685,19 @@ class BuyAuditTests(unittest.TestCase):
             record(store.conn, 'minsheng', point(1, 900))
             quoted = START + timedelta(minutes=2)
             record(store.conn, 'zheshang', (quoted, released + timedelta(seconds=1), 807, 807))
-            evidence = retest_price_evidence(store.conn, 'zheshang', route, START, account, archived, released)
-            self.assertEqual(evidence, {'retest_price_status_at_input': 'within_retest_zone',
-                                        'sampled_above_retest_zone_during_analysis': False})
+            record(store.conn, 'zheshang', point(4, 805.5))
+            publication = first_observed_quote(store.conn, 'zheshang', released, released+timedelta(minutes=2))
+            path = bank_quotes_during_review(store.conn, 'zheshang', account, archived, released, publication)
+            self.assertEqual(path['input_buy_cny'], 806)
+            self.assertEqual((path['samples_during_analysis'],path['highest_buy_during_analysis_cny']), (1,805.9))
+            self.assertEqual(path['buy_change_from_input_cny_per_gram'], -.5)
+            self.assertEqual(retest_price_evidence(route, START, path), {'retest_price_status_at_input': 'within_retest_zone',
+                'sampled_above_retest_zone_during_analysis': False, 'retest_price_status_after_publication': 'within_retest_zone'})
             record(store.conn, 'zheshang', point(2.5, 806.01))
-            self.assertTrue(retest_price_evidence(store.conn, 'zheshang', route, START, account, archived, released)
-                            ['sampled_above_retest_zone_during_analysis'])
+            path = bank_quotes_during_review(store.conn, 'zheshang', account, archived, released, publication)
+            self.assertEqual((path['lowest_buy_during_analysis_cny'],path['highest_buy_during_analysis_cny']), (805.9,806.01))
+            self.assertEqual(path['samples_during_analysis'], 2)
+            self.assertTrue(retest_price_evidence(route, START, path)['sampled_above_retest_zone_during_analysis'])
 
     def test_review_replay_fills_gaps_with_time_verified_archived_bank_quotes(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
