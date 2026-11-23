@@ -4,6 +4,7 @@ from typing import Literal,Optional
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel,Field
 from .jd_live_conditions import stamp
+from .trade_costs import number
 
 
 class SuggestedOrder(BaseModel):
@@ -19,6 +20,58 @@ def proposal_signature(value):
     # Rolling the advisory deadline or rewriting prose is not a new trading idea.
     fields=('kind','grams','price_cny','loss_price_cny')
     return sorted(json.dumps({k:o.get(k) for k in fields},sort_keys=True) for o in (value or {}).get('suggested_orders',[]))
+
+
+def marketable_check(order, quote):
+    target = number(order.get('price_cny'))
+    if target is None:
+        return None
+    if order['kind']=='limit_buy':
+        buy = number(quote.get('buy_price_cny'))
+        if buy is not None and buy<=target:
+            return '当前已满足买入条件，需刷新报价确认是否仍适合挂单'
+        return None
+    sell = number(quote.get('sell_price_cny'))
+    if sell is None:
+        return None
+    if order['kind']=='take_profit_stop_loss':
+        loss = number(order.get('loss_price_cny'))
+        if sell>=target or (loss is not None and sell<=loss):
+            return '当前已满足组合单条件，需刷新报价确认'
+    elif sell>=target:
+        return '当前已满足卖出条件，需刷新报价确认是否仍适合挂单'
+    return None
+
+
+def current_order_state(advice, account, now):
+    """Project each deadline and fresh trigger on display/delivery without editing the archive."""
+    if advice['lifecycle_status']!='current':
+        return
+
+    def mark(item, label, warning):
+        checks=item.setdefault('checks',[])
+        if warning not in checks:
+            checks.append(warning)
+            advice.setdefault('checks',[]).append(label+warning)
+        advice['status']='review_required'
+
+    quote=account.get('quote') or {}
+    quote_at=stamp(quote.get('quoted_at'));input_at=stamp(advice.get('input_quote_at'))
+    quote_ready=quote.get('status')=='fresh' and quote_at and (not input_at or quote_at>=input_at)
+    for order in advice.get('suggested_orders',[]):
+        expires=stamp(order.get('expires_at'))
+        if expires and expires<=now:
+            mark(order,'条件单建议：','本条预挂建议已到期')
+        elif quote_ready and (warning:=marketable_check(order,quote)):
+            mark(order,'条件单建议：',warning)
+    for review in advice.get('limit_buy_reviews',[]):
+        expires=stamp(review.get('expires_at'))
+        if expires and expires<=now and review.get('decision') in ('recommend','needs_review'):
+            mark(review,'限价评估：','本条候选方案已到期')
+    for item in advice.get('order_management',[]):
+        expires=stamp((item.get('effective_replacement') or {}).get('expires_at'))
+        if item['action']=='replace' and expires and expires<=now:
+            mark(item,'挂单建议：','本条修改方案已到期')
 
 
 def validate_proposals(value,source,now):
@@ -39,7 +92,7 @@ def validate_proposals(value,source,now):
         if effective and (item.get('replacement') or {}).get('grams') is not None:grams=max(grams,effective.get('grams') or 0)
         if order.get('action')=='sell':reserved_sell+=grams or 0
         elif order.get('action')=='buy':reserved_buy+=max((grams or 0)*(order.get('price_cny') or 0),(grams or 0)*((effective or order).get('price_cny') or 0))
-    quote=source.get('quote') or {};price=quote.get('sell_price_cny')
+    quote=source.get('quote') or {}
     for order in proposals:
         checks=[];expiry=stamp(order['expires_at'])
         if expiry is None or expiry<=now:checks.append('条件单截止时间须含时区且晚于当前时间')
@@ -57,7 +110,6 @@ def validate_proposals(value,source,now):
             if order.get('loss_price_cny') is not None:checks.append('限价单不应附组合止损价')
             if source.get('cash_cny') is None:checks.append('本户可用资金未知，不能确认条件买单预算')
             elif reserved_buy>source['cash_cny']+1e-8:checks.append('条件买单与其他买入合计超过本户已知可用资金')
-            if quote.get('buy_price_cny') is not None and quote['buy_price_cny']<=order['price_cny']:checks.append('当前已满足买入条件，需刷新报价确认是否仍适合挂单')
         else:
             reserved_sell+=order['grams']
             if order['grams']>(source.get('sellable_grams') or 0)+1e-8:checks.append('条件卖单超过当前可卖克数，不预支撤单释放量')
@@ -65,10 +117,9 @@ def validate_proposals(value,source,now):
             if order['kind']=='take_profit_stop_loss':
                 loss=order.get('loss_price_cny')
                 if loss is None or loss>=order['price_cny']:checks.append('组合单须填写低于止盈价的止损价')
-                if price is not None and (price>=order['price_cny'] or (loss is not None and price<=loss)):checks.append('当前已满足组合单条件，需刷新报价确认')
             else:
                 if order.get('loss_price_cny') is not None:checks.append('限价单不应附组合止损价')
-                if price is not None and price>=order['price_cny']:checks.append('当前已满足卖出条件，需刷新报价确认是否仍适合挂单')
+        if warning:=marketable_check(order,quote):checks.append(warning)
         order['checks']=checks
         warnings.extend('条件单建议：'+check for check in checks)
     return warnings

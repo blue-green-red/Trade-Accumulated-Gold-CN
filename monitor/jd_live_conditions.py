@@ -198,6 +198,8 @@ def condition_state(conn,account,advice,condition,now,latest=True):
 
 def management_state(account,advice,item,now):
     if advice.get('action_status',advice['status'])!='current':return advice.get('action_status',advice['status'])
+    expires=stamp((item.get('effective_replacement') or {}).get('expires_at'))
+    if item['action']=='replace' and expires and expires<=now:return 'expired'
     if item.get('checks'):return 'review_required'
     part=account.get('pending_orders') or {}
     if part.get('status')!='fresh':return 'data_unavailable'

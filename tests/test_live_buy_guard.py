@@ -351,3 +351,48 @@ class BuyGuardTests(unittest.TestCase):
         self.assertNotIn('买入10克', text)
         saved = self.conn.execute('SELECT body,delivered FROM alerts').fetchone()
         self.assertEqual(tuple(saved), (text, 1))
+
+    def test_expired_buy_draft_is_removed_on_retry_without_losing_live_sell_draft(self):
+        self.update_quote(0, 806)
+        orders = [
+            {'kind': 'limit_buy', 'grams': 10, 'price_cny': 805,
+             'expires_at': (START + timedelta(minutes=1)).isoformat(), 'reason': '回调后择价买入。'},
+            {'kind': 'limit_sell', 'grams': 2, 'price_cny': 820,
+             'expires_at': (START + timedelta(hours=1)).isoformat(), 'reason': '反弹后独立减仓。'},
+        ]
+        self.save_advice('hold', 'none', orders)
+        raw = self.conn.execute('SELECT advice_json FROM jd_live_advice').fetchone()[0]
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.side_effect = [False, True]
+        notifier.last_receipt = {'status': 'failed'}
+        dispatch(self.store, notifier, notification_events(self.conn, 'codex', 1, now=START), START)
+        self.assertIn('买入10克', notifier.send.call_args.args[1])
+
+        self.update_quote(1, 806)
+        now = START + timedelta(minutes=1)
+        live = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(live['action_status'], 'current')
+        self.assertIn('本条预挂建议已到期', live['suggested_orders'][0]['checks'])
+        self.assertEqual(live['suggested_orders'][0]['execution_progress']['status'], 'not_observed')
+        dispatch(self.store, notifier, [], now)
+        self.assertEqual(notifier.send.call_count, 2)
+        self.assertNotIn('买入10克', notifier.send.call_args.args[1])
+        self.assertIn('卖出2克', notifier.send.call_args.args[1])
+        self.assertEqual(self.conn.execute('SELECT advice_json FROM jd_live_advice').fetchone()[0], raw)
+
+    def test_draft_at_trigger_price_is_not_sent_as_future_order(self):
+        self.update_quote(0, 806)
+        orders = [{'kind': 'limit_buy', 'grams': 10, 'price_cny': 805,
+                   'expires_at': (START + timedelta(hours=1)).isoformat(), 'reason': '回调后择价买入。'}]
+        self.save_advice('hold', 'none', orders)
+        event = notification_events(self.conn, 'codex', 1, now=START)
+        self.assertEqual(len(event), 1)
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        self.update_quote(1, 805)
+        now = START + timedelta(minutes=1)
+        current = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertIn('当前已满足买入条件', current['suggested_orders'][0]['checks'][0])
+        notifier = Mock()
+        dispatch(self.store, notifier, event, now)
+        notifier.send.assert_not_called()

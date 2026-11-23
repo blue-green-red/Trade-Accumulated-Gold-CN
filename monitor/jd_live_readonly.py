@@ -262,7 +262,9 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 path_current_state(entry,row,conn)
                 if target is row['advice']:
                     from .jd_live_buy_guard import current_entry_state
+                    from .jd_live_proposals import current_order_state
                     current_entry_state(conn,row,entry,now)
+                    current_order_state(entry,row,now)
                 from .jd_live_conditions import condition_state,management_state
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
                 for condition in entry.get('review_conditions',[]):

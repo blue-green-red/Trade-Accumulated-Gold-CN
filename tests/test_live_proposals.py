@@ -54,6 +54,23 @@ class LiveProposalTests(unittest.TestCase):
         for changes in ({'thesis_status':'certain'}, {'thesis':''}):
             with self.assertRaises(ValueError):LiveAdvice.model_validate(self.value(reassessment={**REVIEW,**changes}))
 
+    def test_replacement_and_entry_candidate_use_their_own_deadlines(self):
+        from monitor.jd_live_conditions import management_state
+        from monitor.jd_live_proposals import current_order_state
+        from monitor.jd_live_semantics import notification_parts
+        expires = (NOW + timedelta(minutes=1)).isoformat()
+        replace = {'order_key': 'fixture', 'action': 'replace', 'effective_replacement': {'expires_at': expires}}
+        candidate = {'decision': 'needs_review', 'expires_at': expires}
+        value = {'lifecycle_status': 'current', 'status': 'current', 'action_status': 'current',
+                 'order_management': [replace], 'limit_buy_reviews': [candidate], 'checks': []}
+        account = {'pending_orders': {'status': 'fresh', 'records': [
+            {'order_key': 'fixture', 'status': 'pending', 'expires_at': (NOW + timedelta(hours=1)).isoformat()}]}}
+        current_order_state(value, account, NOW + timedelta(minutes=1))
+        self.assertEqual(management_state(account, value, replace, NOW + timedelta(minutes=1)), 'expired')
+        self.assertEqual(notification_parts(value)['order_management'], [])
+        self.assertEqual(candidate['checks'], ['本条候选方案已到期'])
+        self.assertEqual(account['pending_orders']['records'][0]['status'], 'pending')
+
     def test_valid_independent_buy_and_sell_and_combined_protection(self):
         self.saved(self.value(suggested_orders=[self.proposal(kind='limit_buy',grams=2,price_cny=840),self.proposal()]))
         self.assertEqual(self.latest()['checks'],[])
