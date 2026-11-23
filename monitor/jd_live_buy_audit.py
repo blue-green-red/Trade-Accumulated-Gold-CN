@@ -245,6 +245,8 @@ def independent_branch_replay(value, published, expires, quotes, now, *, archive
 
 
 def review_branch(route):
+    if route.get('renewed_pullback'):
+        return 'renewed_pullback'
     if route.get('bank_breakout'):
         mode = route.get('confirmation_mode')
         return 'breakout_continuation' if mode == 'continuation' else (
@@ -390,8 +392,9 @@ def observed_reviews(conn, bank, model, limit, now):
         value = json.loads(raw) if raw else {}
         fee = number(value.get('input_sell_fee_rate'))
         events = [e for e in json.loads(events)
-                  if (sent_ids is None or e['id'] in sent_ids) and e['id'].startswith(ENTRY_EVENT_PREFIX)
-                  and e.get('data', {}).get('bank') == bank]
+                  if (sent_ids is None or e['id'] in sent_ids) and e.get('data', {}).get('bank') == bank
+                  and (e['id'].startswith(ENTRY_EVENT_PREFIX)
+                       or e['id'].startswith('live-price:') and e['data'].get('renewed_pullback'))]
         if not events:
             continue
         released = stamp(published)
@@ -408,6 +411,8 @@ def observed_reviews(conn, bank, model, limit, now):
             buy_basis = {confirmation_key(r) for r in value.get('entry_trigger_routes', [])}
             paths = []
             routes = e['data'].get('routes', [])
+            if e['id'].startswith('live-price:'):
+                routes = [{**e['data'], 'confirmed_at': e['data'].get('quoted_at')}]
             origin = None
             if any(map(zoned_pullback, routes)):
                 origin = conn.execute("SELECT view_id,created_at,json_extract(advice_json,'$.input_quote_at') "
@@ -429,6 +434,7 @@ def observed_reviews(conn, bank, model, limit, now):
                     path_outcome = outcome
                 price = number(route.get('price_cny'))
                 paths.append({'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
+                              **({'trigger_kind': 'price_touch'} if branch == 'renewed_pullback' else {}),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                               'seconds_to_start': elapsed_seconds(confirmed, started),
                               'seconds_to_completion': elapsed_seconds(confirmed, finished),

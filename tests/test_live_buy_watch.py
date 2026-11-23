@@ -630,6 +630,28 @@ class BuyAuditTests(unittest.TestCase):
             bound = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))['cases'][0]
             self.assertEqual([p['outcome'] for p in bound['paths']], ['buy_suggested', 'not_buy_basis'])
 
+            renewed_id = 'live-price:codex:zheshang:3:renewed'
+            ordinary_id = 'live-price:codex:zheshang:3:ordinary'
+            key = 'ai_model_input:fixture-1:codex'
+            context = store.get_state(key)
+            payload = {'bank': 'zheshang', 'advice_id': 3,
+                       'price_cny': 806, 'threshold_cny': 807, 'quoted_at': START.isoformat()}
+            context['trigger_events'].extend([
+                {'id': renewed_id, 'data': {**payload, 'renewed_pullback': True}},
+                {'id': ordinary_id, 'data': payload},
+            ])
+            context['event_coverage']['codex'] += [renewed_id, ordinary_id]
+            store.set_state(key, context)
+            with store.conn:
+                store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=1',
+                                   (json.dumps({'_covered_event_ids': [older['event_id'], renewed_id, ordinary_id]}),))
+            audited = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65))
+            self.assertEqual(audited['by_branch']['renewed_pullback'], {'no_buy_suggested': 1})
+            self.assertFalse(any(x['event_id'] == ordinary_id for x in audited['cases']))
+            renewed = next(x for x in audited['cases'] if x['event_id'] == renewed_id)['paths'][0]
+            self.assertEqual((renewed['trigger_kind'], renewed['threshold_cny']), ('price_touch', 807))
+            self.assertEqual(renewed['quote_followups'][0]['status'], 'observed')
+
     def test_same_horizon_only_post_publication_quotes_with_observed_fee(self):
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
                  'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
