@@ -1044,7 +1044,11 @@ class BuyAuditTests(unittest.TestCase):
                     store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (i, 'zheshang', 'codex', i,
                         two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1',
                         json.dumps({'action': action, 'input_sell_fee_rate': .005,
-                                    'input_participation_cash_cny': 15_000})))
+                                    'input_participation_cash_cny': 15_000,
+                                    'input_quote_status': 'fresh',
+                                    'input_data_status': {'account': 'fresh', 'orders_complete': True},
+                                    'input_minimum_buy_grams': 1,
+                                    'input_state': {'cash_cny': 15_000, 'total_grams': 0, 'pending_order_count': 0}})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
                         {'id': event_id, 'data': {'bank': 'zheshang', 'advice_id': 3, 'routes': paths}}]}
                     if not covered:
@@ -1111,6 +1115,13 @@ class BuyAuditTests(unittest.TestCase):
                 'after_analysis_better': 0, 'same': 0, 'confirmation_above_wait': 0,
                 'after_analysis_above_wait': 0, 'mean_confirmation_edge_cny': 10.0})
             self.assertEqual((summary['60m']['reviewed_episodes'], summary['60m']['paired_samples']), (1, 0))
+            size_summary = final['position_size_comparison']['breakout_continuation']
+            self.assertEqual(at_15['position_size_marks']['40']['additional_net_cny'],
+                             round(7.43 * (805.25 * .995 - 807), 2))
+            self.assertEqual(size_summary['15m']['pairs']['20_to_40']['larger_lost_more'], 1)
+            self.assertEqual(size_summary['60m']['pairs']['20_to_40']['paired_samples'], 0)
+            large_control = observed_reviews(store.conn, 'zheshang', 'codex', 4, START + timedelta(minutes=65), grams=100)
+            self.assertEqual(large_control['position_size_comparison']['breakout_continuation'], size_summary)
             with store.conn:
                 store.conn.execute('UPDATE ai_views SET view_json=? WHERE rowid=2',
                                    (json.dumps({'_covered_event_ids': [newer['event_id']]}),))
@@ -1124,6 +1135,7 @@ class BuyAuditTests(unittest.TestCase):
             self.assertNotEqual(repeated['cases'][0]['paths'][0]['quote_followups'][0]['after_analysis_10g']['entry_cny_per_gram'],
                                 at_15['after_analysis_10g']['entry_cny_per_gram'])
             self.assertEqual(repeated['timing_comparison']['breakout_continuation'], summary)
+            self.assertEqual(repeated['position_size_comparison']['breakout_continuation'], size_summary)
             with store.conn:
                 store.conn.execute('UPDATE jd_live_advice SET created_at=? WHERE id=2', (two.isoformat(),))
                 store.conn.execute('UPDATE ai_runs SET completed_at=? WHERE id=2', (two.isoformat(),))

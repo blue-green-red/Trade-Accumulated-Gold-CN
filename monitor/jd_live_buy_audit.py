@@ -12,6 +12,7 @@ from .jd_live_buy_watch import (BREAKOUT_MODES, MAX_GAP, WATCH_WINDOW, advance, 
                                plain_buy_discards, plain_buy_suppressions, watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
+from .jd_live_size_audit import position_marks, position_sizes, summarize_position_sizes
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
@@ -330,22 +331,26 @@ def mark(entry, exit_quote, fee, quotes, grams):
     if end_at < quoted_at:
         return {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
     marks = list(observable_quotes(p for p in quotes if quoted_at <= p[0] <= end_at and observed_at <= p[1] <= exit_quote[1]))
-    net = lambda sell: (sell * (1 - fee) - buy) * grams
+    net_per_gram = lambda sell: sell * (1 - fee) - buy
     complete = complete_sampling(quoted_at, end_at, marks)
     adverse = drawdown = best = first_break_even = None
     if complete:
         peak = low = drawdown = 0.
         for _, seen, _, sell in marks:
-            value = net(sell)
+            value = net_per_gram(sell) * grams
             peak = max(peak, value)
             low = min(low, value)
             drawdown = max(drawdown, peak - value)
             best = value if best is None else max(best, value)
             if value >= -1e-8 and (first_break_even is None or seen < first_break_even):
                 first_break_even = seen
-        adverse, drawdown = round(-low,2), round(drawdown,2)
+        adverse, drawdown = -low, round(drawdown,2)
     return {'status': 'valued', 'entry_at': utc_text(observed_at), 'entry_cny_per_gram': buy,
-            'net_cny': round(net(exit_quote[3]), 2), 'sampled_adverse_excursion_cny': adverse,
+            'net_cny': round(net_per_gram(exit_quote[3]) * grams, 2),
+            'net_cny_per_gram': round(net_per_gram(exit_quote[3]), 8),
+            'gross_cny_per_gram': round(exit_quote[3] - buy, 8),
+            'sampled_adverse_excursion_cny_per_gram': round(adverse / grams, 8) if adverse is not None else None,
+            'sampled_adverse_excursion_cny': round(adverse, 2) if adverse is not None else None,
             'sampled_best_net_cny': round(best, 2) if best is not None else None,
             'sampled_first_break_even_at': utc_text(first_break_even) if first_break_even else None,
             'sampled_max_drawdown_cny': drawdown, 'mark_samples': len(marks)}
@@ -643,7 +648,7 @@ def confirmation_sample(conn, bank, quoted, price, archived_at, archive):
 
 
 def observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, exit_quote,
-                         grams, entry_checks, confirmed_quote=None):
+                         grams, entry_checks, confirmed_quote=None, sizing=None):
     confirmation_key = f'at_confirmation_{grams:g}g'
     publication_key = f'after_analysis_{grams:g}g'
     if fee is None or fee >= 1:
@@ -669,20 +674,23 @@ def observed_entry_marks(conn, bank, confirmed, price, fee, published, publicati
         later = {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
     elif not publication_quote:
         later = unavailable('publication_quote_missing')
-    elif publication_error:
-        later = unavailable(publication_error)
     else:
         quoted, buy, sell, seen = publication_quote[:4]
         later = stamp(quoted), stamp(seen), buy, sell
         if quote_source(publication_quote) == 'analysis_archive':
             quotes.append(later)
             quotes.sort(key=lambda quote: quote[0])
-    return {confirmation_key: mark(entry, exit_point, fee, quotes, grams),
-            publication_key: mark(later, exit_point, fee, quotes, grams)}
+    fixed_size_error = publication_error if not isinstance(later, dict) else None
+    market_mark = mark(later, exit_point, fee, quotes, grams) if not fixed_size_error or sizing else None
+    result = {confirmation_key: mark(entry, exit_point, fee, quotes, grams),
+              publication_key: unavailable(fixed_size_error) if fixed_size_error else market_mark}
+    if sizing and (marks := position_marks(sizing, market_mark)):
+        result['position_size_marks'] = marks
+    return result
 
 
 def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, published=None, publication_quote=None,
-                   grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None):
+                   grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None, sizing=None):
     result = {'minutes': minutes}
     if not confirmed or price is None:
         return {**result, 'status': 'signal_unavailable'}
@@ -704,12 +712,12 @@ def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publ
             'at_confirmation': round(grams * (exit_net - price), 2) if not entry_checks[0] else None,
             'after_analysis': after_analysis, 'wait': 0.0}
     result.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, quote,
-                                       grams, entry_checks, confirmed_quote))
+                                       grams, entry_checks, confirmed_quote, sizing))
     return result
 
 
 def observed_review_horizons(conn, bank, confirmed, price, fee, published, publication_quote, now,
-                             *, grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None):
+                             *, grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None, sizing=None):
     """Mark fixed-size hypothetical additions at common trading-day horizons."""
     horizons = []
     entry_keys = (f'at_confirmation_{grams:g}g', f'after_analysis_{grams:g}g')
@@ -731,7 +739,7 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
         row['exit_quote_at'] = exit_quote[0]
         row['exit_quote_source'] = quote_source(exit_quote)
         row.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target,
-                                        exit_quote, grams, entry_checks, confirmed_quote))
+                                        exit_quote, grams, entry_checks, confirmed_quote, sizing))
         horizons.append(row)
     return horizons
 
@@ -813,7 +821,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
     rows = conn.execute("""
         SELECT r.id,r.run_id,r.status,r.started_at,r.completed_at,
                json_extract(v.view_json,'$._covered_event_ids'),
-               a.id,a.created_at,a.advice_json,
+               a.id,a.created_at,a.expires_at,a.advice_json,
                json_extract(s.value,'$.trigger_events'),
                json_extract(s.value,'$.event_coverage'),
                json_extract(v.view_json,'$._valid_entry_confirmations'),json_extract(s.value,?),s.updated_at
@@ -827,13 +835,13 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
     summary = defaultdict(lambda: defaultdict(int))
     episodes = {}
     archive = archived_quote_samples(conn, bank, model, now)
-    for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, archived_at in rows:
+    for attempt, run_id, status, start, finish, covered, advice_id, published, expires, raw, events, sent, valid, source, archived_at in rows:
         if not (archived_at:=stamp(archived_at)) or archived_at>now:
             continue
         finished=stamp(finish)
         if finished and finished>now:
             status='running'
-            finish,finished,covered,advice_id,published,raw,valid=(None,)*7
+            finish,finished,covered,advice_id,published,expires,raw,valid=(None,)*8
         # Current Codex archives are scoped to the submitted events and omit the duplicate coverage list.
         sent_ids = set(json.loads(sent).get(model, [])) if sent is not None else None
         value = json.loads(raw) if raw else {}
@@ -909,6 +917,13 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
                 if observed_at is None:
                     confirmation_error = 'confirmation_quote_missing'
                 entry_checks = confirmation_error, publication_error
+                sizing = None
+                if confirmed_quote and mark and path_outcome in (
+                        'buy_suggested', 'conditional_buy_suggested', 'no_buy_suggested', 'not_buy_basis'):
+                    expiry = stamp(expires)
+                    if expiry and stamp(mark[3]) < expiry and trading_session(stamp(mark[0]))['is_open']:
+                        sizing = position_sizes(value, account, mark[1], fee, route)
+                usable_sizing = sizing if sizing and sizing['status'] == 'available' else None
                 path = {
                     'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                     **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
@@ -921,15 +936,17 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
                     'seconds_to_start': elapsed_seconds(observed_at, started),
                     'seconds_to_completion': elapsed_seconds(observed_at, finished),
                     'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
+                    **({'position_size_at_publication': sizing} if sizing else {}),
                     'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now, fee=fee,
                                                        published=released, publication_quote=mark, grams=grams,
                                                        entry_checks=entry_checks, confirmed_quote=confirmed_quote,
-                                                       archive=archive)
+                                                       archive=archive, sizing=usable_sizing)
                                         for minutes in (15, 60)],
                     'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
                                                                      released, mark, now, grams=grams,
                                                                      entry_checks=entry_checks,
-                                                                     confirmed_quote=confirmed_quote, archive=archive),
+                                                                     confirmed_quote=confirmed_quote, archive=archive,
+                                                                     sizing=usable_sizing),
                 }
                 paths.append(path)
                 if released and confirmed and path_outcome in (
@@ -951,9 +968,11 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
                           'post_publication_quote_source': quote_source(mark),
                           **({'bank_quote_path':quote_path} if quote_path else {}), 'paths': paths})
     archived = sum(1 for row in rows if (at:=stamp(row[-1])) and at<=now)
+    matched_paths = [path for _, path in episodes.values()]
     return {'status': 'available' if archived else 'input_archives_unavailable',
             'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary,
-            'timing_comparison': compare_review_timings((path for _, path in episodes.values()), grams)}
+            'timing_comparison': compare_review_timings(matched_paths, grams),
+            'position_size_comparison': summarize_position_sizes(matched_paths)}
 
 
 def plain_buy_review_index(cases):
