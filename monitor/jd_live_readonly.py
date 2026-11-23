@@ -294,6 +294,36 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
     return out
 
 
+def review_condition_input(conn, account, advice, condition, watch_end):
+    item={k:condition[k] for k in ('condition','price_cny','quote_side','order_key','reason','buy_review')
+          if condition.get(k) is not None}
+    breakout=condition.get('bank_breakout')
+    if breakout:
+        item.pop('reason',None)
+        item['bank_breakout']={k:breakout[k] for k in ('retest_ceiling_cny','hold_minutes')}
+    state=condition.get('monitoring') or {}
+    if condition.get('quote_side')!='buy' or condition.get('order_key') or not state:
+        return item
+    from .jd_live_conditions import read_watch,stamp
+    state_info={k:state[k] for k in ('status','confirmation_stage') if state.get(k)}
+    common=watch_end if condition.get('buy_review') or breakout else advice['expires_at']
+    end=state.get('expires_at')
+    deadline=stamp(end)
+    if deadline and deadline!=stamp(common):
+        state_info['expires_at']=end
+    if (state_info.get('status')=='expired' and condition.get('buy_review') and deadline and watch_end
+            and advice.get('snapshot_revision')==account.get('revision')):
+        from .jd_live_buy_watch import watch_id,watch_progress,watch_route_key
+        current=watch_progress(read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}'))
+        if current.get('plan_id',current.get('advice_id'))==watch_id(advice):
+            step=current.get('routes',{}).get(watch_route_key(condition),{})
+            if (last:=stamp(step.get('last_at'))) and last<deadline and step.get('stage'):
+                state_info['confirmation_stage']=step['stage']
+    if state_info:
+        item['monitoring']=state_info
+    return item
+
+
 def model_input(conn,now=None):
     from .jd_live_buy_watch import quote_context
     from .participation_review import bank_cash
@@ -354,9 +384,11 @@ def model_input(conn,now=None):
                                 'reason':str(prior.get('reason') or '')[:420]}
                             break
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
-                brief['review_conditions']=[{k:o[k] for k in ('condition','price_cny','quote_side','order_key','reason','buy_review') if k in o and (k!='buy_review' or o[k] is not None)} for o in value.get('review_conditions',[]) if not o.get('checks')] if counts[name]==1 else []
-                if counts[name]==1 and value.get('buy_watch'):
-                    brief['buy_watch_expires_at']=value['buy_watch']['expires_at']
+                watch_end=(value.get('buy_watch') or {}).get('expires_at')
+                brief['review_conditions']=([review_condition_input(conn,row,value,condition,watch_end)
+                    for condition in value.get('review_conditions',[]) if not condition.get('checks')] if counts[name]==1 else [])
+                if counts[name]==1 and watch_end:
+                    brief['buy_watch_expires_at']=watch_end
                 if value.get('suggested_orders'):
                     brief['suggested_orders']=[{k:o.get(k) for k in ('kind','grams','price_cny','loss_price_cny','expires_at','reason','execution_progress')} for o in value['suggested_orders']]
                 previous.append(brief)

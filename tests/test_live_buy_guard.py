@@ -329,6 +329,14 @@ class BuyGuardTests(unittest.TestCase):
         expired = condition_state(self.conn, account, advice, advice['review_conditions'][0], cutoff)
         self.assertEqual(expired['status'], 'expired')
         self.assertEqual(datetime.fromisoformat(expired['expires_at']), cutoff)
+        from monitor.jd_live_readonly import model_input
+        previous = model_input(self.conn, cutoff)['accounts']['zheshang']['previous_advice'][0]
+        low, breakout = previous['review_conditions']
+        self.assertEqual(low['monitoring'], {'status': 'expired', 'confirmation_stage': 'confirmed',
+                                            'expires_at': cutoff.isoformat()})
+        self.assertEqual(breakout['monitoring']['status'], 'monitoring')
+        self.assertIn('retest_ceiling_cny', breakout['bank_breakout'])
+        self.assertNotIn('reason', breakout)
 
         self.observe_watch(advice, [(6, 805.5), (7, 806.5), (9, 807)])
         event, = pending_events(self.conn, 'codex', START + timedelta(minutes=9))
