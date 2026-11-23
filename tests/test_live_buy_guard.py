@@ -14,7 +14,7 @@ from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import pending_events, record, request
+from monitor.jd_live_buy_watch import carry_pending_breakouts, pending_events, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
@@ -169,6 +169,56 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read(self.conn, 'codex'), {'pending': [], 'covered': [key]})
         self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
                          late['confirmed_at'])
+
+    def test_pending_breakout_survives_a_change_to_an_independent_pullback(self):
+        self.update_quote(0, 805.5)
+        revision = accounts(self.conn, START, include_advice=False)[0]['revision']
+        source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
+                  'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+
+        def publish(advice_id, at, pullback, boundary):
+            deadline = (at + timedelta(minutes=15)).isoformat()
+            conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
+                           'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
+                                          'max_buy_price_cny': 806, 'zone': {'floor_cny': 797,
+                                              'weak_target_cny': 818, 'risk_exit_cny': 796}}}]
+            advice = {'id': advice_id, 'analyst': 'codex', 'action': 'hold', 'status': 'current', 'action_status': 'current',
+                      'valid_for_minutes': 15, 'review_conditions': conditions, 'created_at': at.isoformat(),
+                      'expires_at': deadline, 'snapshot_revision': revision, 'position_path': {'boundary_price_cny': boundary}}
+            with self.conn:
+                set_watch(self.conn, 'zheshang', 'codex', advice, source, at, 10)
+                self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                    (advice_id, 'zheshang', 'codex', advice_id, at.isoformat(), deadline, revision, json.dumps(advice)))
+            return advice
+
+        first = publish(1, START, 799, 795)
+        for minute, price in [(0, 805.5), (1, 806), (3, 806.5)]:
+            at = START + timedelta(minutes=minute)
+            self.update_quote(minute, price)
+            account = accounts(self.conn, at, include_advice=False)[0]
+            request(self.store, account, first, at, (at, at, price, price))
+        old_event, = read(self.conn, 'codex')['pending']
+        at = START + timedelta(minutes=4)
+        second = publish(2, at, 800, 795)
+        self.assertNotEqual(first['buy_watch']['id'], second['buy_watch']['id'])
+        with self.conn:
+            carry_pending_breakouts(self.conn, 'codex', 2, at)
+        carried, = pending_events(self.conn, 'codex', at)
+        self.assertEqual(carried['data']['plan_id'], second['buy_watch']['id'])
+        self.assertNotEqual(carried['id'], old_event['id'])
+        self.assertEqual(carried['data']['routes'], old_event['data']['routes'])
+        self.assertEqual(read_watch(self.conn, 'live-buy-watch:codex:zheshang')['plan_id'], second['buy_watch']['id'])
+
+        self.update_quote(4, 806.6)
+        account = accounts(self.conn, at, include_advice=False)[0]
+        request(self.store, account, second, at, (at, at, 806.6, 806.6))
+        self.assertEqual(pending_events(self.conn, 'codex', at), [carried])
+
+        later = START + timedelta(minutes=5)
+        publish(3, later, 800, 794)
+        with self.conn:
+            carry_pending_breakouts(self.conn, 'codex', 3, later)
+        self.assertEqual(pending_events(self.conn, 'codex', later), [])
 
     def test_sell_and_existing_protection_can_still_pass_independent_validation(self):
         advice = {'action': 'sell', 'checks': [], 'suggested_orders': [
