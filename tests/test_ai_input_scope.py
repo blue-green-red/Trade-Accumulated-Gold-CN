@@ -18,14 +18,15 @@ class InputScopeTests(unittest.TestCase):
                      'price_cny': 805, 'bank_breakout': {'hold_minutes': 3}}
         event = {'id': 'live-buy-confirmed:codex:zheshang:test',
                  'data': {'bank': 'zheshang', 'routes': [route, automatic]}}
-        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005}
+        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005, 'total_grams': 42}
         original = {'live_readonly_accounts': {'accounts': {'zheshang': account,
                     'minsheng': {**account, 'sell_fee_rate': .01}}}, 'trigger_events': [event]}
         result = compact_context(original)
         by_bank = result['live_readonly_accounts']['accounts']
         self.assertEqual(by_bank['zheshang']['entry_review_payoffs_at_input'], {'pullback': {
             'weak_target_net_cny': round(12 * (812 * .995 - 806), 2),
-            'risk_exit_net_cny': round(12 * (800 * .995 - 806), 2)}})
+            'risk_exit_net_cny': -120.0, 'hold_only_at_exit_delta_cny': -208.95,
+            'hold_plus_candidate_at_exit_delta_cny': -328.95}})
         self.assertNotIn('entry_review_payoffs_at_input', by_bank['minsheng'])
         self.assertNotIn('entry_review_payoffs_at_input', account)
         self.assertEqual(compact_context(result), result)
@@ -37,6 +38,13 @@ class InputScopeTests(unittest.TestCase):
                 changed['live_readonly_accounts']['accounts']['zheshang']['quote'].update(changes)
                 info = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']
                 self.assertNotIn('entry_review_payoffs_at_input', info)
+        for holding, expected in ((0, -120.0), (None, None)):
+            with self.subTest(holding=holding):
+                account['total_grams'] = holding
+                info = market_context(original)['live_readonly_accounts']['accounts']['zheshang']
+                payoff = info['entry_review_payoffs_at_input']['pullback']
+                self.assertEqual(payoff.get('hold_plus_candidate_at_exit_delta_cny'), expected)
+                self.assertEqual(payoff['risk_exit_net_cny'], -120.0)
         account['sell_fee_rate'] = None
         info = market_context(original)['live_readonly_accounts']['accounts']['zheshang']
         self.assertNotIn('entry_review_payoffs_at_input', info)

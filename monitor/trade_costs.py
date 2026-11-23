@@ -26,14 +26,23 @@ def cost_reference(price,fee,spread=0):
     return {'net_sell_price_cny':round(net,6)}
 
 
-def bank_review_payoff(entry, grams, zone, fee):
+def bank_review_payoff(entry, grams, zone, fee, *, current_sell=None, holding=None):
     entry, grams = number(entry), number(grams)
     target = cost_reference(zone.get('weak_target_cny'), fee)
     stop = cost_reference(zone.get('risk_exit_cny'), fee)
     if not entry or not grams or not target or not stop:
         return None
-    return {'weak_target_net_cny': round((target['net_sell_price_cny']-entry)*grams,2),
-            'risk_exit_net_cny': round((stop['net_sell_price_cny']-entry)*grams,2)}
+    exit_net = stop['net_sell_price_cny']
+    added_at_exit = (exit_net - entry) * grams
+    result = {'weak_target_net_cny': round((target['net_sell_price_cny']-entry)*grams,2),
+              'risk_exit_net_cny': round(added_at_exit,2)}
+    holding_now = cost_reference(current_sell, fee)
+    holding = number(holding)
+    if holding_now is not None and holding is not None:
+        held_at_exit = holding * (exit_net - holding_now['net_sell_price_cny'])
+        result.update(hold_only_at_exit_delta_cny=round(held_at_exit,2),
+                      hold_plus_candidate_at_exit_delta_cny=round(held_at_exit+added_at_exit,2))
+    return result
 
 
 def position_comparison(grams,price,fee,spread=0,target=None,stop=None):

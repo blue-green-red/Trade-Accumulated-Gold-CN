@@ -44,7 +44,8 @@ def prepare_bank_entry_context(out):
             if (not fresh or not zone or not condition or not confirmed or quoted_at < confirmed
                     or recovery is None or cap is None or not recovery <= buy <= cap):
                 continue
-            payoff = bank_review_payoff(buy, review.get('grams'), zone, account.get('sell_fee_rate'))
+            payoff = bank_review_payoff(buy, review.get('grams'), zone, account.get('sell_fee_rate'),
+                                       current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
             if payoff is not None:
                 account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
 
