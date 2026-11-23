@@ -160,7 +160,9 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
     schema=frozen_request['schema'] if frozen_request else strict_schema(analyst.result_type(context).model_json_schema())
     from .jd_live_advice import prompt_for as live_advice_prompt
     system=frozen_request['system'] if frozen_request else analyst.research_system()+'\n\n'+STRUCTURE_SYSTEM+analyst.trading_system(context)+'\n\n'+analyst.result_instructions()+live_advice_prompt(context)
-    fingerprint=hashlib.sha256(dumps([system,schema,analyst.model,settings.ai_max_searches,settings.ai_history_max_queries]).encode()).hexdigest()
+    restrict_local_tools = bool(frozen_request) or settings.ai_trading_mode == 'live_only'
+    fingerprint=hashlib.sha256(dumps([system,schema,analyst.model,settings.ai_max_searches,settings.ai_history_max_queries,
+                                      restrict_local_tools]).encode()).hexdigest()
     session,reset=choose_session(previous,fingerprint,generation,settings,now) if persistent else (None,'disabled')
     if session and not isinstance(session.get('usage_totals'),dict):session,reset=None,'usage_state_missing'
     packed=context if frozen_request else compact_context(context) if optimized else context
@@ -173,7 +175,8 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
     record(usage,'request',{'stage':'codex','system':system,'user':dynamic,'prompt':prompt,'context':packed,
         'schema':schema,'model':analyst.model,'mode':'resume' if session else 'fresh',
         'session_id':session.get('id') if session else None,'parent_archive_id':session.get('archive_id') if session else None,
-        'search_budget':settings.ai_max_searches,'resume_rule':RESUME_RULE if session else None})
+        'search_budget':settings.ai_max_searches,'local_tools_restricted':restrict_local_tools,
+        'resume_rule':RESUME_RULE if session else None})
     events=Events(usage,session.get('usage_totals') if session else None)
     performance={**usage.get('performance',{}),'mode':'resume' if session else 'fresh','reset_reason':reset,
                  'input_chars_before':usage.get('performance',{}).get('input_chars_before',len(dumps(context))),'input_chars_after':len(dumps(packed)),
@@ -193,9 +196,11 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
             from .history_access import session as history_session
             if analyst.model:cmd+=['-m',analyst.model]
             if settings.ai_max_searches<=0:cmd+=['-c','web_search="disabled"']
-            if frozen_request:
+            if restrict_local_tools:
+                # Keep only native search and the explicitly configured evidence tools below.
                 cmd+=['-c','mcp_servers={}']
-                for feature in ('apps','multi_agent','shell_tool','unified_exec','skill_search','image_generation','view_image'):
+                for feature in ('apps','code_mode_host','multi_agent','multi_agent_v2','shell_tool','unified_exec',
+                                'skill_search','image_generation','view_image'):
                     cmd+=['-c','features.'+feature+'=false']
                 cmd+=['-c','features.skip_host_skill_discovery=true']
                 cmd+=['-c','suppress_unstable_features_warning=true']

@@ -154,5 +154,20 @@ class SpeedTests(unittest.TestCase):
             self.assertIn(value,cmd)
         self.assertEqual(self.ctx,original)
 
+    def test_live_codex_limits_local_tools_and_keeps_public_research(self):
+        self.a.settings = replace(self.settings, ai_trading_mode='live_only', codex_resume_enabled=False,
+                                  ai_max_searches=2, ai_page_fetch_max_calls=2, ai_history_max_queries=2)
+        context = {'snapshot_at': utc_now().isoformat(), 'xauusd': 4000,
+                   'live_readonly_accounts': {'accounts': {'zheshang': {'status': 'fresh'}}}}
+        self.a._run_codex(context, {})
+        cmd = self.calls[-1][0]
+        self.assertIn('--search', cmd)
+        self.assertNotIn('web_search="disabled"', cmd)
+        for option in ('mcp_servers={}', 'features.code_mode_host=false', 'features.apps=false',
+                       'features.multi_agent=false', 'features.shell_tool=false', 'features.unified_exec=false',
+                       'features.skill_search=false', 'features.skip_host_skill_discovery=true'):
+            self.assertIn(option, cmd)
+        self.assertIn('mcp_servers.account_history.enabled_tools=["fetch_public_page"]', cmd)
+
 
 if __name__=='__main__':unittest.main()
