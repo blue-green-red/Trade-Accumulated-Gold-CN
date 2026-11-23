@@ -290,6 +290,23 @@ const proposalState = (order) => {
             <template v-if="size.suggested_grams == null">
               · 克数待复评后确定</template
             >
+            <template v-if="size.remaining_after_batch_grams > 0">
+              · 本批成交后距目标约
+              {{ num(size.remaining_after_batch_grams) }} 克
+            </template>
+          </div>
+          <div
+            v-if="
+              size.target_fits_cash === false || size.target_fits_risk === false
+            "
+          >
+            按同一价格一次补足目标会超出{{
+              size.target_fits_cash === false && size.target_fits_risk === false
+                ? "可用现金和风险预算参考"
+                : size.target_fits_cash === false
+                  ? "可用现金"
+                  : "风险预算参考"
+            }}。
           </div>
           <div v-if="size.spending_cny != null">
             {{ size.suggested_grams == null ? "按目标估算" : "按建议估算" }}投入
@@ -331,8 +348,12 @@ const proposalState = (order) => {
                 · 成交后总仓位 {{ num(size.combined_buys.position_after_pct) }}%
               </template>
               <template
-                v-else-if="size.combined_buys.cash_covers_all === false"
+                v-if="size.combined_buys.remaining_after_batch_grams > 0"
               >
+                · 距目标约
+                {{ num(size.combined_buys.remaining_after_batch_grams) }} 克
+              </template>
+              <template v-if="size.combined_buys.cash_covers_all === false">
                 · 现金不足以覆盖</template
               >
             </div>

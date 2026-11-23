@@ -96,9 +96,12 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
         data['cash_cap_grams'] = floor(available / entry * 100) / 100
     gross_at_entry = cash + holding * entry if cash is not None and holding is not None else None
     sized = grams
+    target_grams = None
     if target is not None and gross_at_entry:
         target_grams = max(0., (target / 100 * gross_at_entry) / entry - holding)
         data.update(target_position_pct=target, target_add_grams=round(target_grams, 4))
+        if available is not None and target_grams > 0:
+            data['target_fits_cash'] = target_grams * entry <= available + 1e-8
         if sized is None:
             sized = target_grams
     if sized is not None:
@@ -108,6 +111,8 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
             data['spending_nav_pct'] = round(spending / net * 100, 4)
         if gross_at_entry and spending <= cash + 1e-8:
             data['position_after_pct'] = round((holding + sized) * entry / gross_at_entry * 100, 4)
+            if grams is not None and target_grams is not None:
+                data['remaining_after_batch_grams'] = round(max(0., target_grams - sized), 4)
     combined = None
     if committed is not None and committed[0] > 0 and sized is not None:
         other_grams, other_cost = committed
@@ -122,6 +127,9 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
                 gross_after = cash - total_cost + gold_after
                 if gross_after > 0:
                     combined['position_after_pct'] = round(gold_after / gross_after * 100, 4)
+                    if target is not None:
+                        remaining = max(0., (target / 100 * gross_after - gold_after) / entry)
+                        combined['remaining_after_batch_grams'] = round(remaining, 4)
         data['combined_buys'] = combined
 
     fee = number(advice.get('input_sell_fee_rate'))
@@ -138,6 +146,8 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
     if budget is not None:
         remaining_risk = max(0., budget - max(0., held_loss))
         data['risk_cap_grams'] = floor(remaining_risk / added_loss * 100) / 100
+        if target_grams:
+            data['target_fits_risk'] = target_grams * added_loss <= remaining_risk + 1e-8
     if sized is not None and cash is not None and sized * entry <= cash + 1e-8:
         account_delta = -(held_loss + sized * added_loss)
         data.update(account_at_exit_change_cny=round(account_delta, 2),
@@ -198,13 +208,15 @@ def buy_sizing(advice):
     candidate_target = target if advice.get('action') in ('hold', 'wait') and len(candidates) == 1 else None
     for review in candidates:
         grams = number(review.get('grams'))
-        if grams or candidate_target is not None:
+        if grams or candidate_target:
             entry = float(review['entry_price_cny'])
             included = grams and review['decision'] == 'recommend' and any(same_order(review, order) for order in orders)
             others = committed(planned_grams + immediate_grams - (grams if included else 0.),
                                planned_cost + immediate_cost - (grams * entry if included else 0.))
-            result.append({'kind': review['decision'], **buy_size_metrics(advice, entry,
-                grams, target=candidate_target, exit_price=number(review.get('risk_exit_cny')), committed=others)})
+            metrics = buy_size_metrics(advice, entry, grams, target=candidate_target,
+                                       exit_price=number(review.get('risk_exit_cny')), committed=others)
+            if grams or metrics.get('target_add_grams'):
+                result.append({'kind': review['decision'], **metrics})
     return result
 
 

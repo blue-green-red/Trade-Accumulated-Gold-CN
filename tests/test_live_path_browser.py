@@ -35,6 +35,7 @@ class LivePathBrowserTests(unittest.TestCase):
                 sizing=page.locator('[data-buy-sizing]')
                 expect(sizing).to_contain_text('建议 10.0000 克')
                 expect(sizing).to_contain_text('投入 8,750.00 元')
+                expect(sizing).to_contain_text('本批成交后距目标约 47.14 克')
                 expect(sizing).to_contain_text('扣费净值变化')
                 expect(page.locator('[data-live-risk]').first).to_contain_text('证据分歧时偏向有限参与')
                 comparison=page.locator('[data-participation-review]')

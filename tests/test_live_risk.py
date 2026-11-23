@@ -90,11 +90,18 @@ class AccountRiskTests(unittest.TestCase):
         self.assertEqual(result['suggested_grams'],2)
         self.assertEqual(result['target_add_grams'],2.5217)
         self.assertEqual(result['position_after_pct'],57.5)
+        self.assertEqual(result['remaining_after_batch_grams'],.5217)
+        self.assertTrue(result['target_fits_cash'])
+        self.assertTrue(result['target_fits_risk'])
         self.assertEqual(result['spending_cny'],1840)
         self.assertEqual(result['cash_cap_grams'],8.69)
         self.assertEqual(result['risk_cap_grams'],7.0)
         self.assertEqual(result['account_at_exit_change_cny'],-1282.24)
         self.assertEqual(result['added_loss_cny_per_gram'],43.52)
+        full,=buy_sizing({**value,'position_path':{**value['position_path'],'target_position_pct':100}})
+        self.assertFalse(full['target_fits_cash'])
+        self.assertFalse(full['target_fits_risk'])
+        self.assertEqual(full['remaining_after_batch_grams'],8.8696)
 
     def test_buy_sizing_keeps_observation_quantities_hypothetical_and_unknown_limits_omitted(self):
         case={'decision':'needs_review','entry_price_cny':900,'risk_exit_cny':875,'grams':None}
@@ -110,6 +117,7 @@ class AccountRiskTests(unittest.TestCase):
         self.assertNotIn('account_at_exit_change_cny',result)
         self.assertEqual(buy_sizing({**value,'input_quote_status':'historical'}),[])
         self.assertEqual(buy_sizing({**value,'limit_buy_reviews':[case,{**case,'entry_price_cny':890}]}),[])
+        self.assertEqual(buy_sizing({**value,'position_path':{'target_position_pct':0}}),[])
 
     def test_combined_sizing_counts_each_new_batch_once_and_reserves_risk(self):
         from monitor.jd_live_presentation import presentation
@@ -129,6 +137,8 @@ class AccountRiskTests(unittest.TestCase):
         self.assertEqual(together['account_at_exit_change_cny'],-1401.32)
         self.assertEqual((together['cash_cap_grams'],together['risk_cap_grams']),(6.92,4.26))
         self.assertEqual((limit['combined_buys']['other_buy_grams'],limit['combined_buys']['total_buy_grams']),(3,6))
+        higher=buy_sizing({**value,'position_path':{**value['position_path'],'target_position_pct':90}})[0]
+        self.assertEqual(higher['combined_buys']['remaining_after_batch_grams'],2.8364)
         self.assertNotIn('combined_buys',buy_sizing({**value,'input_pending_buy_exposure':None})[0])
         archived={**value,'buy_sizing_at_input':[immediate,limit],'suggested_orders':[{**order,'checks':['已到期']}]}
         self.assertEqual(presentation(archived)['buy_sizing'],[immediate,limit])
