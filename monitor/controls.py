@@ -21,10 +21,11 @@ def daily_keys(settings) -> tuple:
 
 def control(conn: sqlite3.Connection, model: str) -> dict:
     row = conn.execute("SELECT value FROM state WHERE key=?", (f"model_control:{model}",)).fetchone()
+    defaults = {"enabled": True, "generation": 0, "changed_at": None}
     if row:
         import json
-        return json.loads(row[0])
-    return {"enabled": True, "generation": 0, "changed_at": None}
+        return {**defaults, **json.loads(row[0])}
+    return defaults
 
 
 def set_enabled(conn: sqlite3.Connection, model: str, enabled: bool) -> dict:

@@ -61,13 +61,18 @@ def active_routes(conn, account, routes, now):
     return [route for route, anchor in anchored if route_valid(route, anchor, quotes, point[0])]
 
 
-def review_failures(conn, context, event_ids, now):
-    """Return a bank warning when every included entry route has lost its basis."""
+def submitted_routes(context, event_ids):
     by_bank = defaultdict(list)
     ids = set(event_ids)
     for event in context.get('trigger_events', []):
         if event['id'] in ids and event['id'].startswith(ENTRY_EVENT_PREFIX):
             by_bank[event['data']['bank']].extend(event['data'].get('routes', []))
+    return by_bank
+
+
+def review_failures(conn, context, event_ids, now):
+    """Return a bank warning when every included entry route has lost its basis."""
+    by_bank = submitted_routes(context, event_ids)
     if not by_bank:
         return {}
 
@@ -155,14 +160,14 @@ def retire_failed_events(conn, model, context, event_ids, failures):
     return [event_id for event_id in event_ids if event_id not in failed]
 
 
-def block_entries(value, warning):
+def block_entries(value, warning, *, include_reviews=True):
     """Keep protective actions and the archived model output, and flag stale buys."""
     if value['action'] == 'buy':
         value['checks'].append(warning)
     groups = (
         ('suggested_orders', '条件单建议：', lambda item: item['kind'] == 'limit_buy'),
         ('limit_buy_reviews', '限价评估：', lambda item: item['decision'] in ('recommend', 'needs_review')),
-        ('review_conditions', '复评条件：', lambda item: bool(item.get('buy_review'))),
+        ('review_conditions', '复评条件：', lambda item: include_reviews and bool(item.get('buy_review'))),
         ('order_management', '挂单建议：', lambda item: item['action'] == 'replace' and
          (item.get('effective_replacement') or {}).get('action') == 'buy'),
     )
@@ -171,3 +176,41 @@ def block_entries(value, warning):
             if affects_entry(item):
                 item.setdefault('checks', []).append(warning)
                 value['checks'].append(prefix + warning)
+
+
+def current_entry_state(conn, account, advice, now):
+    if advice['lifecycle_status'] != 'current':
+        return
+    routes = advice.get('entry_trigger_routes')
+    checks = advice.setdefault('checks', [])
+    if routes and not active_routes(conn, account, routes, now):
+        warning = '本轮买入依据已失守、超价或报价中断，请用新行情复评'
+        size = len(checks)
+        block_entries(advice, warning, include_reviews=False)
+        if len(checks) > size:
+            advice['status'] = 'review_required'
+        if advice.get('action') == 'buy':
+            advice['action_status'] = 'review_required'
+            advice['entry_pause_reason'] = warning
+        return
+    if advice.get('action') != 'buy' or advice['action_status'] != 'current':
+        return
+    from .trading_hours import trading_session
+    from .trade_costs import number
+    quote = account.get('quote') or {}
+    quote_at = stamp(quote.get('quoted_at'))
+    price = number(quote.get('buy_price_cny'))
+    input_at = stamp(advice.get('input_quote_at'))
+    limit = advice.get('price_cny')
+    if (quote.get('status') != 'fresh' or not price or not quote_at or
+            (input_at and quote_at < input_at) or not trading_session(now)['is_open']):
+        warning = '暂无有效本行买价，买入建议待核对'
+    elif limit is not None and advice.get('price_condition') == 'at_or_below' and price > limit:
+        warning = f'当前本行买价{price:g}元/克超过建议上限{limit:g}元/克，暂停按该建议买入'
+    elif limit is not None and advice.get('price_condition') == 'at_or_above' and price < limit:
+        warning = f'当前本行买价{price:g}元/克低于建议触发价{limit:g}元/克，等待条件成立'
+    else:
+        return
+    checks.append(warning)
+    advice['entry_pause_reason'] = warning
+    advice['action_status'] = advice['status'] = 'review_required'

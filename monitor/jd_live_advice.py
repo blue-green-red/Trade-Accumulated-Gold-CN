@@ -95,7 +95,7 @@ def prompt_for(context):
 
 
 
-def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None):
+def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None,entry_routes=None):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
     from .jd_live_readonly import enabled_banks,buy_minimums
@@ -157,6 +157,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         annotate(value,source)
         value['input_protection']=protection_state(source)
         value['checks']=warnings
+        if routes := (entry_routes or {}).get(bank):
+            value['entry_trigger_routes']=routes
         if warning := (entry_warnings or {}).get(bank):
             from .jd_live_buy_guard import block_entries
             block_entries(value,warning)
@@ -167,12 +169,12 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
             (bank,analyst,view_id,now.isoformat(),(now+timedelta(minutes=value['valid_for_minutes'])).isoformat(),source['revision'],json.dumps(value,ensure_ascii=False)))
 
 
-def notification_events(conn,analyst,view_id):
+def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,include_recorded=False):
     """Route advice through the existing dispatcher; wording never implies an executed bank trade."""
     if not view_id:return []
     from .jd_live_readonly import accounts
     events=[]
-    for account in accounts(conn):
+    for account in accounts(conn,now,selected_bank=selected_bank):
         row=conn.execute('SELECT id,advice_json,snapshot_revision,expires_at FROM jd_live_advice WHERE bank=? AND analyst=? AND view_id=?',
                          (account['bank'],analyst,view_id)).fetchone()
         if not row:continue
@@ -198,14 +200,15 @@ def notification_events(conn,analyst,view_id):
         from .jd_live_conditions import stamp
         from .jd_live_orders import proposal_progress
         old_drafts=[p for p in (old or {}).get('suggested_orders',[]) if proposal_progress(p,previous[2],account['order_history'],old.get('valid_for_minutes',240))['status']=='not_observed']
-        renewed=bool(value.get('suggested_orders')) and any(stamp(p.get('expires_at')) and stamp(p['expires_at'])<=datetime.now(timezone.utc) for p in old_drafts)
+        current_time=now or datetime.now(timezone.utc)
+        renewed=bool(value.get('suggested_orders')) and any(stamp(p.get('expires_at')) and stamp(p['expires_at'])<=current_time for p in old_drafts)
         proposal_notice=(proposed_changed or renewed) and bool(old_drafts or value.get('suggested_orders'))
         manual_order_action=any(o['action'] in ('cancel','replace') for v in (old,value) if v for o in v.get('order_management',[]))
         order_notice=manual_order_action and (orders_changed or (previous and previous[1]!=row[2]))
         if not notice_reasons and old and same_plan(plan_terms(anchor),plan_terms(value)) and not orders_changed and not proposal_notice and not validation_recovered and anchor_revision==row[2]:continue
         if not notice_reasons and not order_notice and not proposal_notice and value['action'] in ('hold','wait') and (not old or old.get('action') not in ('buy','sell')):continue
         key=f'live-advice:{row[0]}'
-        if conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue
+        if not include_recorded and conn.execute('SELECT 1 FROM alerts WHERE key=? LIMIT 1',(key,)).fetchone():continue
         action={'buy':'买入建议','sell':'卖出建议','hold':'持有','wait':'观望'}[value['action']]
         if order_notice:
             actionable=[o for o in value.get('order_management',[]) if o['action'] in ('cancel','replace')]

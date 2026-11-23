@@ -260,6 +260,9 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                     proposal['execution_progress']=proposal_progress(proposal,r[2],row['order_history'],value.get('valid_for_minutes',240))
                 from .jd_live_path import current_state as path_current_state
                 path_current_state(entry,row,conn)
+                if target is row['advice']:
+                    from .jd_live_buy_guard import current_entry_state
+                    current_entry_state(conn,row,entry,now)
                 from .jd_live_conditions import condition_state,management_state
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
                 for condition in entry.get('review_conditions',[]):

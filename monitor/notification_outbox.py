@@ -20,10 +20,24 @@ def visible_tasks(conn, mode, limit=10):
     return result
 
 
+def refreshed_advice(conn, event, now):
+    advice_id = event.get('live_advice_id')
+    if not advice_id:
+        return event
+    row = conn.execute('SELECT bank,analyst,view_id FROM jd_live_advice WHERE id=?', (advice_id,)).fetchone()
+    if not row:
+        return None
+    from .jd_live_advice import notification_events
+    bank, model, view = row
+    return next((current for current in notification_events(conn, model, view, now=now,
+                                                            selected_bank=bank, include_recorded=True)
+                 if current['key'] == event['key']), None)
+
+
 def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
     now = now or utc_now()
     stamp = now.isoformat()
-    selected = selected_events(store.conn, events, mode)
+    selected = selected_events(store.conn, events, mode, now=now)
     with store.conn:
         # A process that died during HTTP may already have delivered the message.
         store.conn.execute("UPDATE notification_outbox SET status='uncertain',updated_at=? WHERE status='sending'", (stamp,))
@@ -45,10 +59,18 @@ def dispatch(store, notifier, events, now=None, mode="risk_six_account"):
         event=json.loads(row[1])
         from .controls import active
         model=event_topic(event).split(':')[0]
-        valid=bool(selected_events(store.conn,[event], mode)) and (model not in ('codex','claude') or active(store.conn,model))
-        if row[2]>=3 or datetime.fromisoformat(row[3])<=now or not valid:
+        valid=bool(selected_events(store.conn,[event], mode, now=now)) and (model not in ('codex','claude') or active(store.conn,model))
+        current=refreshed_advice(store.conn,event,now) if valid and row[2]<3 and datetime.fromisoformat(row[3])>now else None
+        if current is None:
             with store.conn:store.conn.execute("UPDATE notification_outbox SET status='cancelled',updated_at=? WHERE event_key=?",(stamp,row[0]))
-        else:due.append((event,row[2]))
+        else:
+            if current != event:
+                with store.conn:
+                    store.conn.execute("UPDATE notification_outbox SET event_json=? WHERE event_key=?",
+                                       (json.dumps(current,ensure_ascii=False),row[0]))
+                    store.conn.execute('UPDATE alerts SET title=?,body=? WHERE key=? AND delivered=0',
+                                       (current['title'],current['body'],row[0]))
+            due.append((current,row[2]))
     def category_for(e):
         return 'account_login' if event_topic(e)=='jd:login' else 'real_advice' if ':live_' in event_topic(e) else 'other'
     for category in ('real_advice','account_login','other'):

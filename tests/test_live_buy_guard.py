@@ -9,12 +9,14 @@ from monitor.__main__ import Monitor
 from monitor.ai import AIAnalyst, ClaudeCodeResult
 from monitor.ai_events import acknowledge, enqueue, read, write
 from monitor.config import Settings
-from monitor.jd_live_advice import notification_events
+from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
 from monitor.jd_live_semantics import notification_parts
 from monitor.jd_live_buy_watch import pending_events, record, request
 from monitor.jd_live_conditions import condition_key, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
+from monitor.notification_control import set_subscription
+from monitor.notification_outbox import dispatch
 from monitor.store import Store
 from test_ai_event_timing import result
 from test_jd_live import payload
@@ -38,7 +40,9 @@ class BuyGuardTests(unittest.TestCase):
         at = START + timedelta(minutes=minute)
         snapshot = parse_account(bank, payload(bank))
         snapshot.update(cash_cny=20_000, cash_source='jd_electronic_account_api',
-                        quote={'buy_price_cny': price, 'sell_price_cny': price, 'quoted_at': at.isoformat()})
+                        quote={'buy_price_cny': price, 'sell_price_cny': price, 'quoted_at': at.isoformat()},
+                        pending_order_count=0, pending_orders={'records': [], 'total_count': 0, 'complete': True},
+                        coverage={'pending_orders': 'available'}, component_times={'pending_orders': at.isoformat()})
         record_success(self.conn, bank, snapshot, at.isoformat())
         record(self.conn, bank, (at, at, price, price))
 
@@ -271,3 +275,79 @@ class BuyGuardTests(unittest.TestCase):
         self.assertNotIn(key, read(self.conn, 'codex')['covered'])
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM ai_runs').fetchone()[0], 1)
+
+    def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1):
+        raw = {'action': action, 'grams': 10 if action == 'buy' else None,
+               'price_condition': condition, 'price_cny': 806 if condition != 'none' else None,
+               'valid_for_minutes': 15, 'reason': '本轮按实际报价评估。', 'risk_note': '先核对实时买价。',
+               'suggested_orders': list(orders)}
+        with self.conn:
+            save(self.conn, 'codex', view, {'zheshang': raw}, model_input(self.conn, START), START,
+                 entry_routes={'zheshang': routes} if routes else None)
+
+    def test_price_limit_is_rechecked_without_rewriting_original_advice(self):
+        self.update_quote(0, 806)
+        self.save_advice()
+        self.update_quote(1, 806.01)
+        at = START + timedelta(minutes=1)
+        a = accounts(self.conn, at, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(a['action_status'], 'review_required')
+        self.assertIn('超过建议上限', a['entry_pause_reason'])
+        self.assertEqual(notification_events(self.conn, 'codex', 1, now=at), [])
+        self.update_quote(2, 806)
+        at = START + timedelta(minutes=2)
+        a = accounts(self.conn, at, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(a['action_status'], 'current')
+        self.assertEqual(a['checks'], [])
+        self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=at)), 1)
+
+    def test_lower_trigger_is_enforced_but_reference_price_is_only_context(self):
+        self.update_quote(0, 806)
+        self.save_advice(condition='at_or_above')
+        self.update_quote(1, 805.99)
+        at = START + timedelta(minutes=1)
+        a = accounts(self.conn, at, selected_bank='zheshang')[0]['advice'][0]
+        self.assertIn('低于建议触发价', a['entry_pause_reason'])
+        self.update_quote(0, 806)
+        self.save_advice(condition='reference', view=2)
+        self.update_quote(2, 806.01)
+        a = accounts(self.conn, START + timedelta(minutes=2), selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(a['action_status'], 'current')
+        self.assertNotIn('entry_pause_reason', a)
+
+    def test_notification_retry_is_cancelled_if_live_buy_price_is_outside_limit(self):
+        self.update_quote(0, 806)
+        self.save_advice()
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.side_effect = [False, True]
+        notifier.last_receipt = {'status': 'failed'}
+        events = notification_events(self.conn, 'codex', 1, now=START)
+        self.assertEqual(len(events), 1)
+        dispatch(self.store, notifier, events, START)
+        self.update_quote(1, 806.01)
+        dispatch(self.store, notifier, [], START + timedelta(seconds=61))
+        notifier.send.assert_called_once()
+        self.assertEqual(tuple(self.conn.execute('SELECT status,attempts FROM notification_outbox').fetchone()), ('cancelled', 1))
+
+    def test_broken_entry_trigger_removes_unpublished_buy_draft_but_keeps_sell_notice(self):
+        self.update_quote(0, 806)
+        until = (START + timedelta(hours=1)).isoformat()
+        orders = [{'kind': 'limit_buy', 'grams': 10, 'price_cny': 805, 'expires_at': until, 'reason': '观察后择价买入。'},
+                  {'kind': 'limit_sell', 'grams': 2, 'price_cny': 820, 'expires_at': until, 'reason': '独立减仓。'}]
+        self.save_advice('hold', 'none', orders, routes=[self.route(805, bank_breakout={'hold_minutes': 3})])
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        events = notification_events(self.conn, 'codex', 1, now=START)
+        self.assertEqual(len(events), 1)
+        self.assertIn('买入10克', events[0]['body'])
+        self.update_quote(1, 804.9)
+        self.update_quote(2, 806)
+        notifier = Mock()
+        notifier.send.return_value = True
+        dispatch(self.store, notifier, events, START + timedelta(minutes=2))
+        notifier.send.assert_called_once()
+        text = notifier.send.call_args.args[1]
+        self.assertIn('卖出2克', text)
+        self.assertNotIn('买入10克', text)
+        saved = self.conn.execute('SELECT body,delivered FROM alerts').fetchone()
+        self.assertEqual(tuple(saved), (text, 1))

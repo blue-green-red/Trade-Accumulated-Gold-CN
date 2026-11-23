@@ -111,8 +111,9 @@ def eligible(condition, minimum=None):
 
 def active_window(advice, account):
     from .jd_live_semantics import blocking_checks
+    blocking = [check for check in blocking_checks(advice) if check != advice.get('entry_pause_reason')]
     if (not account.get('connected') or advice.get('snapshot_revision') != account.get('revision')
-            or advice.get('_path_pause') or blocking_checks(advice)):
+            or advice.get('_path_pause') or blocking):
         return False
     path = advice.get('position_path') or {}
     boundary = path.get('boundary_price_cny')
