@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import evaluate
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
-from monitor.jd_live_conditions import condition_state, monitor_prices, validate_structure
+from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
 from monitor.jd_live_expiry import request_expiry_review
 from monitor.jd_live_readonly import ensure_schema
 from monitor.store import Store
@@ -89,6 +89,35 @@ class BuyWatchTests(unittest.TestCase):
                                          condition=condition), 'confirmed')
         self.assertEqual(self.advance_all([(0, 807), (2, 804.99), (4, 806), (5, 806.5)],
                                          condition=condition), 'pullback_lost')
+
+    def test_bank_high_continuation_confirms_below_the_periodic_threshold(self):
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        rising = [(0, 805.4), (1, 806.0), (2, 806.3), (3, 806.5)]
+        self.assertLess(806.5 / 805 - 1, .004)
+        self.assertEqual(self.advance_all(rising[:-1], condition=condition), 'touched')
+        self.assertEqual(self.advance_all(rising, condition=condition), 'confirmed')
+        self.assertEqual(self.advance_all([(0, 805.4), (0, 805.4), (3, 806.5)],
+                                         condition=condition), 'touched')
+        self.assertEqual(self.advance_all([(0, 805.4), (1, 806.5), (3, 806.5), (4, 806.5)],
+                                         condition=condition), 'touched')
+        self.assertEqual(self.advance_all([(0, 805.4), (5, 806.1), (6, 806.5)],
+                                         condition=condition), 'touched')
+
+    def test_program_breakout_can_coexist_with_a_buy_retest_at_the_same_level(self):
+        with TemporaryDirectory() as tmp:
+            with Store(Path(tmp) / 'test.db').conn as conn:
+                self.addCleanup(conn.close)
+                ensure_schema(conn)
+                source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
+                          'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+                advice = {'action': 'wait', 'valid_for_minutes': 15,
+                          'review_conditions': [zoned_route('at_or_above')]}
+                set_watch(conn, 'zheshang', 'codex', advice, source, START, 10)
+        conditions = advice['review_conditions']
+        self.assertEqual(len(conditions), 2)
+        self.assertNotEqual(condition_key(conditions[0]), condition_key(conditions[1]))
+        self.assertTrue(conditions[1]['bank_breakout']['companion'])
 
     def test_watch_survives_action_expiry_and_an_unchanged_advice(self):
         with TemporaryDirectory() as tmp:

@@ -33,8 +33,8 @@ def follow_up(value):
             scope='现有' if path.get('exit_scope')=='plan' else '本批'
             reason=f'暂停加仓，核对挂单后按退出方案处理{scope}持仓'
         elif rule := c.get('bank_breakout'):
-            trigger=f"突破{c['price_cny']:g}元/克后回踩"
-            reason=f"守住本行高位满{rule['hold_minutes']}分钟后复评"
+            trigger=f"突破{c['price_cny']:g}元/克"
+            reason=f"持续走高或回踩守住满{rule['hold_minutes']}分钟后复评"
         elif review := c.get('buy_review'):
             if zone := review.get('zone'):
                 interval=f"{zone['floor_cny']:g}–{c['price_cny']:g}元/克"

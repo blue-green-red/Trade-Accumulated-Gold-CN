@@ -109,6 +109,8 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
 
 def condition_key(condition):
     fields={k:condition.get(k) for k in ('condition','price_cny','quote_side','order_key')}
+    if (condition.get('bank_breakout') or {}).get('companion'):
+        fields['bank_breakout']=True
     return hashlib.sha256(json.dumps(fields,sort_keys=True,separators=(',',':')).encode()).hexdigest()[:24]
 
 
@@ -174,6 +176,10 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
             status='queued' if any(e['id']==event_id for e in pending) else 'reviewed'
+        if condition.get('bank_breakout'):
+            from .jd_live_buy_watch import CONTINUATION_HOLD_MINUTES, CONTINUATION_MIN_QUOTES
+            result.update(continuation_minutes=CONTINUATION_HOLD_MINUTES, continuation_min_quotes=CONTINUATION_MIN_QUOTES,
+                          confirmation_mode=stage.get('confirmation_mode'))
         return {**result,'status':status,'confirmation_stage':stage.get('stage'),
                 'triggered_at':stage.get('confirmed_at'),'last_quote_at':stage.get('last_at'),
                 'last_price_cny':stage.get('last_price_cny'),'event_id':event_id if stage.get('confirmed_at') else None}

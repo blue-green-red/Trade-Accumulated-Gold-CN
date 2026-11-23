@@ -102,7 +102,7 @@ const conditionState = (c) =>
       ? "data_unavailable"
       : c.monitoring?.status;
 const conditionHeading = (c) => {
-  if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后等回踩`;
+  if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后观察`;
   const floor = c.buy_review?.zone?.floor_cny;
   if (floor != null) {
     return c.condition === "at_or_above"
@@ -439,6 +439,8 @@ const proposalState = (order) => {
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
         <div v-if="c.bank_breakout" class="sub">
+          突破后至少 {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
+          跨满 {{ c.monitoring?.continuation_minutes ?? 3 }} 分钟且刷新突破后的高点时复评。
           突破后回踩 {{ num(c.price_cny) }}–{{ num(c.bank_breakout.retest_ceiling_cny) }}
           元/克，守住 {{ num(c.price_cny) }} 元/克满 {{ c.bank_breakout.hold_minutes }} 分钟后复评。
         </div>
@@ -465,7 +467,8 @@ const proposalState = (order) => {
           {{ fmtTs(c.monitoring.last_quote_at) }}
         </div>
         <div v-if="c.monitoring?.triggered_at" class="live-quote-time">
-          触发时间 {{ fmtTs(c.monitoring.triggered_at) }}
+          {{ c.monitoring.confirmation_mode === "continuation" ? "持续走高触发" : "触发时间" }}
+          {{ fmtTs(c.monitoring.triggered_at) }}
         </div>
         <div class="sub">
           观察截止 {{ fmtTs(c.monitoring?.expires_at || advice.expires_at) }}

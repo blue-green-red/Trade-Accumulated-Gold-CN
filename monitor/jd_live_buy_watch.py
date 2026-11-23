@@ -9,6 +9,8 @@ from .trade_costs import number
 
 MAX_GAP = timedelta(minutes=3)
 WATCH_WINDOW = timedelta(hours=1)
+CONTINUATION_HOLD_MINUTES = 3
+CONTINUATION_MIN_QUOTES = 3
 QUOTE_SCHEMA = """CREATE TABLE IF NOT EXISTS jd_live_quote_samples (
     bank TEXT NOT NULL, quoted_at TEXT NOT NULL, observed_at TEXT NOT NULL,
     buy_price_cny REAL NOT NULL, sell_price_cny REAL NOT NULL,
@@ -147,8 +149,7 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     invalidated = (value.get('reassessment') or {}).get('thesis_status') == 'invalidated'
     if invalidated:
         return
-    if (value['action'] in ('wait', 'hold') and evidence.get('status') == 'available' and len(conditions) < 4
-            and not any(c['condition'] == 'at_or_above' and valid_route(c, minimum) for c in conditions)):
+    if value['action'] in ('wait', 'hold') and evidence.get('status') == 'available' and len(conditions) < 4:
         prior = next((c for c in previous.get('review_conditions', []) if c.get('bank_breakout')), None)
         if prior and stamp(prior_watch.get('expires_at')) > now:
             conditions.append(prior)
@@ -159,8 +160,10 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
             tolerance = max(0.01, round(median(w['high'] - w['low'] for w in windows) / 2, 2))
             conditions.append({'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': high,
                 'bank_breakout': {'retest_ceiling_cny': round(high + tolerance, 2), 'hold_minutes': 3},
-                'reason': '本行买价突破近期高位并回踩守稳后，按当时的报价重新评估。', 'checks': []})
+                'reason': '本行买价突破近期高位后，持续走高或回踩守稳时重新评估。', 'checks': []})
         generated = conditions[-1]
+        if any(c.get('buy_review') and condition_key(c) == condition_key(generated) for c in conditions[:-1]):
+            generated['bank_breakout']['companion'] = True
         conditions[:] = [c for c in conditions[:-1] if c.get('buy_review') or condition_key(c) != condition_key(generated)]
         conditions.append(generated)
     terms = []
@@ -194,18 +197,27 @@ def advance_breakout(state, condition, at, buy):
     stage = state.get('stage')
     if not stage:
         if buy > threshold:
-            return {**state, 'stage': 'touched', 'peak': buy, 'touched_at': utc_text(at)}
+            return {**state, 'stage': 'touched', 'peak': buy, 'touched_at': utc_text(at),
+                    'continuation_since': utc_text(at), 'breakout_buy_price_cny': buy, 'breakout_quote_count': 1}
         return state
     if buy < threshold:
         return {**state, 'stage': 'pullback_lost', 'hold_since': None}
     rule = condition['bank_breakout']
     if stage == 'touched':
         if buy > rule['retest_ceiling_cny'] or buy >= state['peak']:
+            state.setdefault('continuation_since', utc_text(at))
+            state.setdefault('breakout_buy_price_cny', buy)
+            count = state['breakout_quote_count'] = state.get('breakout_quote_count', 0) + 1
+            if (count >= CONTINUATION_MIN_QUOTES
+                    and at - stamp(state['continuation_since']) >= timedelta(minutes=CONTINUATION_HOLD_MINUTES)
+                    and buy > max(state['peak'], state['breakout_buy_price_cny'])):
+                return {**state, 'stage': 'confirmed', 'peak': buy, 'confirmed_at': utc_text(at),
+                        'hold_since': state['continuation_since'], 'confirmation_mode': 'continuation'}
             return {**state, 'peak': max(state['peak'], buy)}
         return {**state, 'stage': 'holding', 'hold_since': utc_text(at)}
     since = stamp(state.get('hold_since'))
     if at - since >= timedelta(minutes=rule['hold_minutes']):
-        return {**state, 'stage': 'confirmed', 'confirmed_at': utc_text(at)}
+        return {**state, 'stage': 'confirmed', 'confirmed_at': utc_text(at), 'confirmation_mode': 'retest'}
     return state
 
 
@@ -379,6 +391,8 @@ def request(store, account, advice, now, point):
                                   'threshold_cny': condition['price_cny'], 'touched_at': step['touched_at'],
                                   'hold_since': step['hold_since'], 'confirmed_at': step['confirmed_at'],
                                   'price_cny': buy,
+                                  **({'confirmation_mode': step['confirmation_mode']}
+                                     if step.get('confirmation_mode') else {}),
                                   **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})})
         if updated == current['routes'] and not current.get('invalidated_at'):
             return
@@ -396,8 +410,10 @@ def request(store, account, advice, now, point):
             if existing['data']['routes'] != evidence or confirmed or not retained:
                 write(conn, model, events)
         elif confirmed and event_id not in events['covered']:
+            continued = any(r.get('confirmation_mode') == 'continuation' for r in confirmed)
+            label = '突破后持续走高' if continued else '观察条件已企稳'
             events['pending'].append({'id': event_id,
-                'reason': f'真实账户观察条件已企稳，重新评估：{PRODUCTS[bank][1]}',
+                'reason': f'真实账户{label}，重新评估：{PRODUCTS[bank][1]}',
                 'min_gap_minutes': 0, 'observed_at': now.isoformat(),
                 'data': {'bank': bank, 'advice_id': advice['id'], 'price_cny': buy,
                          'quoted_at': utc_text(at), 'routes': confirmed,
