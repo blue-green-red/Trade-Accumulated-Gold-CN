@@ -752,6 +752,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=
                     counted.add((branch, path_outcome))
             cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
                           'origin_advice_id': e['data'].get('advice_id'),
+                          'event_queued_at': e.get('observed_at'),
                           'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
@@ -770,8 +771,31 @@ def plain_buy_review_index(cases):
         for path in case['paths']:
             if path.get('trigger_kind') == 'price_touch' and path['branch'] != 'renewed_pullback' and path.get('condition_key'):
                 result[(case['origin_advice_id'], path['condition_key'])].append({
-                    'attempt_id': case['attempt_id'], 'observed_touch_at': path['confirmed_at'], 'outcome': path['outcome']})
+                    'attempt_id': case['attempt_id'], 'observed_touch_at': path['confirmed_at'],
+                    'event_queued_at': case.get('event_queued_at'), 'outcome': path['outcome']})
     return result
+
+
+def plain_buy_queue_markers(conn, bank, model, now):
+    """Recover exact queue markers still present in the price-monitor state."""
+    markers = {}
+    for key, raw, updated in conn.execute('SELECT key,value,updated_at FROM state WHERE key LIKE ?',
+                                          (f'live-price-watch:{model}:%:{bank}:%',)):
+        if not (saved := stamp(updated)) or saved > now:
+            continue
+        value = json.loads(raw)
+        advice_id = value.get('advice_id')
+        fingerprint = key.rsplit(':', 1)[-1]
+        event = value.get('event_id') or ''
+        base = f'live-price:{model}:{bank}:{advice_id}:{fingerprint}'
+        if not advice_id or not (queued := stamp(value.get('triggered_at'))) or queued > saved:
+            continue
+        if event != base and not event.startswith(base+':'):
+            continue
+        idx = advice_id, fingerprint
+        if idx not in markers or queued > markers[idx][0]:
+            markers[idx] = queued, event
+    return markers
 
 
 def latched_at_model_input(condition, value, points, published):
@@ -790,7 +814,7 @@ def latched_at_model_input(condition, value, points, published):
     return True
 
 
-def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs):
+def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs, markers=None):
     """Show whether each ordinary price level was reached on available quotes."""
     conditions = [item for item in value.get('review_conditions', []) if plain_buy_observation(item)]
     if not conditions or expires <= published:
@@ -820,10 +844,16 @@ def plain_buy_quote_observations(advice_id, value, published, expires, quotes, n
             status = 'pending'
         else:
             status = 'threshold_not_sampled' if complete else 'quote_coverage_incomplete'
-        attempts = [attempt for attempt in reviews.get((advice_id, condition_key(condition)), [])
-                    if (touch := stamp(attempt['observed_touch_at'])) and published <= touch < expires]
+        key = advice_id, condition_key(condition)
+        attempts = [attempt for attempt in reviews.get(key, [])
+                    if (queued := stamp(attempt.get('event_queued_at')) or stamp(attempt['observed_touch_at']))
+                    and published <= queued < expires and queued <= now]
+        marker = (markers or {}).get(key)
         if attempts:
             row.update(review_archive_status='review_archived', review_attempts=attempts)
+        elif marker and published <= marker[0] < expires and marker[0] <= now:
+            row.update(review_archive_status='queued_without_archived_review',
+                       retained_queue_marker={'event_id': marker[1], 'queued_at': utc_text(marker[0])})
         elif first:
             other_reviews = [attempt for attempt, archived, quoted, buy in bank_inputs
                              if first[0] <= quoted <= archived and first[1] <= archived < expires and price_met(condition, buy)]
@@ -850,6 +880,7 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
     bank_inputs = []
     observed = observed_reviews(conn, bank, model, limit, now, grams=grams, bank_inputs=bank_inputs)
     plain_reviews = plain_buy_review_index(observed['cases'])
+    queue_markers = plain_buy_queue_markers(conn, bank, model, now)
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, published, end, value, view_id in history[:limit]:
         input_at = stamp(value.get('input_quote_at')) if value.get('input_quote_status') == 'fresh' else None
@@ -876,7 +907,7 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
                       'plain_buy_quote_observations': plain_buy_quote_observations(
                           advice_id, value, published, min(end, next_publications.get(advice_id, end)), points, now,
-                          plain_reviews, bank_inputs),
+                          plain_reviews, bank_inputs, queue_markers),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})

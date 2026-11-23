@@ -537,9 +537,17 @@ class BuyAuditTests(unittest.TestCase):
             for minute, price in ((0.5,802), (1.5,801), (3,801.1), (4.5,799), (5.5,802)):
                 record(store.conn, 'zheshang', point(minute,price))
             record(store.conn, 'zheshang', (START+timedelta(minutes=2), replacement+timedelta(seconds=15), 798, 798))
+            fingerprint = condition_key(plain)
+            queued = START+timedelta(minutes=4,seconds=45)
+            marker = {'advice_id': 2, 'event_id': f'live-price:codex:zheshang:2:{fingerprint}', 'triggered_at': queued.isoformat()}
+            with store.conn:
+                store.conn.execute('INSERT INTO state VALUES(?,?,?)', (f'live-price-watch:codex:0:zheshang:{fingerprint}',
+                    json.dumps(marker), (START+timedelta(minutes=6)).isoformat()))
 
             early, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=3.5))['cases']
             self.assertEqual(early['plain_buy_quote_observations'][0]['status'], 'pending')
+            before_marker, = report(store.conn, 'zheshang', 'codex', 1, START+timedelta(minutes=5.75))['cases']
+            self.assertEqual(before_marker['plain_buy_quote_observations'][0]['review_archive_status'], 'no_matching_archived_review')
             latest, old = report(store.conn, 'zheshang', 'codex', 2, START+timedelta(minutes=16))['cases']
             low, high = old['plain_buy_quote_observations']
             self.assertEqual(low['status'], 'threshold_not_sampled')
@@ -550,6 +558,9 @@ class BuyAuditTests(unittest.TestCase):
                              ['threshold_sampled','quote_coverage_incomplete'])
             self.assertEqual(datetime.fromisoformat(latest['plain_buy_quote_observations'][0]['first_threshold_sample_at']),
                              point(4.5,799)[0])
+            recorded = latest['plain_buy_quote_observations'][0]
+            self.assertEqual(recorded['review_archive_status'], 'queued_without_archived_review')
+            self.assertEqual(recorded['retained_queue_marker']['event_id'], marker['event_id'])
 
     def test_plain_buy_observation_distinguishes_exact_review_other_input_and_already_met(self):
         condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 800}
@@ -579,6 +590,10 @@ class BuyAuditTests(unittest.TestCase):
         review = status(quotes,reviews={(1, condition_key(condition)): [matched]},inputs=[fresh])
         self.assertEqual(review['review_archive_status'], 'review_archived')
         self.assertEqual(review['review_attempts'], [matched])
+        late = {**matched, 'observed_touch_at': input_at.isoformat(), 'event_queued_at': archived.isoformat()}
+        wrong_window = {**matched, 'attempt_id': 6, 'event_queued_at': end.isoformat()}
+        review = status(quotes,reviews={(1,condition_key(condition)):[late,wrong_window]})
+        self.assertEqual(review['review_attempts'], [late])
 
     def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
         with TemporaryDirectory() as tmp:
