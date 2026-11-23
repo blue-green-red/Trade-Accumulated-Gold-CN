@@ -85,14 +85,9 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                     checks.append('回调或回踩区间与企稳价关系无效')
                 if not zone['risk_exit_cny']<=floor or zone['weak_target_cny']<=cap:
                     checks.append('退出测算价应在区间下缘或更低，弱反弹目标须高于买价上限')
-                from .trade_costs import cost_reference
-                fee=source.get('sell_fee_rate')
-                target=cost_reference(zone['weak_target_cny'],fee)
-                exit_price=cost_reference(zone['risk_exit_cny'],fee)
-                if target and exit_price:
-                    def delta(mark):
-                        return round((mark['net_sell_price_cny']-cap)*buy_review['grams'],2)
-                    condition['buy_review_costs']={'weak_target_net_cny':delta(target),'risk_exit_net_cny':delta(exit_price)}
+                from .trade_costs import bank_review_payoff
+                if payoff:=bank_review_payoff(cap,buy_review['grams'],zone,source.get('sell_fee_rate')):
+                    condition['buy_review_costs']=payoff
                 else:
                     checks.append('缺本行卖费，无法核对复评候选的扣费空间')
             elif condition['condition']=='at_or_above' and not recovery<=trigger<=cap:

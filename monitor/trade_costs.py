@@ -26,6 +26,16 @@ def cost_reference(price,fee,spread=0):
     return {'net_sell_price_cny':round(net,6)}
 
 
+def bank_review_payoff(entry, grams, zone, fee):
+    entry, grams = number(entry), number(grams)
+    target = cost_reference(zone.get('weak_target_cny'), fee)
+    stop = cost_reference(zone.get('risk_exit_cny'), fee)
+    if not entry or not grams or not target or not stop:
+        return None
+    return {'weak_target_net_cny': round((target['net_sell_price_cny']-entry)*grams,2),
+            'risk_exit_net_cny': round((stop['net_sell_price_cny']-entry)*grams,2)}
+
+
 def position_comparison(grams,price,fee,spread=0,target=None,stop=None):
     ref=cost_reference(price,fee,spread);grams=number(grams)
     if ref is None or grams is None:return None

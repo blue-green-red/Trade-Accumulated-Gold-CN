@@ -2,11 +2,45 @@ import unittest
 from copy import deepcopy
 from dataclasses import replace
 from unittest.mock import Mock
-from monitor.ai_inputs import market_context
+from monitor.ai_inputs import compact_context, market_context
 import test_four_account as fixtures
 
 
 class InputScopeTests(unittest.TestCase):
+    def test_live_entry_payoff_uses_same_bank_input_quote_and_its_fee(self):
+        confirmed = '2026-11-23T02:00:00+00:00'
+        quote = {'status': 'fresh', 'buy_price_cny': 806, 'sell_price_cny': 805,
+                 'quoted_at': '2026-11-23T02:01:00+00:00'}
+        review = {'grams': 12, 'recovery_price_cny': 803, 'max_buy_price_cny': 807,
+                  'zone': {'weak_target_cny': 812, 'risk_exit_cny': 800}}
+        route = {'condition_key': 'pullback', 'confirmed_at': confirmed, 'price_cny': 804, 'buy_review': review}
+        automatic = {'condition_key': 'continuation', 'confirmed_at': confirmed,
+                     'price_cny': 805, 'bank_breakout': {'hold_minutes': 3}}
+        event = {'id': 'live-buy-confirmed:codex:zheshang:test',
+                 'data': {'bank': 'zheshang', 'routes': [route, automatic]}}
+        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005}
+        original = {'live_readonly_accounts': {'accounts': {'zheshang': account,
+                    'minsheng': {**account, 'sell_fee_rate': .01}}}, 'trigger_events': [event]}
+        result = compact_context(original)
+        by_bank = result['live_readonly_accounts']['accounts']
+        self.assertEqual(by_bank['zheshang']['entry_review_payoffs_at_input'], {'pullback': {
+            'weak_target_net_cny': round(12 * (812 * .995 - 806), 2),
+            'risk_exit_net_cny': round(12 * (800 * .995 - 806), 2)}})
+        self.assertNotIn('entry_review_payoffs_at_input', by_bank['minsheng'])
+        self.assertNotIn('entry_review_payoffs_at_input', account)
+        self.assertEqual(compact_context(result), result)
+
+        for changes in ({'status': 'historical'}, {'buy_price_cny': 802}, {'buy_price_cny': 808},
+                        {'quoted_at': '2026-11-23T01:59:00+00:00'}):
+            with self.subTest(changes=changes):
+                changed = deepcopy(original)
+                changed['live_readonly_accounts']['accounts']['zheshang']['quote'].update(changes)
+                info = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']
+                self.assertNotIn('entry_review_payoffs_at_input', info)
+        account['sell_fee_rate'] = None
+        info = market_context(original)['live_readonly_accounts']['accounts']['zheshang']
+        self.assertNotIn('entry_review_payoffs_at_input', info)
+
     def test_wave_signals_and_levels_removed_without_changing_accounts_or_snapshot(self):
         original={'trading_accounts':{'accounts':{'short_full':{'cash':123.456,'grams':9.87,'stop_price':800,'last_plan':{'decision':{'limit_price_cny':850}}}}},
           'signals_tradingview':{'30m':'买入','1H':'中性','4H':'卖出','日线':'买入','周线':'中性'},

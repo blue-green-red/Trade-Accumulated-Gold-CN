@@ -15,15 +15,44 @@ def fill_cause(reason):
     return 'AI委托成交'
 
 
+def prepare_bank_entry_context(out):
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
+    from .jd_live_conditions import stamp
+    from .trade_costs import bank_review_payoff, number
+
+    accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
+    for account in accounts.values():
+        account.pop('entry_review_payoffs_at_input', None)
+    for event in out.get('trigger_events', []):
+        if not event.get('id', '').startswith(ENTRY_EVENT_PREFIX):
+            continue
+        data = event.get('data') or {}
+        account = accounts.get(data.get('bank')) or {}
+        quote = account.get('quote') or {}
+        buy = number(quote.get('buy_price_cny'))
+        quoted_at = stamp(quote.get('quoted_at'))
+        fresh = (account.get('status') == 'fresh' and quote.get('status') == 'fresh'
+                 and buy is not None and buy > 0 and quoted_at is not None)
+        for route in data.get('routes', []):
+            for key in ('position_boundary_cny', 'signal_expires_at', 'source_advice_id'):
+                route.pop(key, None)
+            review = route.get('buy_review') or {}
+            zone = review.get('zone')
+            confirmed = stamp(route.get('confirmed_at'))
+            condition = route.get('condition_key')
+            recovery, cap = number(review.get('recovery_price_cny')), number(review.get('max_buy_price_cny'))
+            if (not fresh or not zone or not condition or not confirmed or quoted_at < confirmed
+                    or recovery is None or cap is None or not recovery <= buy <= cap):
+                continue
+            payoff = bank_review_payoff(buy, review.get('grams'), zone, account.get('sell_fee_rate'))
+            if payoff is not None:
+                account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
+
+
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
-    for event in out.get('trigger_events',[]):
-        if event.get('id','').startswith(ENTRY_EVENT_PREFIX):
-            for route in (event.get('data') or {}).get('routes',[]):
-                for key in ('position_boundary_cny','signal_expires_at','source_advice_id'):
-                    route.pop(key,None)
+    prepare_bank_entry_context(out)
     if out.get('trading_accounts') or out.get('live_readonly_accounts'):
         signals=out.get('signals_tradingview')
         if isinstance(signals,dict):
