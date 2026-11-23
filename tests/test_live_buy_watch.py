@@ -553,6 +553,67 @@ class BuyAuditTests(unittest.TestCase):
                                                    publication, monday_open - timedelta(seconds=1))
             self.assertEqual(missing['after_analysis_10g']['status'], 'pending')
 
+    def test_review_replay_fills_gaps_with_time_verified_archived_bank_quotes(self):
+        from monitor.ai import ensure_schema as ensure_ai_schema
+
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'archived-quotes.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            ensure_ai_schema(store)
+
+            def archive(run, quoted, received, saved, price, events=()):
+                account = {'status': 'fresh', 'sell_fee_rate': .005, 'coverage': {'quote': 'available'},
+                           'component_times': {'quote': received.isoformat()},
+                           'new_buy_capacity_at_input': {'cash_after_buy_orders_cny': 9000},
+                           'quote': {'quoted_at': quoted.isoformat(), 'status': 'fresh',
+                                     'buy_price_cny': price, 'sell_price_cny': price}}
+                context = {'trigger_events': events, 'live_readonly_accounts': {'accounts': {'zheshang': account}}}
+                with store.conn:
+                    store.conn.execute('INSERT INTO state VALUES(?,?,?)',
+                                       (f'ai_model_input:{run}:codex', json.dumps(context), saved.isoformat()))
+
+            event_id = 'live-buy-confirmed:codex:zheshang:archive-test'
+            event = {'id': event_id, 'data': {'bank': 'zheshang', 'routes': [
+                {'condition_key': 'dip', 'condition': 'at_or_below', 'confirmed_at': START.isoformat(),
+                 'price_cny': 800, 'buy_review': {'hold_minutes': 3}}]}}
+            published = START + timedelta(minutes=2)
+            begin = START + timedelta(seconds=20)
+            end = START + timedelta(days=1)
+            archive('input', START, START + timedelta(seconds=10), begin, 800, [event])
+            archive('publication', published, published + timedelta(seconds=10), published + timedelta(seconds=15), 802)
+            archive('bad-clock', end + timedelta(seconds=15), end + timedelta(seconds=20), end + timedelta(seconds=17), 790)
+            exit_at = end + timedelta(seconds=30)
+            archive('exit', exit_at, exit_at + timedelta(seconds=10), exit_at + timedelta(seconds=15), 808)
+            with store.conn:
+                store.conn.execute('INSERT INTO ai_views(ts,model,trigger,view_json,analyst) VALUES(?,?,?,?,?)',
+                    (published.isoformat(), 'codex', 'test', json.dumps({'_covered_event_ids': [event_id]}), 'codex'))
+                store.conn.execute('INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status,completed_at,view_rowid) '
+                    'VALUES(?,?,?,?,?,?,?)', ('codex', begin.isoformat(), 'test', 'input', 'completed', published.isoformat(), 1))
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (1, 'zheshang', 'codex', 1,
+                    published.isoformat(), (published + timedelta(hours=1)).isoformat(), 'v1', '{"action":"hold"}'))
+
+            early = observed_reviews(store.conn, 'zheshang', 'codex', 5, exit_at + timedelta(seconds=12))
+            self.assertEqual(early['cases'][0]['paths'][0]['trading_day_followups'][0]['at_confirmation_10g']['status'], 'pending')
+            now = end + timedelta(minutes=2)
+            replay = observed_reviews(store.conn, 'zheshang', 'codex', 5, now)
+            case = replay['cases'][0]
+            path = case['paths'][0]
+            day = path['trading_day_followups'][0]
+            self.assertEqual((path['confirmation_quote_source'], case['post_publication_quote_source'],
+                              day['exit_quote_source']), ('analysis_archive',) * 3)
+            self.assertEqual((datetime.fromisoformat(day['exit_quote_at']), path['seconds_to_start']), (exit_at, 10.0))
+            self.assertEqual((day['at_confirmation_10g']['net_cny'], day['after_analysis_10g']['net_cny']), (39.6, 19.6))
+            self.assertIsNone(day['at_confirmation_10g']['sampled_max_drawdown_cny'])
+            self.assertEqual(replay['timing_comparison']['pullback_recovery']['1d']['paired_samples'], 1)
+
+            verified = end + timedelta(minutes=1)
+            record(store.conn, 'zheshang', (verified, verified, 810, 810))
+            replay = observed_reviews(store.conn, 'zheshang', 'codex', 5, now)
+            day = replay['cases'][0]['paths'][0]['trading_day_followups'][0]
+            self.assertEqual((datetime.fromisoformat(day['exit_quote_at']), day['exit_quote_source']),
+                             (verified, 'bank_quote_tape'))
+
     def test_intrawindow_payoff_separates_prepublication_recovery_from_available_prices(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'intrawindow.db')

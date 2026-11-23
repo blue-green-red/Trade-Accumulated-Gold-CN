@@ -323,17 +323,62 @@ def first_observed_quote(conn, bank, start, cutoff):
         'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
 
 
-def confirmation_receipt(conn, bank, quoted, price, archived_at):
+def archived_quote_samples(conn, bank, model, now):
+    """Use only time-verifiable quotes from exact archived model inputs."""
+    path = f'$.live_readonly_accounts.accounts.{bank}'
+    oldest = utc_text(now - timedelta(days=40))
+    rows = conn.execute('''
+        SELECT json_extract(value,?),json_extract(value,?),updated_at
+        FROM state WHERE key LIKE ? AND updated_at BETWEEN ? AND ?
+          AND json_extract(value,?)='fresh' AND json_extract(value,?)='available'
+        ''', (f'{path}.quote', f'{path}.component_times.quote', f'ai_model_input:%:{model}',
+              oldest, utc_text(now), f'{path}.status', f'{path}.coverage.quote'))
+    samples, conflicts = {}, set()
+    for raw, received, archived in rows:
+        quote = json.loads(raw) if raw else {}
+        if quote.get('status') != 'fresh':
+            continue
+        quoted, observed, saved = map(stamp, (quote.get('quoted_at'), received, archived))
+        buy, sell = number(quote.get('buy_price_cny')), number(quote.get('sell_price_cny'))
+        if (not all((quoted, observed, saved, buy, sell)) or not quoted <= observed <= min(saved, quoted + MAX_GAP)
+                or not trading_session(quoted)['is_open']):
+            continue
+        label = utc_text(quoted)
+        previous = samples.get(label)
+        if previous and previous[1:3] != (buy, sell):
+            conflicts.add(label)
+        elif not previous or utc_text(observed) < previous[3]:
+            samples[label] = (label, buy, sell, utc_text(observed), 'analysis_archive')
+    conflicts.update(row[0] for row in conn.execute(
+        'SELECT quoted_at FROM jd_live_quote_samples WHERE bank=? AND quoted_at>=? AND observed_at<=?',
+        (bank, oldest, utc_text(now))))
+    return {key: samples[key] for key in sorted(samples.keys() - conflicts)}
+
+
+def first_review_quote(conn, bank, start, cutoff, archive):
+    sample = first_observed_quote(conn, bank, start, cutoff)
+    if sample is not None or not archive or cutoff < start:
+        return sample
+    start, cutoff = utc_text(start), utc_text(cutoff)
+    return next((row for key, row in archive.items() if start <= key and row[3] <= cutoff), None)
+
+
+def quote_source(sample):
+    return (sample[4] if len(sample) > 4 else 'bank_quote_tape') if sample else None
+
+
+def confirmation_sample(conn, bank, quoted, price, archived_at, archive):
     if quoted is None or price is None:
         return None
-    row = conn.execute('SELECT observed_at FROM jd_live_quote_samples WHERE bank=? AND quoted_at=? '
-                       'AND buy_price_cny=? AND observed_at>=quoted_at AND observed_at<=?',
-                       (bank, utc_text(quoted), price, utc_text(archived_at))).fetchone()
-    return stamp(row[0]) if row else None
+    timestamp = utc_text(quoted)
+    row = conn.execute('SELECT quoted_at,buy_price_cny,sell_price_cny,observed_at '
+                       'FROM jd_live_quote_samples WHERE bank=? AND quoted_at=? AND observed_at<=?',
+                       (bank, timestamp, utc_text(archived_at))).fetchone() or archive.get(timestamp)
+    return row if row and row[1] == price and timestamp <= row[3] <= utc_text(archived_at) else None
 
 
 def observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, exit_quote,
-                         grams, entry_checks):
+                         grams, entry_checks, confirmed_quote=None):
     confirmation_key = f'at_confirmation_{grams:g}g'
     publication_key = f'after_analysis_{grams:g}g'
     if fee is None or fee >= 1:
@@ -344,7 +389,12 @@ def observed_entry_marks(conn, bank, confirmed, price, fee, published, publicati
     quotes = [(stamp(quoted), stamp(seen), buy, sell) for quoted, seen, buy, sell in sampled]
     exit_point = stamp(exit_quote[0]), stamp(exit_quote[3]), exit_quote[1], exit_quote[2]
     quotes.append(exit_point)
-    entry = quotes[0] if quotes[0][0] == confirmed and quotes[0][2] == price else unavailable('confirmation_quote_missing')
+    entry = quotes[0] if quotes[0][0] == confirmed and quotes[0][2] == price else None
+    if quote_source(confirmed_quote) == 'analysis_archive':
+        entry = (confirmed, stamp(confirmed_quote[3]), confirmed_quote[1], confirmed_quote[2])
+        quotes.insert(0, entry)
+    if entry is None:
+        entry = unavailable('confirmation_quote_missing')
     confirm_error, publication_error = entry_checks
     if confirm_error:
         entry = unavailable(confirm_error)
@@ -357,26 +407,30 @@ def observed_entry_marks(conn, bank, confirmed, price, fee, published, publicati
     elif publication_error:
         later = unavailable(publication_error)
     else:
-        quoted, buy, sell, seen = publication_quote
+        quoted, buy, sell, seen = publication_quote[:4]
         later = stamp(quoted), stamp(seen), buy, sell
+        if quote_source(publication_quote) == 'analysis_archive':
+            quotes.append(later)
+            quotes.sort(key=lambda quote: quote[0])
     return {confirmation_key: mark(entry, exit_point, fee, quotes, grams),
             publication_key: mark(later, exit_point, fee, quotes, grams)}
 
 
 def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, published=None, publication_quote=None,
-                   grams=GRAMS, entry_checks=(None, None), confirmed_observed_at=None):
+                   grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None):
     result = {'minutes': minutes}
     if not confirmed or price is None:
         return {**result, 'status': 'signal_unavailable'}
-    target = (confirmed_observed_at or confirmed) + timedelta(minutes=minutes)
+    target = (stamp(confirmed_quote[3]) if confirmed_quote else confirmed) + timedelta(minutes=minutes)
     session = trading_session(target)
     if not session['is_open']:
         return {**result, 'status': 'market_closed'}
     deadline = min(target + MAX_GAP, stamp(session['close_at']) - timedelta(microseconds=1))
-    quote = first_observed_quote(conn, bank, target, min(deadline, now))
+    quote = first_review_quote(conn, bank, target, min(deadline, now), archive)
     if not quote:
         return {**result, 'status': 'pending' if now < deadline else 'quote_missing'}
-    result.update(status='observed', quoted_at=quote[0], change_cny_per_gram=round(quote[1] - price, 2))
+    result.update(status='observed', quoted_at=quote[0], exit_quote_source=quote_source(quote),
+                  change_cny_per_gram=round(quote[1] - price, 2))
     if fee is not None and fee < 1:
         exit_net = quote[2] * (1 - fee)
         after_analysis = (round(grams * (exit_net - publication_quote[1]), 2)
@@ -385,12 +439,12 @@ def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publ
             'at_confirmation': round(grams * (exit_net - price), 2) if not entry_checks[0] else None,
             'after_analysis': after_analysis, 'wait': 0.0}
     result.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, quote,
-                                       grams, entry_checks))
+                                       grams, entry_checks, confirmed_quote))
     return result
 
 
 def observed_review_horizons(conn, bank, confirmed, price, fee, published, publication_quote, now,
-                             *, grams=GRAMS, entry_checks=(None, None), confirmed_observed_at=None):
+                             *, grams=GRAMS, entry_checks=(None, None), confirmed_quote=None, archive=None):
     """Mark fixed-size hypothetical additions at common trading-day horizons."""
     horizons = []
     entry_keys = (f'at_confirmation_{grams:g}g', f'after_analysis_{grams:g}g')
@@ -400,18 +454,19 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
             row.update({key: unavailable('signal_unavailable') for key in entry_keys})
             horizons.append(row)
             continue
-        target, deadline = trading_horizon(confirmed_observed_at or confirmed, days)
+        target, deadline = trading_horizon(stamp(confirmed_quote[3]) if confirmed_quote else confirmed, days)
         row['target_at'] = utc_text(target)
         cutoff = min(now, deadline)
-        exit_quote = first_observed_quote(conn, bank, target, cutoff)
+        exit_quote = first_review_quote(conn, bank, target, cutoff, archive)
         if not exit_quote:
             status = 'pending' if now < deadline else 'horizon_quote_missing'
             row.update({key: unavailable(status) for key in entry_keys})
             horizons.append(row)
             continue
         row['exit_quote_at'] = exit_quote[0]
+        row['exit_quote_source'] = quote_source(exit_quote)
         row.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target,
-                                        exit_quote, grams, entry_checks))
+                                        exit_quote, grams, entry_checks, confirmed_quote))
         horizons.append(row)
     return horizons
 
@@ -468,6 +523,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     cases = []
     summary = defaultdict(lambda: defaultdict(int))
     episodes = {}
+    archive = archived_quote_samples(conn, bank, model, now)
     for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, archived_at in rows:
         if not events or not (archived_at:=stamp(archived_at)) or archived_at>now:
             continue
@@ -500,7 +556,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
         started = stamp(start)
         covered_ids = json.loads(covered) if covered is not None else None
         valid_confirmations = json.loads(valid) if valid is not None else {}
-        mark = first_observed_quote(conn, bank, released, min(now, released + MAX_GAP)) if released else None
+        mark = first_review_quote(conn, bank, released, min(now, released + MAX_GAP), archive) if released else None
         counted = set()
         for e in events:
             outcome = advice_outcome(status, e['id'], covered_ids, value)
@@ -534,7 +590,8 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 else:
                     path_outcome = outcome
                 price = number(route.get('price_cny'))
-                observed_at = confirmation_receipt(conn, bank, confirmed, price, archived_at)
+                confirmed_quote = confirmation_sample(conn, bank, confirmed, price, archived_at, archive)
+                observed_at = stamp(confirmed_quote[3]) if confirmed_quote else None
                 confirmation_error, publication_error = (
                     capacity_error or ('insufficient_input_cash' if entry and grams * entry > cash + 1e-8 else None)
                     for entry in (price, mark[1] if mark else None))
@@ -546,18 +603,20 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                     **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
                     'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                     'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
+                    'confirmation_quote_source': quote_source(confirmed_quote),
                     'quote_delivery_seconds': elapsed_seconds(confirmed, observed_at),
                     'seconds_to_start': elapsed_seconds(observed_at, started),
                     'seconds_to_completion': elapsed_seconds(observed_at, finished),
                     'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
                     'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now, fee=fee,
                                                        published=released, publication_quote=mark, grams=grams,
-                                                       entry_checks=entry_checks, confirmed_observed_at=observed_at)
+                                                       entry_checks=entry_checks, confirmed_quote=confirmed_quote,
+                                                       archive=archive)
                                         for minutes in (15, 60)],
                     'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
                                                                      released, mark, now, grams=grams,
                                                                      entry_checks=entry_checks,
-                                                                     confirmed_observed_at=observed_at),
+                                                                     confirmed_quote=confirmed_quote, archive=archive),
                 }
                 paths.append(path)
                 if released and confirmed and path_outcome in (
@@ -573,7 +632,8 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                           'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
-                          'post_publication_quote_at': mark[0] if mark else None, 'paths': paths})
+                          'post_publication_quote_at': mark[0] if mark else None,
+                          'post_publication_quote_source': quote_source(mark), 'paths': paths})
     archived = sum(1 for row in rows if (at:=stamp(row[-1])) and at<=now)
     return {'status': 'available' if archived else 'input_archives_unavailable',
             'examined_runs': len(rows), 'archived_runs': archived, 'cases': cases, 'by_branch': summary,
@@ -623,7 +683,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bank', choices=('zheshang', 'minsheng'), default='zheshang')
     parser.add_argument('--model', choices=('codex', 'claude'), default='codex')
-    parser.add_argument('--limit', type=int, choices=range(1, 101), metavar='1..100', default=12)
+    parser.add_argument('--limit', type=int, choices=range(1, 501), metavar='1..500', default=12)
     parser.add_argument('--grams', metavar='GRAMS', default=GRAMS, help='Assumed buy size, default: %(default)s g')
     parser.add_argument('--as-of', metavar='ISO8601', help='Historical report cutoff, including timezone')
     options = parser.parse_args()
