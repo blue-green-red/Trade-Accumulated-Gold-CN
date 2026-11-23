@@ -12,7 +12,7 @@ class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
     thesis_status:Literal['new','valid','weakened','invalidated']
     thesis:str=Field(min_length=1,max_length=180,description='当前交易假设、支持证据与推翻条件')
-    price_basis:str=Field(min_length=1,max_length=1200,description='约150字，写目标、退出、期限及敏感性，完整句收尾。单次触价只记触及。远端价升级须新增延续证据，否则仅作强反弹情景。继续检验较弱反弹。')
+    price_basis:str=Field(min_length=1,max_length=1200,description='约150字，写目标、退出和期限，区分回补与突破延伸。单次触价只作关口，无证据时给复评条件。')
 
 class ReplacementOrder(BaseModel):
     grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)

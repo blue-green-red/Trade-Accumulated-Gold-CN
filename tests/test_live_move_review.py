@@ -225,6 +225,8 @@ class BankMoveReviewTests(unittest.TestCase):
         self.assertIn('观察可到价再定量',COMPARISON_PROMPT)
         self.assertIn('追加用新报价、仓位和独立依据',PROMPT)
         self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
+        self.assertIn('近期高点是关口，分别比较弱回补、突破延伸和失守的费后得失',COMPARISON_PROMPT)
+        self.assertIn('证据不足可只给复评条件，不编价',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
         self.assertIn('用recent_bank_quotes的本行高低与波动定回调区及突破价',PROMPT)
         self.assertIn('分别评估浅回调、突破后回踩',PROMPT)
