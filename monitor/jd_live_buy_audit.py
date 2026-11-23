@@ -107,20 +107,25 @@ def mark(entry, exit_quote, fee, quotes):
     end_at = exit_quote[0]
     if end_at < quoted_at:
         return {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
-    marks = [p for p in quotes if quoted_at <= p[0] <= end_at and p[1] <= exit_quote[1]]
+    marks = [p for p in quotes if quoted_at <= p[0] <= end_at and observed_at <= p[1] <= exit_quote[1]]
     net = lambda sell: (sell * (1 - fee) - buy) * GRAMS
     complete = complete_sampling(quoted_at, end_at, marks)
-    adverse = drawdown = None
+    adverse = drawdown = best = first_break_even = None
     if complete:
         peak = low = drawdown = 0.
-        for _, _, _, sell in marks:
+        for _, seen, _, sell in marks:
             value = net(sell)
             peak = max(peak, value)
             low = min(low, value)
             drawdown = max(drawdown, peak - value)
+            best = value if best is None else max(best, value)
+            if value >= -1e-8 and (first_break_even is None or seen < first_break_even):
+                first_break_even = seen
         adverse, drawdown = round(-low,2), round(drawdown,2)
     return {'status': 'valued', 'entry_at': utc_text(observed_at), 'entry_cny_per_gram': buy,
             'net_cny': round(net(exit_quote[3]), 2), 'sampled_adverse_excursion_cny': adverse,
+            'sampled_best_net_cny': round(best, 2) if best is not None else None,
+            'sampled_first_break_even_at': utc_text(first_break_even) if first_break_even else None,
             'sampled_max_drawdown_cny': drawdown, 'mark_samples': len(marks)}
 
 
@@ -287,7 +292,30 @@ def first_observed_quote(conn, bank, start, cutoff):
         'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
 
 
-def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publication_quote=None):
+def observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, exit_quote):
+    if fee is None or fee >= 1:
+        return {'at_confirmation_10g': unavailable('fee_unknown'), 'after_analysis_10g': unavailable('fee_unknown')}
+    sampled = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
+                           'WHERE bank=? AND quoted_at>=? AND quoted_at<? AND observed_at>=quoted_at AND observed_at<=? '
+                           'ORDER BY quoted_at', (bank, utc_text(confirmed), exit_quote[0], exit_quote[3]))
+    quotes = [(stamp(quoted), stamp(seen), buy, sell) for quoted, seen, buy, sell in sampled]
+    exit_point = stamp(exit_quote[0]), stamp(exit_quote[3]), exit_quote[1], exit_quote[2]
+    quotes.append(exit_point)
+    entry = quotes[0] if quotes[0][0] == confirmed and quotes[0][2] == price else unavailable('confirmation_quote_missing')
+    if published is None:
+        later = unavailable('analysis_not_published')
+    elif published >= target or (publication_quote and stamp(publication_quote[3]) >= target):
+        later = {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
+    elif not publication_quote:
+        later = unavailable('publication_quote_missing')
+    else:
+        quoted, buy, sell, seen = publication_quote
+        later = stamp(quoted), stamp(seen), buy, sell
+    return {'at_confirmation_10g': mark(entry, exit_point, fee, quotes),
+            'after_analysis_10g': mark(later, exit_point, fee, quotes)}
+
+
+def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, published=None, publication_quote=None):
     result = {'minutes': minutes}
     if not confirmed or price is None:
         return {**result, 'status': 'signal_unavailable'}
@@ -306,6 +334,7 @@ def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publ
                           if publication_quote and stamp(publication_quote[3]) < target else None)
         result['hypothetical_10g_net_cny'] = {'at_confirmation': round(GRAMS * (exit_net - price), 2),
                                               'after_analysis': after_analysis, 'wait': 0.0}
+    result.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, quote))
     return result
 
 
@@ -328,27 +357,7 @@ def observed_review_horizons(conn, bank, confirmed, price, fee, published, publi
             horizons.append(row)
             continue
         row['exit_quote_at'] = exit_quote[0]
-        if fee is None or fee >= 1:
-            row.update(at_confirmation_10g=unavailable('fee_unknown'), after_analysis_10g=unavailable('fee_unknown'))
-            horizons.append(row)
-            continue
-        sampled = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
-                               'WHERE bank=? AND quoted_at>=? AND quoted_at<? AND observed_at>=quoted_at AND observed_at<=? '
-                               'ORDER BY quoted_at', (bank, utc_text(confirmed), exit_quote[0], exit_quote[3]))
-        quotes = [(stamp(quoted), stamp(seen), buy, sell) for quoted, seen, buy, sell in sampled]
-        exit_point = stamp(exit_quote[0]), stamp(exit_quote[3]), exit_quote[1], exit_quote[2]
-        quotes.append(exit_point)
-        entry = quotes[0] if quotes[0][0] == confirmed and quotes[0][2] == price else unavailable('confirmation_quote_missing')
-        if published is None:
-            later = unavailable('analysis_not_published')
-        elif published >= target or (publication_quote and stamp(publication_quote[3]) >= target):
-            later = {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
-        elif not publication_quote:
-            later = unavailable('publication_quote_missing')
-        else:
-            quoted, buy, sell, seen = publication_quote
-            later = stamp(quoted), stamp(seen), buy, sell
-        row.update(at_confirmation_10g=mark(entry, exit_point, fee, quotes), after_analysis_10g=mark(later, exit_point, fee, quotes))
+        row.update(observed_entry_marks(conn, bank, confirmed, price, fee, published, publication_quote, target, exit_quote))
         horizons.append(row)
     return horizons
 
@@ -413,7 +422,7 @@ def observed_reviews(conn, bank, model, limit, now):
                               'seconds_to_completion': elapsed_seconds(confirmed, finished),
                               'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
                               'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now,
-                                                                 fee=fee, publication_quote=mark)
+                                                                 fee=fee, published=released, publication_quote=mark)
                                                   for minutes in (15, 60)],
                               'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
                                                                                  released, mark, now)})

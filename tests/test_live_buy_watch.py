@@ -515,6 +515,35 @@ class BuyAuditTests(unittest.TestCase):
                                                    publication, monday_open - timedelta(seconds=1))
             self.assertEqual(missing['after_analysis_10g']['status'], 'pending')
 
+    def test_intrawindow_payoff_separates_prepublication_recovery_from_available_prices(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'intrawindow.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            published = START + timedelta(minutes=2)
+            for minute, buy, sell in ((0, 800, 800), (1, 806, 806), (2, 807, 804), (3, 803, 803),
+                                      (6, 803, 803), (9, 802, 802), (12, 803, 803), (15, 802, 802)):
+                record(store.conn, 'zheshang', (*point(minute, buy)[:3], sell))
+            after = first_observed_quote(store.conn, 'zheshang', published, published + timedelta(minutes=3))
+            now = START + timedelta(minutes=16)
+            result = followup_quote(store.conn, 'zheshang', START, 800, 15, now,
+                                    fee=.005, published=published, publication_quote=after)
+            early, late = result['at_confirmation_10g'], result['after_analysis_10g']
+            self.assertEqual(early['net_cny'], -20.1)
+            self.assertEqual(early['sampled_best_net_cny'], 19.7)
+            self.assertEqual(datetime.fromisoformat(early['sampled_first_break_even_at']), point(1, 806)[1])
+            self.assertEqual(late['sampled_best_net_cny'], -70.2)
+            self.assertIsNone(late['sampled_first_break_even_at'])
+
+            with store.conn:
+                store.conn.execute('DELETE FROM jd_live_quote_samples WHERE quoted_at=?',
+                                   (point(6, 803)[0].isoformat(timespec='microseconds'),))
+            missing = followup_quote(store.conn, 'zheshang', START, 800, 15, now,
+                                     fee=.005, published=published, publication_quote=after)
+            self.assertEqual(missing['at_confirmation_10g']['net_cny'], -20.1)
+            self.assertIsNone(missing['at_confirmation_10g']['sampled_best_net_cny'])
+            self.assertIsNone(missing['at_confirmation_10g']['sampled_first_break_even_at'])
+
     def test_report_counts_actual_review_branches_and_never_implies_a_fill(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
         with TemporaryDirectory() as tmp:
