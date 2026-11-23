@@ -162,6 +162,27 @@ class InputScopeTests(unittest.TestCase):
         info = market_context(original)['live_readonly_accounts']['accounts']['zheshang']
         self.assertNotIn('entry_review_payoffs_at_input', info)
 
+    def test_retest_status_uses_the_newest_bank_price_without_invalidating_a_retest(self):
+        at = '2026-11-23T02:01:00+00:00'
+        retest = {'condition_key': 'pullback', 'confirmation_mode': 'retest', 'confirmed_at': at,
+                  'threshold_cny': 805, 'bank_breakout': {'retest_ceiling_cny': 806}}
+        event = {'id': 'live-buy-confirmed:codex:zheshang:test', 'data': {'bank': 'zheshang', 'routes': [retest]}}
+        quote = {'status': 'fresh', 'quoted_at': at, 'buy_price_cny': 806, 'sell_price_cny': 805}
+        account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005}
+        context = {'live_readonly_accounts': {'accounts': {'zheshang': account}}, 'trigger_events': [event]}
+        for buy, status in ((806, 'within_retest_zone'), (806.01, 'above_retest_zone'), (804.99, 'below_breakout')):
+            with self.subTest(price=buy):
+                quote['buy_price_cny'] = buy
+                result = market_context(context)
+                route, = result['trigger_events'][0]['data']['routes']
+                self.assertEqual(route['retest_price_status_at_input'], status)
+                details = result['live_readonly_accounts']['accounts']['zheshang']
+                self.assertEqual('entry_review_payoffs_at_input' in details, buy >= 805)
+        quote['status'] = 'historical'
+        retest['retest_price_status_at_input'] = 'above_retest_zone'
+        route, = market_context(context)['trigger_events'][0]['data']['routes']
+        self.assertNotIn('retest_price_status_at_input', route)
+
     def test_wave_signals_and_levels_removed_without_changing_accounts_or_snapshot(self):
         original={'trading_accounts':{'accounts':{'short_full':{'cash':123.456,'grams':9.87,'stop_price':800,'last_plan':{'decision':{'limit_price_cny':850}}}}},
           'signals_tradingview':{'30m':'买入','1H':'中性','4H':'卖出','日线':'买入','周线':'中性'},

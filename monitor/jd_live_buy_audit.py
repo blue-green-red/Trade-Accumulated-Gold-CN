@@ -5,7 +5,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .config import Settings
-from .jd_live_buy_watch import MAX_GAP, advance_watch, eligible, utc_text, watch_deadline, watch_routes
+from .jd_live_buy_watch import (MAX_GAP, advance_watch, breakout_retest_price_status, eligible, utc_text,
+                               watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, stored_price_condition
 from .participation_audit import horizon_at, readonly
@@ -565,6 +566,25 @@ def compare_review_timings(episodes, grams):
     return result
 
 
+def retest_price_evidence(conn, bank, route, confirmed, account, archived_at, released):
+    quote = account.get('quote') or {}
+    input_at = stamp(quote.get('quoted_at'))
+    if (route.get('confirmation_mode') != 'retest' or account.get('status') != 'fresh' or quote.get('status') != 'fresh'
+            or not confirmed or not input_at or not confirmed <= input_at <= archived_at):
+        return {}
+    at_input = breakout_retest_price_status(route, number(quote.get('buy_price_cny')))
+    if not at_input:
+        return {}
+    data = {'retest_price_status_at_input': at_input}
+    if released and archived_at < released:
+        high, = conn.execute('SELECT MAX(buy_price_cny) FROM jd_live_quote_samples WHERE bank=? '
+                             'AND quoted_at>? AND quoted_at<=? AND observed_at>=quoted_at AND observed_at>? AND observed_at<=?',
+                             (bank, utc_text(input_at), utc_text(released), utc_text(archived_at), utc_text(released))).fetchone()
+        if sampled := breakout_retest_price_status(route, high):
+            data['sampled_above_retest_zone_during_analysis'] = sampled == 'above_retest_zone'
+    return data
+
+
 def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     """Actual review events and outcomes, with a separately labeled quote comparison."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
@@ -664,6 +684,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 path = {
                     'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                     **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
+                    **retest_price_evidence(conn, bank, route, confirmed, account, archived_at, released),
                     'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                     'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
                     'confirmation_quote_source': quote_source(confirmed_quote),

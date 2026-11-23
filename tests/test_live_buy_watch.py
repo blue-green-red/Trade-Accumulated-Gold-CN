@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import (evaluate, first_observed_quote, followup_quote, independent_branch_replay,
-                                       observed_review_horizons, observed_reviews, report)
+                                       observed_review_horizons, observed_reviews, report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -670,6 +670,27 @@ class BuyAuditTests(unittest.TestCase):
             missing, _ = observed_review_horizons(store.conn, 'zheshang', confirmed, 800, .005, published,
                                                    publication, monday_open - timedelta(seconds=1))
             self.assertEqual(missing['after_analysis_10g']['status'], 'pending')
+
+    def test_retest_replay_reads_only_quotes_received_during_analysis(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'retest-prices.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            route = {'confirmation_mode': 'retest', 'threshold_cny': 805,
+                     'bank_breakout': {'retest_ceiling_cny': 806}}
+            account = {'status': 'fresh', 'quote': {'status': 'fresh', 'quoted_at': START.isoformat(), 'buy_price_cny': 806}}
+            archived = START + timedelta(seconds=15)
+            released = START + timedelta(minutes=3)
+            record(store.conn, 'zheshang', point(1, 805.9))
+            record(store.conn, 'minsheng', point(1, 900))
+            quoted = START + timedelta(minutes=2)
+            record(store.conn, 'zheshang', (quoted, released + timedelta(seconds=1), 807, 807))
+            evidence = retest_price_evidence(store.conn, 'zheshang', route, START, account, archived, released)
+            self.assertEqual(evidence, {'retest_price_status_at_input': 'within_retest_zone',
+                                        'sampled_above_retest_zone_during_analysis': False})
+            record(store.conn, 'zheshang', point(2.5, 806.01))
+            self.assertTrue(retest_price_evidence(store.conn, 'zheshang', route, START, account, archived, released)
+                            ['sampled_above_retest_zone_during_analysis'])
 
     def test_review_replay_fills_gaps_with_time_verified_archived_bank_quotes(self):
         from monitor.ai import ensure_schema as ensure_ai_schema

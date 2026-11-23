@@ -41,6 +41,7 @@ def compare_previous_pullbacks(account):
 
 def prepare_bank_entry_context(out, conn=None):
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, plain_buy_observation, stored_price_condition
+    from .jd_live_buy_watch import breakout_retest_price_status
     from .jd_live_conditions import price_met, stamp
     from .trade_costs import bank_review_unit_payoff, cost_reference, number
 
@@ -79,12 +80,14 @@ def prepare_bank_entry_context(out, conn=None):
                 data['threshold_met_at_input']=price_met({'condition':data['condition'],'price_cny':threshold},buy)
             continue
         for route in data.get('routes', []):
-            for key in ('position_boundary_cny', 'signal_expires_at', 'source_advice_id'):
+            for key in ('position_boundary_cny', 'signal_expires_at', 'source_advice_id', 'retest_price_status_at_input'):
                 route.pop(key, None)
             confirmed = stamp(route.get('confirmed_at'))
             condition = route.get('condition_key')
             if not fresh or not condition or not confirmed or quoted_at < confirmed:
                 continue
+            if price_status := breakout_retest_price_status(route, buy):
+                route['retest_price_status_at_input'] = price_status
             if route.get('bank_breakout'):
                 breakout = number(route.get('threshold_cny'))
                 if breakout is None or buy < breakout:

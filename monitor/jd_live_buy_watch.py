@@ -181,6 +181,18 @@ def watch_routes(conditions):
             yield condition
 
 
+def breakout_retest_price_status(route, buy):
+    if route.get('confirmation_mode') != 'retest' or not buy:
+        return None
+    floor = number(route.get('threshold_cny'))
+    ceiling = number((route.get('bank_breakout') or {}).get('retest_ceiling_cny'))
+    if not floor or not ceiling or ceiling < floor:
+        return None
+    if buy < floor:
+        return 'below_breakout'
+    return 'above_retest_zone' if buy > ceiling else 'within_retest_zone'
+
+
 def watch_progress(current):
     """Read a watch saved before or after the breakout branches were split."""
     routes = current.get('routes', {})
