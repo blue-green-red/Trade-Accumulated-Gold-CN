@@ -61,7 +61,7 @@ class LiveAdvice(BaseModel):
     grams:Optional[float]=Field(default=None,ge=0,allow_inf_nan=False)
     price_condition:Literal['at_or_above','at_or_below','reference','none']='none'
     price_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
-    entry_trigger_key:Optional[str]=Field(default=None,min_length=1,max_length=64,description='加仓依赖的 trigger_events.routes.condition_key，未引用填 null')
+    entry_trigger_key:Optional[str]=Field(default=None,min_length=1,max_length=64,description='加仓所依赖的复评 condition_key，独立判断填 null')
     valid_for_minutes:int=Field(default=240,ge=15,le=1440)
     reason:str=Field(max_length=1600,description='约300–400字。先比较同情景的每克扣费空间；定量时说明整仓影响。给出取舍依据，省去已列余额、委托参数和价位推导。')
     risk_note:str=Field(max_length=800,description='一句说明会改变本轮建议的风险')
@@ -93,7 +93,8 @@ def prompt_for(context):
 
 
 
-def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None,entry_routes=None):
+def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None,entry_routes=None,
+         submitted_price_events=()):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
     from .jd_live_readonly import enabled_banks,buy_minimums
@@ -163,7 +164,14 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         value['input_protection']=protection_state(source)
         value['checks']=warnings
         warning = (entry_warnings or {}).get(bank)
-        if routes := (entry_routes or {}).get(bank):
+        routes=(entry_routes or {}).get(bank,[])
+        basis=value.get('entry_trigger_key')
+        if basis and not any(r['condition_key']==basis for r in routes):
+            from .jd_live_buy_guard import explicit_price_basis
+            if touch:=explicit_price_basis(conn,analyst,bank,source,submitted_price_events,basis,now):
+                routes=[*routes,touch]
+                warning=None
+        if routes or basis:
             from .jd_live_buy_guard import publication_entry_basis
             selected, basis_warning = publication_entry_basis(conn, bank, value, routes, now)
             warning = warning or basis_warning

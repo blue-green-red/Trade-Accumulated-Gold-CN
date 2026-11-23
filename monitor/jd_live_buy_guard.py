@@ -130,6 +130,8 @@ def active_routes(conn, account, routes, now):
     point = sample(account, now)
     anchored = []
     for route in routes:
+        if route.get('snapshot_revision') and route['snapshot_revision']!=account.get('revision'):
+            continue
         anchor = stamp(route.get('confirmed_at'))
         expiry = route.get('signal_expires_at')
         deadline = stamp(expiry)
@@ -152,6 +154,51 @@ def submitted_routes(context, event_ids):
     for event in entry_events(context, event_ids):
         by_bank[event['data']['bank']].extend(event['data'].get('routes', []))
     return by_bank
+
+
+def explicit_price_basis(conn, model, bank, source, events, basis, now):
+    """Resolve a named ordinary price touch against its exact archived condition."""
+    from .jd_live_conditions import price_met, renewed_pullback_deadline
+    from .jd_live_readonly import accounts
+    from .trade_costs import number
+
+    quote=source.get('quote') or {}
+    input_at=stamp(quote.get('quoted_at'))
+    input_buy=number(quote.get('buy_price_cny'))
+    if quote.get('status')!='fresh' or not input_at or not input_buy:
+        return None
+    previous=next((a for a in source.get('previous_advice',[]) if a.get('analyst')==model),{})
+    previous_deadline=stamp(previous.get('expires_at'))
+    candidates=[]
+    for event in events:
+        data=event.get('data') or {}
+        if (not event['id'].startswith(f'live-price:{model}:') or data.get('bank')!=bank
+                or data.get('condition_key')!=basis or data.get('quote_side')!='buy' or data.get('order_key')):
+            continue
+        triggered=stamp(data.get('quoted_at'))
+        price=number(data.get('price_cny'))
+        if not triggered or triggered>input_at or not price:
+            continue
+        condition,revision,origin=stored_price_condition(conn,model,data)
+        if (not condition or revision!=source.get('revision') or not plain_buy_observation(condition)
+                or condition['price_cny']!=number(data.get('threshold_cny')) or not price_met(condition,price)
+                or not price_met(condition,input_buy)):
+            continue
+        deadline=stamp(origin.get('expires_at'))
+        if data.get('renewed_pullback'):
+            account=next(iter(accounts(conn,now,include_advice=False,selected_bank=bank)),{})
+            deadline=renewed_pullback_deadline(conn,account,origin,condition,now) if account else None
+        elif deadline and previous_deadline:
+            deadline=min(deadline,previous_deadline)
+        if deadline and (published:=stamp(origin.get('created_at'))) and published<=triggered<deadline:
+            route={'condition_key':basis,'condition':condition['condition'],'threshold_cny':condition['price_cny'],
+                   'confirmed_at':data['quoted_at'],'signal_expires_at':deadline.isoformat(),
+                   'snapshot_revision':revision,'price_touch':True}
+            boundary=number((origin.get('position_path') or {}).get('boundary_price_cny'))
+            if boundary:
+                route['position_boundary_cny']=boundary
+            candidates.append((triggered,route))
+    return max(candidates,key=lambda item:item[0])[1] if candidates else None
 
 
 def validate_entry_routes(conn, context, event_ids, now):
@@ -313,7 +360,7 @@ def publication_entry_basis(conn, bank, value, routes, now):
     selected = [route for route in routes if route['condition_key'] == basis] if basis else routes
     if not selected:
         return [], '本轮加仓引用的复评分支与输入不符，须重新确认'
-    if len(routes) == 1:
+    if len(routes) == 1 and not selected[0].get('price_touch'):
         return selected, None
     account = next(iter(accounts(conn, now, include_advice=False, selected_bank=bank)), {})
     if len(active_routes(conn, account, selected, now)) == len(selected):

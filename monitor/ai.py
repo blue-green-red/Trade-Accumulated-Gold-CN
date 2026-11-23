@@ -495,10 +495,13 @@ class AIAnalyst:
         if context.get("live_readonly_accounts"):
             from .jd_live_advice import save as save_live_advice
             from .jd_live_buy_guard import submitted_routes
+            price_events=[e for e in entry_context['trigger_events'] if e['id'].startswith('live-price:')
+                          and e['id'] in covered_ids]
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],entry_context["live_readonly_accounts"],
                 now=published_at,
                 invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
-                entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids))
+                entry_warnings=entry_warnings,entry_routes=submitted_routes(entry_context,covered_ids),
+                submitted_price_events=price_events)
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):
             pending_entry_ids = set()

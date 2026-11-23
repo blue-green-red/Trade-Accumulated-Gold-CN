@@ -1096,14 +1096,47 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM ai_runs').fetchone()[0], 1)
 
-    def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1, *, basis=None, now=START):
+    def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1, *, basis=None, now=START,
+                    price_events=()):
         raw = {'action': action, 'grams': 10 if action == 'buy' else None,
                'price_condition': condition, 'price_cny': 806 if condition != 'none' else None,
                'valid_for_minutes': 15, 'reason': '本轮按实际报价评估。', 'risk_note': '先核对实时买价。',
                'suggested_orders': list(orders), 'entry_trigger_key': basis}
         with self.conn:
             save(self.conn, 'codex', view, {'zheshang': raw}, model_input(self.conn, now), now,
-                 entry_routes={'zheshang': routes} if routes else None)
+                 entry_routes={'zheshang': routes} if routes else None, submitted_price_events=price_events)
+
+    def test_named_plain_price_touch_must_still_hold_for_a_buy(self):
+        self.update_quote(0,806)
+        revision=accounts(self.conn,START,include_advice=False)[0]['revision']
+        condition={'condition':'at_or_above','quote_side':'buy','price_cny':805}
+        fingerprint=condition_key(condition)
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                (1,'zheshang','codex',1,START.isoformat(),(START+timedelta(minutes=5)).isoformat(),
+                 revision,json.dumps({'action':'hold','review_conditions':[condition]})))
+        event={'id':f'live-price:codex:zheshang:1:{fingerprint}','data':{
+            'bank':'zheshang','advice_id':1,'condition_key':fingerprint,'quote_side':'buy',
+            'threshold_cny':805,'price_cny':806,'quoted_at':START.isoformat()}}
+
+        self.save_advice(view=2,basis=fingerprint,price_events=[event])
+        current=accounts(self.conn,START,selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(current['action_status'],'current')
+        self.assertTrue(current['entry_trigger_routes'][0]['price_touch'])
+
+        self.update_quote(1,804.9)
+        at=START+timedelta(minutes=1)
+        current=accounts(self.conn,at,selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(current['action_status'],'review_required')
+        self.update_quote(2,806)
+        at=START+timedelta(minutes=2)
+        self.save_advice(view=3,basis=fingerprint,price_events=[event],now=at)
+        current=accounts(self.conn,at,selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(current['action_status'],'review_required')
+        self.assertIn('本轮加仓引用的复评分支已失效，须重新确认',current['checks'])
+        self.save_advice(view=4,price_events=[event],now=at)
+        independent=accounts(self.conn,at,selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(independent['action_status'],'current')
 
     def test_mixed_confirmations_require_a_still_valid_buy_basis_at_publication(self):
         self.update_quote(0, 806)
