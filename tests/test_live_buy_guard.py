@@ -229,6 +229,37 @@ class BuyGuardTests(unittest.TestCase):
         queue(2,2,high,807.6)
         self.assertEqual(pending_events(self.conn,'codex',START+timedelta(minutes=2)),[])
 
+    def test_same_plain_buy_can_recross_when_successful_analysis_leaves_the_advice_in_place(self):
+        from monitor.jd_live_conditions import monitor_prices
+
+        self.update_quote(0,806)
+        revision=accounts(self.conn,START,include_advice=False)[0]['revision']
+        condition={'condition':'at_or_above','quote_side':'buy','price_cny':805,'reason':'买价上穿后复评。'}
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                (1,'zheshang','codex',1,START.isoformat(),(START+timedelta(minutes=10)).isoformat(),
+                 revision,json.dumps({'action':'hold','review_conditions':[condition]})))
+
+        def watch(minute, price):
+            self.update_quote(minute,price)
+            now=START+timedelta(minutes=minute)
+            account=accounts(self.conn,now,selected_bank='zheshang')[0]
+            monitor_prices(self.store,account,account['advice'][0],now)
+            return pending_events(self.conn,'codex',now)
+
+        first,=watch(0,806)
+        with self.conn:
+            remember_reviewed_price_observations(self.conn,'codex',{'trigger_events':[first]},[first['id']],0)
+            acknowledge(self.conn,'codex',[first['id']])
+        self.assertEqual(watch(1,806.1),[])
+        self.assertEqual(watch(2,804.9),[])
+        second,=watch(3,806.2)
+        self.assertNotEqual(second['id'],first['id'])
+        self.assertEqual(second['data']['advice_id'],1)
+        self.assertEqual(second['data']['price_cny'],806.2)
+        self.assertEqual(watch(4,804.9),[second])
+        self.assertEqual(watch(5,806.7),[second])
+
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)
         context, key = self.context([self.route()])

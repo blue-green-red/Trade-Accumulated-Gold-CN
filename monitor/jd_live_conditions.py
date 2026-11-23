@@ -386,7 +386,8 @@ def monitor_prices(store,account,advice,now):
             key=watch_key(store.conn,advice['analyst'],account['bank'],condition);watch=read_watch(store.conn,key)
             if watch.get('last_quote_at') and stamp(quote['quoted_at'])<=stamp(watch['last_quote_at']):continue
             latched = watch.get('latched')
-            if met and plain_buy_observation(condition):
+            ordinary_buy=plain_buy_observation(condition)
+            if met and ordinary_buy:
                 latched = buy_observation_latched(store.conn, account, advice, condition, watch, now)
             trigger_price, trigger_at = price, quote['quoted_at']
             recovered = None
@@ -396,14 +397,18 @@ def monitor_prices(store,account,advice,now):
                     at, trigger_price = recovered
                     trigger_at = at.isoformat()
             if (met or recovered) and not latched:
-                event_id=f'live-price:{advice["analyst"]}:{account["bank"]}:{advice["id"]}:{condition_key(condition)}'
+                base_id=f'live-price:{advice["analyst"]}:{account["bank"]}:{advice["id"]}:{condition_key(condition)}'
                 reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{trigger_price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
                 if recovered:
                     reason += f'，随后回升至{price:g}元/克'
                 if state.get('renewed_pullback'):
                     reason += '，本行近期回补报价已提高'
                 events=read(store.conn,advice['analyst'])
-                if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
+                event_id=base_id
+                if ordinary_buy and not state.get('renewed_pullback') and base_id in events['covered']:
+                    event_id=f'{base_id}:{trigger_at}'
+                pending=any(e['id']==base_id or e['id'].startswith(base_id+':') for e in events['pending'])
+                if event_id not in events['covered'] and not pending:
                     events['pending'].append({'id':event_id,'reason':reason,'min_gap_minutes':0,'observed_at':now.isoformat(),
                         'data':{'bank':account['bank'],'advice_id':advice['id'],'condition_key':condition_key(condition),
                                 'quote_side':condition['quote_side'],'price_cny':trigger_price,'threshold_cny':condition['price_cny'],
