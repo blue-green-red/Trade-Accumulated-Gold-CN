@@ -36,6 +36,15 @@ def unavailable(status):
     return {'status': status}
 
 
+def observable_quotes(quotes):
+    """Replay receipt order, dropping a delayed quote superseded by a newer one."""
+    latest = None
+    for point in sorted(quotes, key=lambda q: (q[1], -q[0].timestamp())):
+        if latest is None or point[0] > latest:
+            latest = point[0]
+            yield point
+
+
 def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mode=None, progress=None):
     fee = number(value.get('input_sell_fee_rate'))
     minimum = number(value.get('input_minimum_buy_grams'))
@@ -48,8 +57,8 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     elif cash is None or fee is None or fee >= 1:
         blocked = 'cash_or_fee_unknown'
 
-    actionable = [p for p in quotes if published <= p[0] <= p[1] < expires and p[1] <= now]
-    first = next((p for p in actionable if p[1] - published <= MAX_GAP), None)
+    first = next(observable_quotes(p for p in quotes
+                                   if published <= p[0] <= p[1] < expires and p[1] <= min(now, published + MAX_GAP)), None)
     if blocked:
         immediate = unavailable(blocked)
     elif first:
@@ -70,7 +79,7 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     if last_deadline <= published:
         return immediate, unavailable(blocked or 'no_valid_buy_review'), None
     boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
-    actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline and p[1] <= now]
+    actionable = list(observable_quotes(p for p in quotes if published <= p[0] <= p[1] < last_deadline and p[1] <= now))
     states = [{} for _ in routes]
     unfunded = []
     rejected_episodes = defaultdict(set)
@@ -131,7 +140,7 @@ def mark(entry, exit_quote, fee, quotes, grams):
     end_at = exit_quote[0]
     if end_at < quoted_at:
         return {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
-    marks = [p for p in quotes if quoted_at <= p[0] <= end_at and observed_at <= p[1] <= exit_quote[1]]
+    marks = list(observable_quotes(p for p in quotes if quoted_at <= p[0] <= end_at and observed_at <= p[1] <= exit_quote[1]))
     net = lambda sell: (sell * (1 - fee) - buy) * grams
     complete = complete_sampling(quoted_at, end_at, marks)
     adverse = drawdown = best = first_break_even = None
@@ -167,7 +176,7 @@ def evaluate_entries(immediate, confirmed, branch, published, fee, quotes, now, 
     horizons = []
     for days in (1, 3):
         target, deadline = trading_horizon(published, days)
-        exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= min(now, deadline)), None)
+        exit_quote = next(observable_quotes(p for p in quotes if target <= p[0] <= p[1] <= min(now, deadline)), None)
         row = {'trading_days': days, 'target_at': target.isoformat(), 'wait': {'status': 'valued', 'net_cny': 0.0}}
         if branch:
             row['confirmation_branch'] = branch
@@ -384,7 +393,7 @@ def first_observed_quote(conn, bank, start, cutoff):
     return conn.execute(
         'SELECT quoted_at,buy_price_cny,sell_price_cny,observed_at FROM jd_live_quote_samples '
         'WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=? '
-        'ORDER BY quoted_at LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
+        'ORDER BY observed_at,quoted_at DESC LIMIT 1', (bank, utc_text(start), utc_text(cutoff), utc_text(cutoff))).fetchone()
 
 
 def archived_quote_samples(conn, bank, model, now):
@@ -424,7 +433,8 @@ def first_review_quote(conn, bank, start, cutoff, archive):
     if sample is not None or not archive or cutoff < start:
         return sample
     start, cutoff = utc_text(start), utc_text(cutoff)
-    return next((row for key, row in archive.items() if start <= key and row[3] <= cutoff), None)
+    return min((row for key, row in archive.items() if start <= key and row[3] <= cutoff),
+               key=lambda row: (row[3], -stamp(row[0]).timestamp()), default=None)
 
 
 def quote_source(sample):
@@ -575,12 +585,15 @@ def bank_quotes_during_review(conn, bank, account, archived_at, released, public
         return {}
     data = {'input_quote_at': utc_text(input_at), 'input_buy_cny': buy}
     if released and archived_at < released:
-        count, low, high = conn.execute('SELECT COUNT(*),MIN(buy_price_cny),MAX(buy_price_cny) FROM jd_live_quote_samples '
-                                        'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at>=quoted_at '
-                                        'AND observed_at>? AND observed_at<=?',
-                                        (bank, utc_text(input_at), utc_text(released), utc_text(archived_at), utc_text(released))).fetchone()
-        if count:
-            data.update(samples_during_analysis=count, lowest_buy_during_analysis_cny=low, highest_buy_during_analysis_cny=high)
+        rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny FROM jd_live_quote_samples '
+                            'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at>=quoted_at '
+                            'AND observed_at>? AND observed_at<=?',
+                            (bank, utc_text(input_at), utc_text(released), utc_text(archived_at), utc_text(released)))
+        points = ((stamp(quoted), stamp(seen), price) for quoted, seen, price in rows)
+        prices = [price for _, _, price in observable_quotes(points)]
+        if prices:
+            data.update(samples_during_analysis=len(prices), lowest_buy_during_analysis_cny=min(prices),
+                        highest_buy_during_analysis_cny=max(prices))
     if publication_quote:
         data['first_buy_after_publication_cny'] = publication_quote[1]
         data['buy_change_from_input_cny_per_gram'] = round(publication_quote[1] - buy, 2)

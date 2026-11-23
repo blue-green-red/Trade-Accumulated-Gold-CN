@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, first_observed_quote, followup_quote, independent_branch_replay,
+from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, first_observed_quote, first_review_quote,
+                                       followup_quote, independent_branch_replay,
                                        observed_review_horizons, observed_reviews, report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
@@ -694,10 +695,45 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(retest_price_evidence(route, START, path), {'retest_price_status_at_input': 'within_retest_zone',
                 'sampled_above_retest_zone_during_analysis': False, 'retest_price_status_after_publication': 'within_retest_zone'})
             record(store.conn, 'zheshang', point(2.5, 806.01))
+            old = START + timedelta(minutes=1.5)
+            record(store.conn, 'zheshang', (old, released-timedelta(seconds=1), 860, 860))
             path = bank_quotes_during_review(store.conn, 'zheshang', account, archived, released, publication)
             self.assertEqual((path['lowest_buy_during_analysis_cny'],path['highest_buy_during_analysis_cny']), (805.9,806.01))
             self.assertEqual(path['samples_during_analysis'], 2)
             self.assertTrue(retest_price_evidence(route, START, path)['sampled_above_retest_zone_during_analysis'])
+
+    def test_late_old_bank_quote_cannot_rewrite_first_price_or_start_a_pullback(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'quote-receipt-order.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            old = START + timedelta(seconds=30)
+            late = (old, START + timedelta(minutes=2, seconds=30), 799, 798)
+            first = point(1, 803.5)
+            day = START + timedelta(days=1)
+            older_exit = day + timedelta(minutes=1)
+            exit_late = (older_exit, day+timedelta(minutes=2, seconds=30), 810, 809)
+            exit_first = point(1442, 815)
+            for quote in (late, first, exit_late, exit_first):
+                record(store.conn, 'zheshang', quote)
+
+            def archived(quote):
+                quoted, seen, buy, sell = quote
+                return quoted.isoformat(timespec='microseconds'),buy,sell,seen.isoformat(timespec='microseconds'),'analysis_archive'
+
+            cutoff = START + timedelta(minutes=3)
+            self.assertEqual(first_observed_quote(store.conn,'zheshang',START,cutoff)[1], first[2])
+            archive = {row[0]:row for row in map(archived,(late,first))}
+            self.assertEqual(first_review_quote(store.conn,'minsheng',START,cutoff,archive), archived(first))
+
+            value = {'input_quote_status':'fresh', 'input_data_status':{'account':'fresh'},
+                     'input_participation_cash_cny':10000, 'input_sell_fee_rate':.005,
+                     'review_conditions':[zoned_route()]}
+            points = [late,first,point(2,803.7),point(3,804),exit_late,exit_first]
+            row, _ = evaluate(value,START,START+timedelta(minutes=8),points,day+timedelta(minutes=5))
+            self.assertEqual(row['immediate_10g']['entry_cny_per_gram'], first[2])
+            self.assertEqual(datetime.fromisoformat(row['exit_quote_at']), exit_first[0])
+            self.assertNotEqual(row['confirmed_10g']['status'], 'valued')
 
     def test_review_replay_fills_gaps_with_time_verified_archived_bank_quotes(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
