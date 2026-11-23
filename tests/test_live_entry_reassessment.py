@@ -15,7 +15,7 @@ NOW=datetime(2026,11,11,tzinfo=timezone.utc)
 def row(i,quote,entry,**changes):
     value={'id':i,'analyst':'codex','created_at':(NOW+timedelta(minutes=i)).isoformat(),
         'snapshot_revision':'same-account','action':'wait','input_quote_status':'fresh',
-        'input_quote_cny':quote,'input_quote_at':(NOW+timedelta(minutes=i)).isoformat(),
+        'input_quote_cny':quote,'input_buy_quote_cny':quote,'input_quote_at':(NOW+timedelta(minutes=i)).isoformat(),
         'suggested_orders':[],'limit_buy_reviews':[{'decision':'needs_review','entry_price_cny':entry,
             'expires_at':(NOW+timedelta(days=1)).isoformat(),'basis':'合成价位用于测试，不是真实行情。','checks':[]}]}
     value.update(changes);return value
@@ -45,6 +45,30 @@ class EntryReassessmentTests(unittest.TestCase):
     def test_fixed_absolute_level_is_not_mislabeled_as_repeated_relative_discount(self):
         facts=entry_reassessment(self.conn,[row(3,980,900),row(2,990,900),row(1,1000,900)])
         self.assertEqual(facts['same_discount_rounds'],1);self.assertEqual(facts['candidate_move_pct'],0)
+
+    def test_candidates_are_compared_by_branch_and_use_bank_buy_quote(self):
+        old=row(1,990,950,input_buy_quote_cny=1000)
+        latest=row(2,970,935,input_buy_quote_cny=980)
+        for value,shallow in ((old,995),(latest,975)):
+            deep=value['limit_buy_reviews'][0]
+            deep['pullback_depth']='deep'
+            value['limit_buy_reviews'].append({**deep,'entry_price_cny':shallow,'pullback_depth':'shallow'})
+        latest['limit_buy_reviews'].reverse()
+        facts=entry_reassessment(self.conn,[latest,old])
+        self.assertEqual(facts['deep_pullback']['input_price_move_pct'],-2)
+        self.assertEqual(facts['deep_pullback']['candidate_move_pct'],round((935/950-1)*100,3))
+        self.assertEqual(facts['shallow_pullback']['candidate_move_pct'],round((975/995-1)*100,3))
+        latest['limit_buy_reviews'][0]['entry_price_cny']=982
+        self.assertEqual(set(entry_reassessment(self.conn,[latest,old])),{'deep_pullback'})
+
+    def test_ambiguous_branches_and_missing_buy_price_are_not_compared(self):
+        latest=row(2,980,940)
+        old=row(1,1000,950)
+        latest['limit_buy_reviews'].append({**latest['limit_buy_reviews'][0],'entry_price_cny':930})
+        self.assertIsNone(entry_reassessment(self.conn,[latest,old]))
+        latest['limit_buy_reviews'].pop()
+        latest['input_buy_quote_cny']=None
+        self.assertIsNone(entry_reassessment(self.conn,[latest,old]))
 
     def test_missing_invalid_changed_account_and_actual_buy_do_not_create_stale_feedback(self):
         old=row(1,1000,960)

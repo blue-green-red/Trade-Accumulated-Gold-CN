@@ -265,14 +265,20 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                     from .jd_live_proposals import current_order_state
                     current_entry_state(conn,row,entry,now)
                     current_order_state(entry,row,now)
-                from .jd_live_conditions import (archived_bank_quotes, condition_state, management_state, pullback_depth,
-                                                  stamp, zoned_pullback)
+                from .jd_live_conditions import (archived_bank_quotes, bank_pullback_depth, condition_state,
+                                                  management_state, pullback_depth, stamp, zoned_pullback)
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
+                candidates = entry.get('limit_buy_reviews', [])
+                published = stamp(r[2])
                 evidence = (archived_bank_quotes(conn, bank, r[1], r[6])
-                            if 'ai_views' in tables and any(map(zoned_pullback, entry.get('review_conditions', [])))
+                            if 'ai_views' in tables and (candidates or any(map(zoned_pullback, entry.get('review_conditions', []))))
                             else {})
+                for candidate in candidates:
+                    if evidence and (depth := bank_pullback_depth(candidate.get('entry_price_cny'), evidence,
+                                                                  entry.get('input_quote_at'), published)):
+                        candidate['pullback_depth'] = depth
                 for condition in entry.get('review_conditions',[]):
-                    if evidence and (depth := pullback_depth(condition, evidence, entry.get('input_quote_at'), stamp(r[2]))):
+                    if evidence and (depth := pullback_depth(condition, evidence, entry.get('input_quote_at'), published)):
                         condition['pullback_depth'] = depth
                     condition['monitoring']=condition_state(conn,row,entry,condition,now,latest=not seen.get(r[1]))
                 target.append(entry)

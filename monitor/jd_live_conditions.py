@@ -25,11 +25,17 @@ def archived_bank_quotes(conn, bank, model, view_id):
 
 def pullback_depth(condition, evidence, input_quote_at, published):
     """Classify a zone using only the bank samples available when it was proposed."""
+    if not zoned_pullback(condition):
+        return None
+    return bank_pullback_depth(condition.get('threshold_cny', condition.get('price_cny')), evidence, input_quote_at, published)
+
+
+def bank_pullback_depth(level, evidence, input_quote_at, published):
     from .trade_costs import number
 
     at = stamp(evidence.get('as_of'))
-    trigger = number(condition.get('threshold_cny', condition.get('price_cny')))
-    if (not zoned_pullback(condition) or not trigger or evidence.get('status') != 'available'
+    trigger = number(level)
+    if (not trigger or evidence.get('status') != 'available'
             or at is None or at != stamp(input_quote_at) or published is None or at > published):
         return None
     windows = evidence.get('buy_price_windows_15m', [])

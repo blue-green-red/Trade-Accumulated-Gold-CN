@@ -15,11 +15,12 @@ def price(value):
     return value if math.isfinite(value) and value>0 else None
 
 
-def input_quote(conn,advice):
+def input_quote(conn,advice,side='sell'):
     """Use the observed bank input, never an AI output price or another product's quote."""
     if advice.get('input_quote_status') not in (None,'fresh'):return None
-    if 'input_quote_cny' in advice:
-        value=price(advice['input_quote_cny']);at=stamp(advice.get('input_quote_at'))
+    key='input_buy_quote_cny' if side=='buy' else 'input_quote_cny'
+    if key in advice:
+        value=price(advice[key]);at=stamp(advice.get('input_quote_at'))
         return {'price_cny':value,'quoted_at':advice['input_quote_at']} if value and at else None
     # Legacy advice did not persist the anchor. Recover only from its exact archived shared input.
     tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -30,7 +31,7 @@ def input_quote(conn,advice):
     if not saved:return None
     source=(((json.loads(saved[0]).get('context') or {}).get('live_readonly_accounts') or {}).get('accounts') or {}).get(row[1]) or {}
     quote=source.get('quote') or {}
-    value=price(quote.get('sell_price_cny'));at=stamp(quote.get('quoted_at'))
+    value=price(quote.get(f'{side}_price_cny'));at=stamp(quote.get('quoted_at'))
     if source.get('status')!='fresh' or quote.get('status')!='fresh' or not value or at is None:return None
     return {'price_cny':value,'quoted_at':quote['quoted_at']}
 
@@ -41,19 +42,7 @@ def plan_signature(value):
     return json.dumps([immediate_signature(value),proposal_signature(value),management_signature(value),entry_signature(value)],sort_keys=True)
 
 
-def entry_reassessment(conn,history):
-    """Recent observed candidate drift, not a trading signal or an instruction to reprice."""
-    if not history:return None
-    rows=[]
-    for value in history[:3]:
-        if value.get('snapshot_revision')!=history[0].get('snapshot_revision') or value.get('action') not in ('hold','wait'):break
-        if any(o.get('kind')=='limit_buy' and not o.get('checks') for o in value.get('suggested_orders',[])):break
-        review=next((r for r in value.get('limit_buy_reviews',[]) if r.get('decision') in ('needs_review','not_worthwhile','unavailable') and not r.get('checks') and price(r.get('entry_price_cny'))),None)
-        anchor=input_quote(conn,value)
-        entry=price((review or {}).get('entry_price_cny'))
-        if not entry or not anchor or entry>=anchor['price_cny']:break
-        rows.append({'review':review,'entry':entry,'anchor':anchor,'discount':(1-entry/anchor['price_cny'])*100})
-    if len(rows)<2:return None
+def candidate_feedback(rows):
     latest,previous=rows[:2]
     same=0
     for row in rows:
@@ -65,6 +54,39 @@ def entry_reassessment(conn,history):
             'candidate_move_pct':round((latest['entry']/previous['entry']-1)*100,3),
             'input_price_move_pct':round((latest['anchor']['price_cny']/previous['anchor']['price_cny']-1)*100,3),
             'previous_candidate_reached':(at<deadline and latest['anchor']['price_cny']<=previous['entry']) if at and deadline else None}
+
+
+def entry_reassessment(conn,history):
+    """Compare eligible candidates within the same pullback branch and account revision."""
+    if not history:return None
+    snapshots=[]
+    for value in history[:3]:
+        if value.get('snapshot_revision')!=history[0].get('snapshot_revision') or value.get('action') not in ('hold','wait'):break
+        if any(o.get('kind')=='limit_buy' and not o.get('checks') for o in value.get('suggested_orders',[])):break
+        anchor=input_quote(conn,value,'buy')
+        if not anchor:break
+        candidates=[(r,entry) for r in value.get('limit_buy_reviews',[])
+                    if r.get('decision') in ('needs_review','not_worthwhile','unavailable')
+                    and not r.get('checks') and (entry:=price(r.get('entry_price_cny')))]
+        by_branch={}
+        for review,entry in candidates:
+            depth=review.get('pullback_depth')
+            if depth not in ('shallow','deep') and len(candidates)!=1:
+                continue
+            branch=f'{depth}_pullback' if depth in ('shallow','deep') else 'unclassified'
+            by_branch.setdefault(branch,[]).append({'review':review,'entry':entry,'anchor':anchor,
+                                                    'discount':(1-entry/anchor['price_cny'])*100})
+        snapshots.append({branch:rows[0] for branch,rows in by_branch.items()
+                          if len(rows)==1 and rows[0]['entry']<anchor['price_cny']})
+    result={}
+    for branch in snapshots[0] if snapshots else ():
+        rows=[]
+        for candidates in snapshots:
+            if branch not in candidates:break
+            rows.append(candidates[branch])
+        if len(rows)>=2:
+            result[branch]=candidate_feedback(rows)
+    return result.get('unclassified') or result or None
 
 
 def strategy_review(conn,account,model,now=None):
