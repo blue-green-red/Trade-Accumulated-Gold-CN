@@ -499,6 +499,34 @@ class BuyAuditTests(unittest.TestCase):
         empty = independent_branch_replay(value, START, end, [], now)
         self.assertTrue(all(c['confirmation']['status'] == 'confirmation_quotes_missing' for c in empty))
 
+    def test_unfunded_breakout_still_confirms_and_does_not_hide_a_later_retest(self):
+        breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                    'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        end = START + timedelta(minutes=15)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 8060, 'input_sell_fee_rate': .005,
+                 'buy_watch': {'starts_at': START.isoformat(), 'expires_at': end.isoformat()},
+                 'review_conditions': [breakout]}
+        samples = [point(m, p) for m, p in ((0, 805.1), (1, 806.3), (2, 805.8), (3, 806.5), (4, 806.4),
+                                             (5, 805.9), (1441, 812))]
+        now = START + timedelta(days=2)
+        grouped, _ = evaluate(value, START, end, samples, now)
+        self.assertEqual(grouped['confirmation_branch'], 'breakout_retest')
+        self.assertEqual(grouped['confirmed_10g']['entry_cny_per_gram'], 805.9)
+        continued, retest = independent_branch_replay(value, START, end, samples[:4], START + timedelta(minutes=4))
+        check = continued['confirmation']
+        self.assertEqual(check['status'], 'insufficient_input_cash')
+        self.assertEqual(check['observed_price_confirmations'][0]['buy_cny_per_gram'], 806.5)
+        self.assertEqual(retest['confirmation']['status'], 'pending')
+
+        unknown = {**value, 'input_participation_cash_cny': None}
+        continued, retest = independent_branch_replay(unknown, START, end, samples, now)
+        for branch, price in ((continued, 806.5), (retest, 805.9)):
+            check = branch['confirmation']
+            self.assertEqual(check['status'], 'cash_or_fee_unknown')
+            self.assertEqual(check['observed_price_confirmations'][0]['buy_cny_per_gram'], price)
+            self.assertNotIn('net_cny', branch['horizons'][0]['confirmed_10g'])
+
     def test_actual_branch_marks_both_timings_on_same_day_quote_and_drawdown(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'horizon.db')

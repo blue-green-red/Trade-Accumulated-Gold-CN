@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .config import Settings
-from .jd_live_buy_watch import MAX_GAP, advance, eligible, utc_text, watch_deadline
+from .jd_live_buy_watch import MAX_GAP, advance_watch, eligible, utc_text, watch_deadline, watch_routes
 from .jd_live_conditions import archived_bank_quotes, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, stored_price_condition
 from .participation_audit import horizon_at, readonly
@@ -39,35 +39,39 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     fee = number(value.get('input_sell_fee_rate'))
     minimum = number(value.get('input_minimum_buy_grams'))
     cash = number(value.get('input_participation_cash_cny'))
+    blocked = None
     if minimum and minimum > grams:
-        return unavailable('below_bank_minimum'), unavailable('below_bank_minimum'), None
-    if (value.get('input_data_status') or {}).get('account') != 'fresh' or value.get('input_quote_status') != 'fresh':
-        return unavailable('input_not_fresh'), unavailable('input_not_fresh'), None
-    if cash is None or fee is None or fee >= 1:
-        return unavailable('cash_or_fee_unknown'), unavailable('cash_or_fee_unknown'), None
+        blocked = 'below_bank_minimum'
+    elif (value.get('input_data_status') or {}).get('account') != 'fresh' or value.get('input_quote_status') != 'fresh':
+        blocked = 'input_not_fresh'
+    elif cash is None or fee is None or fee >= 1:
+        blocked = 'cash_or_fee_unknown'
 
     actionable = [p for p in quotes if published <= p[0] <= p[1] < expires]
     first = next((p for p in actionable if p[1] - published <= MAX_GAP), None)
-    if first:
+    if blocked:
+        immediate = unavailable(blocked)
+    elif first:
         immediate = first if first[2] * grams <= cash + 1e-8 else unavailable('insufficient_input_cash')
     else:
         immediate = unavailable('pending' if now < min(expires, published + MAX_GAP) else 'publication_quote_missing')
 
     from .jd_live_semantics import blocking_checks
-    routes = [c for c in value.get('review_conditions', []) if eligible(c, minimum)]
+    routes = [route for route in watch_routes(c for c in value.get('review_conditions', []) if eligible(c, minimum))
+              if breakout_mode is None or route.get('confirmation_mode') == breakout_mode]
     if not routes or blocking_checks(value):
-        return immediate, unavailable('no_valid_buy_review'), None
+        return immediate, unavailable(blocked or 'no_valid_buy_review'), None
 
     watch_end = stamp((value.get('buy_watch') or {}).get('expires_at'))
     advice = {**value, 'expires_at': utc_text(expires)}
     deadlines = [watch_deadline(advice, route) for route in routes]
     last_deadline = max(deadlines)
     if last_deadline <= published:
-        return immediate, unavailable('no_valid_buy_review'), None
+        return immediate, unavailable(blocked or 'no_valid_buy_review'), None
     boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
     actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline]
     states = [{} for _ in routes]
-    too_expensive = False
+    unfunded = {}
     for point in actionable:
         if watch_end and boundary is not None and point[3] <= boundary:
             last_deadline = point[1]
@@ -75,10 +79,9 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
                 progress['last_stage'] = 'position_boundary'
             break
         for i, route in enumerate(routes):
-            if point[1] >= deadlines[i]:
+            if point[1] >= deadlines[i] or i in unfunded:
                 continue
-            previous = states[i]
-            states[i] = advance(previous, route, point[0], point[2], breakout_mode=breakout_mode)
+            states[i] = advance_watch(states[i], route, point[0], point[2])
             if progress is not None:
                 buy, trigger = point[2], route['price_cny']
                 gap = max(0., buy-trigger if route['condition']=='at_or_below' else trigger-buy)
@@ -86,16 +89,28 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
                     gap, progress.get('closest_trigger_gap_cny_per_gram', gap))
                 progress['quote_samples_examined'] = progress.get('quote_samples_examined', 0) + 1
                 progress['last_stage'] = states[i].get('stage') or 'awaiting_trigger'
-            if states[i].get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
-                if point[2] * grams <= cash + 1e-8:
-                    branch = review_branch({**route, 'confirmation_mode': states[i].get('confirmation_mode')})
+            if states[i].get('stage') == 'confirmed':
+                branch = review_branch(route)
+                error = blocked or ('insufficient_input_cash' if point[2] * grams > cash + 1e-8 else None)
+                if not error:
                     return immediate, point, branch
-                too_expensive = True
-    if now < last_deadline:
-        return immediate, unavailable('pending'), None
-    if not actionable or not complete_sampling(published, last_deadline, actionable):
-        return immediate, unavailable('confirmation_quotes_missing'), None
-    return immediate, unavailable('insufficient_input_cash' if too_expensive else 'no_confirmation'), None
+                unfunded[i] = {'branch': branch, 'quoted_at': utc_text(point[0]),
+                               'observed_at': utc_text(point[1]), 'buy_cny_per_gram': point[2],
+                               'paper_entry_status': error}
+        if len(unfunded) == len(routes):
+            break
+    if blocked or len(unfunded) == len(routes):
+        status = blocked or 'insufficient_input_cash'
+    elif now < last_deadline:
+        status = 'pending'
+    elif not actionable or not complete_sampling(published, last_deadline, actionable):
+        status = 'confirmation_quotes_missing'
+    else:
+        status = 'insufficient_input_cash' if unfunded else 'no_confirmation'
+    confirmation = unavailable(status)
+    if unfunded:
+        confirmation['observed_price_confirmations'] = list(unfunded.values())
+    return immediate, confirmation, None
 
 
 def mark(entry, exit_quote, fee, quotes, grams):
