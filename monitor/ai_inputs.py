@@ -39,9 +39,9 @@ def compare_previous_pullbacks(account):
                 condition[field] = gap
 
 
-def prepare_bank_entry_context(out):
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
-    from .jd_live_conditions import stamp
+def prepare_bank_entry_context(out, conn=None):
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, plain_buy_observation, stored_price_condition
+    from .jd_live_conditions import price_met, stamp
     from .trade_costs import bank_review_unit_payoff, cost_reference, number
 
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
@@ -51,9 +51,12 @@ def prepare_bank_entry_context(out):
         if account.get('status') != 'fresh' or (account.get('quote') or {}).get('status') != 'fresh':
             account.pop('new_buy_capacity_at_input', None)
     for event in out.get('trigger_events', []):
-        if not event.get('id', '').startswith(ENTRY_EVENT_PREFIX):
+        event_id=event.get('id','')
+        data=event.get('data') or {}
+        touch=(event_id.startswith('live-price:') and data.get('quote_side')=='buy'
+               and not data.get('order_key') and not data.get('buy_review'))
+        if not touch and not event_id.startswith(ENTRY_EVENT_PREFIX):
             continue
-        data = event.get('data') or {}
         account = accounts.get(data.get('bank')) or {}
         quote = account.get('quote') or {}
         buy = number(quote.get('buy_price_cny'))
@@ -61,6 +64,20 @@ def prepare_bank_entry_context(out):
         quoted_at = stamp(quote.get('quoted_at'))
         fresh = (account.get('status') == 'fresh' and quote.get('status') == 'fresh'
                  and buy is not None and buy > 0 and quoted_at is not None)
+        if touch:
+            data.pop('threshold_met_at_input',None)
+            threshold=number(data.get('threshold_cny'))
+            if conn is not None and data.get('advice_id') and data.get('condition_key'):
+                model=event_id.split(':',2)[1]
+                condition,_,_=stored_price_condition(conn,model,data)
+                data.pop('condition',None)
+                if condition and plain_buy_observation(condition) and condition['price_cny']==threshold:
+                    data['condition']=condition['condition']
+            triggered=stamp(data.get('quoted_at'))
+            if (fresh and threshold and triggered and quoted_at>=triggered
+                    and data.get('condition') in ('at_or_below','at_or_above')):
+                data['threshold_met_at_input']=price_met({'condition':data['condition'],'price_cny':threshold},buy)
+            continue
         for route in data.get('routes', []):
             for key in ('position_boundary_cny', 'signal_expires_at', 'source_advice_id'):
                 route.pop(key, None)
@@ -105,7 +122,7 @@ def compact_waiting_review(container):
         container['participation_review'] = {'waiting': {**compact, 'net_return_pct': net_pct}}
 
 
-def market_context(context):
+def market_context(context, conn=None):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
     if 'trigger_events' in out:
@@ -118,7 +135,7 @@ def market_context(context):
                 seen.add(reason)
             kept.append(event)
         out['trigger_events'] = kept
-    prepare_bank_entry_context(out)
+    prepare_bank_entry_context(out,conn)
     if not out.get('trading_accounts'):
         for account in (out.get('live_readonly_accounts') or {}).get('accounts', {}).values():
             compact_waiting_review(account)
@@ -162,8 +179,8 @@ def compact_live_history(account):
                 state['recent_trade'] = {'same_as': '本账户.recent_trade'}
 
 
-def compact_context(context):
-    out=market_context(context)
+def compact_context(context, conn=None):
+    out=market_context(context,conn)
     covered_news={news_key(e['data']) for e in out.get('trigger_events',[]) if isinstance(e.get('data'),dict) and e['data'].get('text') and e['data'].get('time_bj')}
     seen=set();news=[]
     for row in out.get('jin10_flash_recent',[]):

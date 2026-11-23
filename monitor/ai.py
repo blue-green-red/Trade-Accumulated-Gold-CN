@@ -362,10 +362,10 @@ class AIAnalyst:
         before_chars=len(json.dumps(context,ensure_ascii=False,separators=(",",":")))
         if self.settings.ai_optimize:
             from .ai_inputs import compact_context
-            context=compact_context(context)
+            context=compact_context(context,store.conn)
         else:
             from .ai_inputs import market_context
-            context=market_context(context)
+            context=market_context(context,store.conn)
         from .public_ai import previous_analysis, mapped_levels
         from .trade_costs import cost_reference
         context["public_reference"] = {"sell_fee_rate": self.settings.sell_fee_rate, "spread_cny": self.settings.spread_cny,

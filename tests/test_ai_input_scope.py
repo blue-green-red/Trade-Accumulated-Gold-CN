@@ -7,6 +7,41 @@ import test_four_account as fixtures
 
 
 class InputScopeTests(unittest.TestCase):
+    def test_plain_buy_touch_uses_archived_direction_and_current_bank_quote(self):
+        from contextlib import closing
+        import json
+        import sqlite3
+        from monitor.jd_live_conditions import condition_key
+        from monitor.jd_live_readonly import ensure_schema
+
+        touched='2026-11-23T02:00:00+00:00'
+        low={'condition':'at_or_below','quote_side':'buy','price_cny':800}
+        high={**low,'condition':'at_or_above'}
+        data={'bank':'zheshang','advice_id':1,'condition_key':condition_key(low),'quote_side':'buy',
+              'price_cny':800,'threshold_cny':800,'quoted_at':touched}
+        event={'id':'live-price:codex:zheshang:1:low','data':data}
+        quote={'status':'fresh','buy_price_cny':801,'quoted_at':'2026-11-23T02:01:00+00:00'}
+        source={'status':'fresh','quote':quote}
+        original={'trigger_events':[event],'live_readonly_accounts':{'accounts':{'zheshang':source}}}
+        with closing(sqlite3.connect(':memory:')) as conn:
+            ensure_schema(conn)
+            conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                         (1,'zheshang','codex',1,touched,'2026-11-23T02:15:00+00:00','rev',
+                          json.dumps({'review_conditions':[high,low]})))
+            packed=compact_context(original,conn)
+            observed=packed['trigger_events'][0]['data']
+            self.assertEqual(observed['condition'],'at_or_below')
+            self.assertFalse(observed['threshold_met_at_input'])
+            self.assertEqual(observed['price_cny'],800)
+            self.assertEqual(compact_context(packed),packed)
+            self.assertNotIn('condition',data)
+            quote['buy_price_cny']=799
+            self.assertTrue(compact_context(original,conn)['trigger_events'][0]['data']['threshold_met_at_input'])
+            quote['quoted_at']='2026-11-23T01:59:59+00:00'
+            self.assertNotIn('threshold_met_at_input',compact_context(original,conn)['trigger_events'][0]['data'])
+            data['threshold_cny']=802
+            self.assertNotIn('condition',compact_context(original,conn)['trigger_events'][0]['data'])
+
     def test_duplicate_legacy_move_records_trimmed_without_losing_coverage_or_directional_events(self):
         legacy = [{'id': f'old-{i}', 'reason': '30分钟异动', 'data': {}} for i in range(3)]
         new = [{'id': f'market-move:{side}:test', 'reason': '30分钟异动',
