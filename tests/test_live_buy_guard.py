@@ -19,7 +19,7 @@ from monitor.jd_live_semantics import notification_parts
 from monitor.jd_live_buy_watch import (carry_entry_observations, pending_events, plain_buy_discards, plain_buy_suppressions,
                                       record, request, set_watch)
 from monitor.jd_live_conditions import condition_key, condition_state, read_watch
-from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
+from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_failure, record_success
 from monitor.notification_control import set_subscription
 from monitor.notification_outbox import dispatch
 from monitor.store import Store
@@ -474,6 +474,29 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
             request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_cached_structured_watch_cannot_advance_after_bank_state_changes(self):
+        self.update_quote(0, 799)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 799), (1, 803.5)])
+        at = START + timedelta(minutes=4)
+        self.update_quote(4, 804)
+        cached = accounts(self.conn, at, include_advice=False)[0]
+        key = 'live-buy-watch:codex:zheshang'
+        previous = read_watch(self.conn, key)
+
+        record_failure(self.conn, 'zheshang', 'login_required', at.isoformat())
+        request(self.store, cached, advice, at, (at, at, 804, 804))
+        self.assertEqual(read_watch(self.conn, key), previous)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+        snapshot = json.loads(self.conn.execute("SELECT data_json FROM jd_live_snapshots WHERE bank='zheshang'").fetchone()[0])
+        snapshot['cash_cny'] += 100
+        record_success(self.conn, 'zheshang', snapshot, at.isoformat())
+        self.assertNotEqual(accounts(self.conn, at, include_advice=False)[0]['revision'], cached['revision'])
+        request(self.store, cached, advice, at, (at, at, 804, 804))
+        self.assertEqual(read_watch(self.conn, key), previous)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
 
     def test_low_entry_candidate_expires_while_its_breakout_watch_keeps_running(self):
         self.update_quote(0, 801)

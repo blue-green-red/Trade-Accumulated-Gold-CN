@@ -18,16 +18,15 @@ def identity(value,revision):
 
 def request_expiry_review(store,account,advice,now):
     """Observe every plan transition; enqueue atomically only on its first actionable expiry."""
-    from .jd_live_readonly import PRODUCTS,enabled_banks
+    from .jd_live_readonly import PRODUCTS,review_context_current
     model=advice['analyst'];bank=account['bank'];conn=store.conn
     if advice.get('snapshot_revision')!=account['revision'] or advice.get('schema_version',1)<2:return
     with conn:
         conn.execute('BEGIN IMMEDIATE')
         switch=control(conn,model)
-        if not switch['enabled'] or bank not in enabled_banks(conn):return
+        if not switch['enabled']:return
         if switch.get('changed_at') and advice['created_at']<=switch['changed_at']:return
-        latest=conn.execute('SELECT MAX(id) FROM jd_live_advice WHERE bank=? AND analyst=?',(bank,model)).fetchone()[0]
-        if latest!=advice['id']:return
+        if not review_context_current(conn,account,advice):return
         from .jd_live_buy_watch import observation_only
         observation=advice.get('buy_watch')
         if observation and observation_only(advice):

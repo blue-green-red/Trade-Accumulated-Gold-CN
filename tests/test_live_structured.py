@@ -373,6 +373,24 @@ class StructuredAdviceTests(unittest.TestCase):
         self.assertEqual(errors,[]);self.assertFalse(any(t.is_alive() for t in threads))
         self.assertEqual(len(self.expiry_events()),1)
 
+    def test_expiry_uses_declared_cash_revision_and_waits_until_login_is_verified(self):
+        from monitor.jd_live_expiry import request_expiry_review
+        from monitor.jd_live_readonly import declare_full_position,record_failure
+        self.data['cash_cny']=None
+        record_success(self.s.conn,'zheshang',self.data,NOW.isoformat())
+        declare_full_position(self.s.conn,'zheshang',NOW.isoformat())
+        self.saved(self.value(review_conditions=[self.condition()],valid_for_minutes=15))
+        now=NOW+timedelta(minutes=16)
+        self.fresh_at(now)
+        account=accounts(self.s.conn,now)[0];entry=account['advice'][0]
+        self.assertEqual(account['cash_source'],'user_declared_full_position')
+        record_failure(self.s.conn,'zheshang','login_required',now.isoformat())
+        request_expiry_review(self.s,account,entry,now)
+        self.assertEqual(self.expiry_events(),[])
+        self.fresh_at(now)
+        request_expiry_review(self.s,account,entry,now)
+        self.assertEqual(len(self.expiry_events()),1)
+
     def test_model_input_keeps_compact_structured_previous_advice(self):
         self.saved(self.value(review_conditions=[self.condition()]))
         previous=model_input(self.s.conn,NOW)['accounts']['zheshang']['previous_advice'][0]

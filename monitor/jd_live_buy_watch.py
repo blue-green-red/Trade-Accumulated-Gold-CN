@@ -811,6 +811,7 @@ def request(store, account, advice, now, point):
     from .controls import active, control
     from .jd_live_buy_guard import reviewed_breakout, with_active_routes
     from .jd_live_conditions import read_watch
+    from .jd_live_readonly import review_context_current
 
     at, observed, _, sell = point
     watch = advice.get('buy_watch') or {}
@@ -836,9 +837,7 @@ def request(store, account, advice, now, point):
         if (not active(conn, model) or (changed and created <= changed)
                 or (watch and watch['generation'] != switch['generation'])):
             return
-        latest = conn.execute('SELECT id FROM jd_live_advice WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT 1',
-                              (bank, model)).fetchone()
-        if not latest or latest[0] != advice['id']:
+        if not review_context_current(conn, account, advice):
             return
         key = f'live-buy-watch:{model}:{bank}'
         current = watch_progress(read_watch(conn, key))

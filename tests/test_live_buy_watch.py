@@ -30,6 +30,13 @@ def point(minute, price):
     return at, at + timedelta(seconds=10), price, price
 
 
+def verified_watch_account(conn, **fields):
+    with conn:
+        conn.execute('INSERT INTO jd_live_snapshots VALUES(?,?,?,?)', ('zheshang', START.isoformat(), 'v1', '{}'))
+        conn.execute("UPDATE jd_live_readonly SET public_status='fresh' WHERE bank='zheshang'")
+    return {'bank': 'zheshang', 'connected': True, 'revision': 'v1', **fields}
+
+
 def zoned_route(direction='at_or_below'):
     condition = route(direction)
     condition['buy_review'].update(max_buy_price_cny=804, zone={
@@ -129,8 +136,9 @@ class BuyWatchTests(unittest.TestCase):
                 store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
                                    ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', json.dumps({})))
             advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'snapshot_revision': 'v1',
                       'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': [condition]}
-            account = {'bank': 'zheshang', 'connected': True}
+            account = verified_watch_account(store.conn)
 
             def observe(stream):
                 for minute, price in stream:
@@ -160,8 +168,9 @@ class BuyWatchTests(unittest.TestCase):
                 store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
                                    ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', json.dumps({})))
             advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'snapshot_revision': 'v1',
                       'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': [condition]}
-            account = {'bank': 'zheshang', 'connected': True}
+            account = verified_watch_account(store.conn)
             for minute, price in [(0, 806.1), (1, 806.2), (3, 806.4), (5, 806.4), (7, 806.4)]:
                 quote = point(minute, price)
                 request(store, account, advice, quote[1], quote)
@@ -206,7 +215,7 @@ class BuyWatchTests(unittest.TestCase):
                                    (1, 'zheshang', 'codex', 1, START.isoformat(), deadline, 'v1', json.dumps(advice)))
             self.assertEqual(advice['review_conditions'][:-1], model_conditions)
             self.assertEqual(advice['review_conditions'][-1]['price_cny'], 805)
-            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1', 'quote': {'sell_price_cny': 805}}
+            account = verified_watch_account(store.conn, quote={'sell_price_cny': 805})
             for minute, price in [(0, 805.5), (1, 805.9), (3, 806.4), (4, 806.5)]:
                 quote = point(minute, price)
                 request(store, account, advice, quote[1], quote)
@@ -225,7 +234,7 @@ class BuyWatchTests(unittest.TestCase):
             ensure_schema(store.conn)
             source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
                       'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
-            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+            account = verified_watch_account(store.conn)
 
             def publish(id, minute):
                 now = point(minute, 801)[0]
@@ -277,7 +286,7 @@ class BuyWatchTests(unittest.TestCase):
                 store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
                                    ('zheshang', 'codex', 1, START.isoformat(), action_deadline.isoformat(),
                                     'v1', json.dumps(advice)))
-            account = {'bank': 'zheshang', 'revision': 'v1'}
+            account = verified_watch_account(store.conn)
             request_expiry_review(store, account, advice, action_deadline)
             self.assertEqual(read(store.conn, 'codex')['pending'], [])
             enqueue(store.conn, 'codex', '旧版建议到期', 0, 'live-expired:legacy', {'advice_id': 1})
@@ -294,7 +303,7 @@ class BuyWatchTests(unittest.TestCase):
             ensure_schema(store.conn)
             source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
                       'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
-            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+            account = verified_watch_account(store.conn)
 
             def publish(advice_id, now):
                 deadline = (now + timedelta(minutes=15)).isoformat()
@@ -416,8 +425,9 @@ class BuyWatchTests(unittest.TestCase):
                 store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
                                   ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', json.dumps({})))
             advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'snapshot_revision': 'v1',
                       'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': conditions}
-            account = {'bank': 'zheshang', 'connected': True}
+            account = verified_watch_account(store.conn)
 
             for minute, price in [(0, 799), (1, 805), (2, 804), (3, 804), (4, 804)]:
                 sample = point(minute, price)

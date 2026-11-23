@@ -103,6 +103,33 @@ def cash_anchor(data):
     return hashlib.sha256(json.dumps({k:data.get(k) for k in fields},sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
 
 
+def declared_cash_context(snapshot, declared_at, anchor, invalidated_at):
+    valid = bool(snapshot) and not invalidated_at and anchor == cash_anchor(snapshot)
+    revision = hashlib.sha256((snapshot.get('revision', '') + str(declared_at) + str(valid)).encode()).hexdigest()[:24]
+    return valid, revision
+
+
+def review_context_current(conn, account, advice):
+    """Compare the latest advice and verified account revision under the caller's write lock."""
+    bank = account['bank']
+    if bank not in enabled_banks(conn):
+        return False
+    row = conn.execute('''SELECT a.id,a.snapshot_revision,s.revision,
+        CASE WHEN d.bank IS NOT NULL THEN s.data_json END,d.declared_at,d.anchor,d.invalidated_at
+        FROM jd_live_advice a JOIN jd_live_snapshots s ON s.bank=a.bank
+        JOIN jd_live_readonly r ON r.bank=a.bank AND r.public_status='fresh'
+        LEFT JOIN jd_live_cash_declarations d ON d.bank=a.bank
+        WHERE a.bank=? AND a.analyst=? ORDER BY a.id DESC LIMIT 1''', (bank, advice['analyst'])).fetchone()
+    if not row or row[0] != advice['id']:
+        return False
+    revision = row[2]
+    if row[3] is not None:
+        snapshot = {**json.loads(row[3]), 'revision': revision}
+        if snapshot.get('cash_source') != 'jd_electronic_account_api' or snapshot.get('cash_cny') is None:
+            _, revision = declared_cash_context(snapshot, *row[4:])
+    return row[1] == revision == account.get('revision')
+
+
 def declare_full_position(conn,bank,at=None):
     if bank not in PRODUCTS:raise ValueError('Unknown bank')
     row=conn.execute('SELECT data_json FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()
@@ -220,12 +247,11 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
         api_cash=row['cash_source']=='jd_electronic_account_api' and row.get('cash_cny') is not None
         if declaration and not api_cash:
             row['cash_declared_at']=declaration[2]
-            valid=bool(snap) and not declaration[4] and declaration[3]==cash_anchor(snap)
+            valid,row['revision']=declared_cash_context(snap,*declaration[2:])
             row['cash_cny']=declaration[1] if valid else None
             row['cash_source']='user_declared_full_position' if valid else 'user_declaration_invalidated'
             if valid and row.get('total_grams',0)>0:row['position_pct']=100
             if valid:row['message']='现金0为用户确认当前满仓的声明；完整委托明细仍未知。'
-            row['revision']=hashlib.sha256((snap.get('revision','')+str(declaration[2])+str(valid)).encode()).hexdigest()[:24]
         if api_cash:row['message']='已读取该银行黄金电子账户余额；不含绑定银行卡余额。'
         from .jd_live_risk import account_risk,protection_state
         row['protection_state']=protection_state(row)
