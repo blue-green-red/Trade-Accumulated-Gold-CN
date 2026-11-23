@@ -332,6 +332,12 @@ class BuyWatchTests(unittest.TestCase):
         value = {'action': 'wait', 'order_management': [], 'review_conditions': [condition], 'valid_for_minutes': 15}
         self.assertEqual(validate_structure(value, source, START, minimum_buy_grams=10), [])
         self.assertEqual(condition['buy_review_costs'], {'weak_target_net_cny': 99.1, 'risk_exit_net_cny': -109.85})
+        condition['buy_review'].pop('grams')
+        self.assertEqual(validate_structure(value, source, START, minimum_buy_grams=10), [])
+        self.assertEqual(condition['buy_review_costs'],
+                         {'weak_target_net_cny_per_gram': 9.91, 'risk_exit_net_cny_per_gram': -10.985})
+        self.assertTrue(valid_route(condition, minimum=10))
+        self.assertTrue(validate_structure(value, {**source, 'sell_fee_rate': None}, START, minimum_buy_grams=10))
         value['review_conditions'] = [route()]
         self.assertTrue(validate_structure(value, source, START, minimum_buy_grams=10))
 

@@ -39,8 +39,10 @@ def follow_up(value):
             if zone := review.get('zone'):
                 interval=f"{zone['floor_cny']:g}–{c['price_cny']:g}元/克"
                 trigger=f"突破{c['price_cny']:g}后回踩{interval}" if c['condition']=='at_or_above' else f"回调至{interval}"
+            grams=review.get('grams')
+            decision=f'复评{grams:g}克' if grams is not None else '复评是否加仓及数量'
             reason=(f"守住{review['recovery_price_cny']:g}元/克满{review['hold_minutes']}分钟，"
-                    f"买价≤{review['max_buy_price_cny']:g}元/克时复评{review['grams']:g}克")
+                    f"买价≤{review['max_buy_price_cny']:g}元/克时{decision}")
         else:
             raw=c.get('reason') or ''
             holding=re.match(r'^(?:比较|评估)保留(约?\d+(?:\.\d+)?)%与放弃追增',raw)

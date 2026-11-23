@@ -96,6 +96,7 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
     for condition in value['review_conditions']:
         checks=[];key=condition.get('order_key')
         buy_review = condition.get('buy_review')
+        condition.pop('buy_review_costs',None)
         if buy_review:
             if key or condition['quote_side'] != 'buy':
                 checks.append('买入复评须使用本行买价，且不关联已有挂单')
@@ -103,7 +104,8 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                 checks.append('买价上限不能低于企稳观察价')
             if not buy_review.get('zone') and buy_review['hold_minutes'] >= value['valid_for_minutes']:
                 checks.append('企稳观察时长须短于本轮有效期')
-            if minimum_buy_grams is not None and buy_review['grams'] < minimum_buy_grams:
+            grams=buy_review.get('grams')
+            if minimum_buy_grams is not None and grams is not None and grams < minimum_buy_grams:
                 checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
             trigger=condition['price_cny'];recovery=buy_review['recovery_price_cny']
             cap=buy_review['max_buy_price_cny'];zone=buy_review.get('zone')
@@ -115,8 +117,15 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                     checks.append('回调或回踩区间与企稳价关系无效')
                 if not zone['risk_exit_cny']<=floor or zone['weak_target_cny']<=cap:
                     checks.append('退出测算价应在区间下缘或更低，弱反弹目标须高于买价上限')
-                from .trade_costs import bank_review_payoff
-                if payoff:=bank_review_payoff(cap,buy_review['grams'],zone,source.get('sell_fee_rate')):
+                from .trade_costs import bank_review_payoff, bank_review_unit_payoff
+                fee=source.get('sell_fee_rate')
+                if grams is None:
+                    payoff=bank_review_unit_payoff(cap,zone,fee)
+                    if payoff:
+                        payoff={key:round(amount,4) for key,amount in payoff.items()}
+                else:
+                    payoff=bank_review_payoff(cap,grams,zone,fee)
+                if payoff:
                     condition['buy_review_costs']=payoff
                 else:
                     checks.append('缺本行卖费，无法核对复评候选的扣费空间')

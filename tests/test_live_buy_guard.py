@@ -284,13 +284,13 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(report['by_branch']['breakout_retest'], {'no_advice': 1})
 
     def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None,
-                      basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None):
+                      basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None, review_grams=10):
         revision = accounts(self.conn, at, include_advice=False)[0]['revision']
         source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
         deadline = (at + timedelta(minutes=15)).isoformat()
         conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
-                       'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
+                       'buy_review': {'grams': review_grams, 'recovery_price_cny': 803, 'hold_minutes': 3,
                                       'max_buy_price_cny': max_buy_price, 'zone': {'floor_cny': 797,
                                           'weak_target_cny': 818, 'risk_exit_cny': 796, 'basis': basis}}}]
         if retest_price is not None:
@@ -366,6 +366,24 @@ class BuyGuardTests(unittest.TestCase):
         route, = event['data']['routes']
         self.assertEqual(datetime.fromisoformat(route['signal_expires_at']), cutoff)
         self.assertFalse(pending_events(self.conn, 'codex', cutoff))
+
+    def test_observation_without_quantity_carries_confirmation_and_candidate_deadline(self):
+        self.update_quote(0, 801)
+        cutoff = START + timedelta(minutes=6)
+        original = self.publish_watch(1, START, 799, candidate_until=START + timedelta(minutes=14))
+        self.observe_watch(original, [(1, 799), (2, 803.5), (4, 804), (5, 804.1)])
+        at = START + timedelta(minutes=5, seconds=10)
+        successor = self.publish_watch(2, at, 799, candidate_until=cutoff, review_grams=None)
+        self.assertNotEqual(successor['buy_watch']['id'], original['buy_watch']['id'])
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        event, = pending_events(self.conn, 'codex', at)
+        review, = event['data']['routes']
+        self.assertEqual(event['data']['advice_id'], 2)
+        self.assertIsNone(review['buy_review']['grams'])
+        self.assertEqual(datetime.fromisoformat(review['confirmed_at']), START + timedelta(minutes=5))
+        self.assertEqual(datetime.fromisoformat(review['signal_expires_at']), cutoff)
+        self.assertEqual(pending_events(self.conn, 'codex', cutoff), [])
 
     def test_retest_can_trigger_after_continuation_across_advice_in_the_same_move(self):
         self.update_quote(0, 805.5)

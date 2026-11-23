@@ -90,7 +90,8 @@ def valid_route(condition, minimum=None):
     review = condition.get('buy_review')
     if not review or condition.get('checks') or condition.get('order_key') or condition.get('quote_side') != 'buy':
         return False
-    if minimum is not None and review['grams'] < minimum:
+    grams = number(review.get('grams'))
+    if review.get('grams') is not None and (not grams or minimum is not None and grams < minimum):
         return False
     trigger = condition['price_cny']
     recovery = review['recovery_price_cny']
@@ -179,8 +180,10 @@ def candidate_deadline(advice, condition):
         return None
     entries = {review.get('max_buy_price_cny'), condition.get('threshold_cny', condition.get('price_cny'))}
     risk_exit = (review.get('zone') or {}).get('risk_exit_cny')
+    grams = review.get('grams')
     return min((cutoff for candidate in advice.get('limit_buy_reviews', [])
-                if candidate.get('decision') == 'needs_review' and candidate.get('grams') == review.get('grams')
+                if candidate.get('decision') == 'needs_review'
+                and (grams is None or candidate.get('grams') == grams)
                 and candidate.get('entry_price_cny') in entries and candidate.get('entry_price_cny') is not None
                 and (risk_exit is None or candidate.get('risk_exit_cny') in (None, risk_exit))
                 and (cutoff := stamp(candidate.get('expires_at')))), default=None)
@@ -470,7 +473,7 @@ def replay_observation(conn, account, stage, condition, boundary, now):
 
 def observation_terms(condition):
     breakout = condition.get('bank_breakout') or {}
-    return (condition['condition'], condition['quote_side'], condition['price_cny'], buy_review_terms(condition),
+    return (condition['condition'], condition['quote_side'], condition['price_cny'], *buy_review_terms(condition)[1:],
             breakout.get('retest_ceiling_cny'), breakout.get('hold_minutes'))
 
 
@@ -525,7 +528,9 @@ def carry_entry_observations(conn, model, view_id, now):
             if not extended(condition) or not eligible(condition, minimum):
                 continue
             terms = observation_terms(condition)
-            previous_condition = next((c for c in old_conditions if observation_terms(c) == terms), None)
+            grams = (condition.get('buy_review') or {}).get('grams')
+            previous_condition = next((c for c in old_conditions if observation_terms(c) == terms
+                                       and (grams is None or (c.get('buy_review') or {}).get('grams') in (None, grams))), None)
             if not previous_condition:
                 continue
             mode = condition.get('confirmation_mode')
@@ -549,6 +554,8 @@ def carry_entry_observations(conn, model, view_id, now):
                 route = {**route, 'condition_key': new_key, 'signal_expires_at': utc_text(deadline)}
                 if condition.get('bank_breakout'):
                     route['bank_breakout'] = condition['bank_breakout']
+                if route.get('buy_review') and route['buy_review'].get('grams') != grams:
+                    route['buy_review'] = {**route['buy_review'], 'grams': grams}
                 signals.append(route)
                 progress[new_key] = {**stage, 'event_id': event_id, 'observation_expires_at': utc_text(deadline)}
                 continue

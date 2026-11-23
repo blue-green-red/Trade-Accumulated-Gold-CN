@@ -459,15 +459,17 @@ const proposalState = (order) => {
           </template>
           买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
           {{ c.buy_review.hold_minutes }} 分钟、且不超过
-          {{ num(c.buy_review.max_buy_price_cny) }} 元/克，再评估买入
-          {{ quantity(c.buy_review.grams) }}。跌穿区间下缘则放弃。
+          {{ num(c.buy_review.max_buy_price_cny) }} 元/克，再评估{{
+            c.buy_review.grams == null ? "是否加仓及数量" : "是否买入 " + quantity(c.buy_review.grams)
+          }}。跌穿区间下缘则放弃。
           {{ c.buy_review.zone.basis }}
         </div>
         <div v-else-if="c.buy_review && !c.checks?.length" class="sub">
           {{ c.condition === "at_or_above" ? "突破后等回踩" : "回调触价后等回升" }}，
           买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
-          {{ c.buy_review.hold_minutes }} 分钟，再评估买入
-          {{ quantity(c.buy_review.grams) }}。触价后若超过
+          {{ c.buy_review.hold_minutes }} 分钟，再评估{{
+            c.buy_review.grams == null ? "是否加仓及数量" : "是否买入 " + quantity(c.buy_review.grams)
+          }}。触价后若超过
           {{ num(c.buy_review.max_buy_price_cny) }} 元/克，本轮放弃。
         </div>
         <div v-if="c.monitoring?.last_quote_at" class="live-quote-time">

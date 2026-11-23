@@ -33,7 +33,7 @@ class BuyReviewZone(BaseModel):
     basis:str=Field(min_length=1,max_length=180,description='引用本行哪段近期报价作为区间与目标依据')
 
 class BuyReview(BaseModel):
-    grams:float=Field(gt=0,allow_inf_nan=False)
+    grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False,description='具体待复评候选量；纯观察填null，到价再定量')
     recovery_price_cny:float=Field(gt=0,allow_inf_nan=False,description='本银行买价回收后须守住的价位')
     hold_minutes:int=Field(ge=1,le=60,description='用至少两笔有时间的有效本行买价核对，本轮有效期内可观察的分钟数')
     max_buy_price_cny:float=Field(gt=0,allow_inf_nan=False,description='复评时可接受的最高本行买价，按较弱反弹的扣费空间和失守风险选择，不固定折扣')
@@ -63,7 +63,7 @@ class LiveAdvice(BaseModel):
     price_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
     entry_trigger_key:Optional[str]=Field(default=None,min_length=1,max_length=64,description='加仓依赖的 trigger_events.routes.condition_key，未引用填 null')
     valid_for_minutes:int=Field(default=240,ge=15,le=1440)
-    reason:str=Field(max_length=1600,description='约300–400字。用同一情景比较维持、小幅和较大调整的扣费得失，给等待、减仓或不挂单的依据。省去已列余额、委托参数和价位推导。')
+    reason:str=Field(max_length=1600,description='约300–400字。先比较同情景的每克扣费空间；定量时说明整仓影响。给出取舍依据，省去已列余额、委托参数和价位推导。')
     risk_note:str=Field(max_length=800,description='一句说明会改变本轮建议的风险')
     reassessment:Optional[AdviceReassessment]=None
     position_path:Optional[PositionPath]=Field(default=None,description='新分析填写建仓与退出的关联；无有效账户时null，复用下跌情景，不重复算式')
@@ -80,7 +80,7 @@ class LiveAdviceSet(BaseModel):
 PROMPT="""
 真实账户规则（live_readonly_accounts）：
 - 只为启用且有输入的账户给人工建议，不执行交易，无输入填null。按risk_profile争取扣费净值增长，允许提前布局、逆势和分批，不要求确认底部、趋势反转或多项利好同时出现，不强制交易。峰值未知不判定回撤触线，成本浮亏单列。
-- minimum_buy_grams是单笔下限。首笔比较不买、起购量和有依据的较大规模，按扣费得失与整仓风险定量。追加用新报价、仓位和独立依据。参考previous_advice.strategy_review，用完整中文说明。
+- minimum_buy_grams只约束建议下限。按本轮机会和整仓风险定量。追加用新报价、仓位和独立依据。参考previous_advice.strategy_review，用完整中文说明。
 - account_risk约束整户扣费净值损失，不直接换算金价折扣或退出幅度。低仓位不自动买卖。拒绝现价仍独立比较低位加仓、持有、退出。压力价不直接作买点或止损，无依据可留空。
 - limit_buy_reviews只评本轮低位候选。旧候选沿用、改动及触价后仍等待须说明新增依据，废弃只在reassessment说明。百分比情景说明适用性，勿随现价固定折价下移。退出可按假设失效或自选损失，不强求独立技术位。现价适合用buy，提前挂买用recommend并给同参买单，不值得用not_worthwhile。有具体待核验前提才用needs_review，未知填null。
 - 现金以本户cash_cny/cash_source为准，现金为0不新增买入。即时买入资金未知可留空数量并说明。买单须有确认资金，卖出不超可卖克数。与现有委托及本轮买卖合计占用，不借待卖收入或别户资金，不重复挂单。过期数据给wait，历史样本只作参考。

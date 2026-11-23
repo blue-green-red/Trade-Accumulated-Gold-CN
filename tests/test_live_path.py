@@ -151,6 +151,10 @@ class LivePathTests(unittest.TestCase):
         model_previous=model_input(self.f.s.conn,fixtures.NOW)['accounts']['zheshang']['previous_advice'][0]
         self.assertEqual(model_previous['review_conditions'][0]['buy_review'],review)
         self.assertIn('买价≤845元/克时复评10克',follow_up(v))
+        v=self.saved(review_conditions=[{**condition,'buy_review':{**review,'grams':None}}],valid_for_minutes=15)
+        self.assertEqual(v['checks'],[])
+        self.assertIsNone(v['review_conditions'][0]['buy_review']['grams'])
+        self.assertIn('买价≤845元/克时复评是否加仓及数量',follow_up(v))
         for changes in ({'max_buy_price_cny':837},{'hold_minutes':15},{'grams':9}):
             bad={**condition,'buy_review':{**review,**changes}}
             v=self.saved(review_conditions=[bad],valid_for_minutes=15)

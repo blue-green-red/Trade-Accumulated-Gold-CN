@@ -217,10 +217,12 @@ class BankMoveReviewTests(unittest.TestCase):
         self.assertFalse(any(e['id'].startswith('live-plan-review:') for e in read(self.s.conn,'codex')['pending']))
 
     def test_prompt_uses_bank_quotes_to_evaluate_both_routes_without_forcing_trade(self):
-        from monitor.trade_costs import PROMPT as COMPARISON_PROMPT
+        from monitor.trade_costs import LIVE_PROMPT as COMPARISON_PROMPT
         self.assertEqual(PROMPT.count('previous_advice.strategy_review'),1)
-        self.assertIn('minimum_buy_grams是单笔下限',PROMPT)
-        self.assertIn('首笔比较不买、起购量和有依据的较大规模',PROMPT)
+        self.assertIn('minimum_buy_grams只约束建议下限',PROMPT)
+        self.assertIn('起购量、旧数量和倍数不作目标',COMPARISON_PROMPT)
+        self.assertIn('定成交后目标仓位，换算本批克数',COMPARISON_PROMPT)
+        self.assertIn('观察可到价再定量',COMPARISON_PROMPT)
         self.assertIn('追加用新报价、仓位和独立依据',PROMPT)
         self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
@@ -263,6 +265,10 @@ class BankReviewBrowserTests(unittest.TestCase):
             value={'action':'hold','grams':None,'price_condition':'reference','price_cny':999,'valid_for_minutes':240,
                    'reason':'等待、现价部分减仓与退出的扣费比较','risk_note':'情景有不确定性',
                    'reassessment':{'change_summary':'重新核验当前证据','thesis_status':'weakened','thesis':'反弹假设减弱','price_basis':'沿用目标需要新的证据'},
+                   'review_conditions':[{'condition':'at_or_below','price_cny':830,'quote_side':'buy',
+                       'buy_review':{'recovery_price_cny':833,'max_buy_price_cny':837,'hold_minutes':3,'zone':{
+                           'floor_cny':828,'weak_target_cny':850,'risk_exit_cny':826,'basis':'本行回调区间。'}},
+                       'reason':'回调企稳后再定量。'}],
                    'suggested_orders':[{'kind':'limit_sell','grams':2,'price_cny':875,'expires_at':(now+timedelta(days=1)).isoformat(),'reason':'反弹兑现假设'}]}
             for i in range(3):
                 at=now-timedelta(minutes=2-i)
@@ -282,6 +288,7 @@ class BankReviewBrowserTests(unittest.TestCase):
                 self.assertIn('-0.59%',page.locator('#panel-strategies').inner_text())
                 self.assertIn('同一交易方案连续 2 轮',page.locator('#panel-strategies').inner_text())
                 self.assertIn('本轮重点复核旧价位',page.locator('#panel-strategies').inner_text())
+                self.assertIn('再评估是否加仓及数量',page.locator('#panel-strategies').inner_text())
                 self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                 page.get_by_role('tab',name='AI',exact=True).click()
                 page.get_by_role('tab',name='模型控制',exact=True).click()
