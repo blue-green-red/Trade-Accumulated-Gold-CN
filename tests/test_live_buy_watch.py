@@ -360,6 +360,37 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(result[key], 801.5 * .996)
         self.assertNotIn(key, no_fee)
 
+    def test_earlier_bank_ranges_keep_sampling_coverage_and_side(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'price-ranges.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            anchor = START + timedelta(hours=4)
+            now = anchor + timedelta(seconds=15)
+            friday = START - timedelta(days=3)
+            for bank, at, buy, sell in (
+                    ('zheshang', friday, 790, 789), ('zheshang', friday + timedelta(minutes=30), 791, 790),
+                    ('zheshang', friday + timedelta(hours=1), 793, 792),
+                    ('zheshang', START, 803, 802), ('zheshang', START + timedelta(hours=1), 800, 799),
+                    ('zheshang', START + timedelta(hours=3), 825, 824),
+                    ('minsheng', START + timedelta(hours=2), 999, 998),
+                    ('zheshang', anchor - timedelta(minutes=3), 806, 805),
+                    ('zheshang', anchor - timedelta(minutes=2), 807, 806),
+                    ('zheshang', anchor - timedelta(minutes=1), 805, 804)):
+                record(store.conn, bank, (at, at + timedelta(seconds=1), buy, sell))
+            late = START + timedelta(hours=2)
+            record(store.conn, 'zheshang', (late, now + timedelta(seconds=1), 950, 949))
+            account = {'bank': 'zheshang', 'connected': True, 'sell_fee_rate': .004,
+                       'quote': {'status': 'fresh', 'quoted_at': anchor.isoformat(),
+                                 'buy_price_cny': 805, 'sell_price_cny': 804}}
+            context = quote_context(store.conn, account, now)
+            today, previous = context['earlier_sampled_ranges']
+            self.assertEqual((today['buy_low_cny'], today['sell_high_cny'], today['n']), (800, 824, 3))
+            self.assertEqual(datetime.fromisoformat(today['to']), anchor - timedelta(hours=1))
+            self.assertEqual((previous['buy_low_cny'], previous['sell_high_cny'], previous['n']), (790, 792, 3))
+            self.assertEqual(datetime.fromisoformat(previous['from']), friday)
+            self.assertEqual(context['break_even_buy_at_sampled_sell_high_cny'], 806 * .996)
+
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'test.db')

@@ -55,6 +55,26 @@ def quote_tape(conn, bank, after, point):
     return [(stamp(at), buy, sell) for at, (buy, sell) in sorted(quotes.items())]
 
 
+def earlier_sampled_ranges(conn, bank, before, now):
+    """Preserve the coverage of earlier Beijing-date samples, not official daily extrema."""
+    rows = conn.execute('''
+        SELECT MIN(quoted_at),MAX(quoted_at),COUNT(*),MIN(buy_price_cny),MAX(sell_price_cny)
+        FROM jd_live_quote_samples
+        WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=?
+        GROUP BY date(quoted_at,'+8 hours')
+        HAVING COUNT(*)>=3
+        ORDER BY MAX(quoted_at) DESC
+        ''', (bank, utc_text(before - timedelta(days=7)), utc_text(before), utc_text(now)))
+    ranges = []
+    for first, last, count, low, high in rows:
+        if stamp(last) - stamp(first) < timedelta(minutes=15):
+            continue
+        ranges.append({'from': first, 'to': last, 'n': count, 'buy_low_cny': low, 'sell_high_cny': high})
+        if len(ranges) == 2:
+            break
+    return ranges
+
+
 def quote_context(conn, account, now):
     """Compact price history and fee-adjusted rebound reference aligned to the current bank quote."""
     current = sample(account, now)
@@ -83,6 +103,8 @@ def quote_context(conn, account, now):
                                        for left, right in zip(points, points[1:])), default=None)}
     if available and (ref := cost_reference(max(s for _, _, s in tape), account.get('sell_fee_rate'))):
         context['break_even_buy_at_sampled_sell_high_cny'] = ref['net_sell_price_cny']
+    if has_samples and (ranges := earlier_sampled_ranges(conn, account['bank'], start, now)):
+        context['earlier_sampled_ranges'] = ranges
     return context
 
 
