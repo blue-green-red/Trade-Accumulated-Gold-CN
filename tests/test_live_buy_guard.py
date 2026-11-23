@@ -1323,6 +1323,57 @@ class BuyGuardTests(unittest.TestCase):
         notifier.send.assert_called_once()
         self.assertEqual(tuple(self.conn.execute('SELECT status,attempts FROM notification_outbox').fetchone()), ('cancelled', 1))
 
+    def test_retest_only_buy_without_a_limit_pauses_above_the_input_band(self):
+        from monitor.jd_live_review import request_reviews
+
+        rule = {'hold_minutes': 3, 'retest_ceiling_cny': 806}
+        retest = self.route(condition_key='retest', bank_breakout=rule, confirmation_mode='retest')
+        self.update_quote(0, 805.8)
+        self.save_advice(condition='reference', routes=[retest], basis='retest')
+        self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=START)), 1)
+        self.update_quote(1, 806.1)
+        now = START + timedelta(minutes=1)
+        view = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(view['action_status'], 'review_required')
+        self.assertIn('涨出本轮分析的回踩区', view['entry_pause_reason'])
+        self.assertEqual(notification_events(self.conn, 'codex', 1, now=now), [])
+        self.store.set_state('ai_status:codex', {'available': True})
+        request_reviews(self.store, now, settings=self.settings)
+        request_reviews(self.store, now, settings=self.settings)
+        event, = pending_events(self.conn, 'codex', now)
+        self.assertEqual(event['id'], 'live-retest-reprice:codex:zheshang:1')
+
+        self.update_quote(2, 806)
+        now = START + timedelta(minutes=2)
+        view = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(view['action_status'], 'current')
+        self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=now)), 1)
+        self.assertEqual(pending_events(self.conn, 'codex', now), [])
+
+    def test_retest_band_does_not_override_an_explicit_limit_or_broader_basis(self):
+        rule = {'hold_minutes': 3, 'retest_ceiling_cny': 805.9}
+        retest = self.route(condition_key='retest', bank_breakout=rule, confirmation_mode='retest')
+        continuation = self.route(condition_key='continuation', bank_breakout=rule, confirmation_mode='continuation')
+        self.update_quote(0, 805.8)
+        self.save_advice(condition='at_or_below', routes=[retest], basis='retest')
+        self.update_quote(1, 805.95)
+        now = START + timedelta(minutes=1)
+        view = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(view['action_status'], 'current')
+
+        self.save_advice(condition='reference', routes=[retest], basis='retest', view=2, now=now)
+        self.update_quote(2, 806.1)
+        now = START + timedelta(minutes=2)
+        view = accounts(self.conn, now, selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(view['action_status'], 'current')
+
+        self.update_quote(3, 805.8)
+        self.save_advice(condition='reference', routes=[retest, continuation], basis='continuation', view=3,
+                         now=START + timedelta(minutes=3))
+        self.update_quote(4, 806.3)
+        view = accounts(self.conn, START + timedelta(minutes=4), selected_bank='zheshang')[0]['advice'][0]
+        self.assertEqual(view['action_status'], 'current')
+
     def test_broken_entry_trigger_removes_unpublished_buy_draft_but_keeps_sell_notice(self):
         self.update_quote(0, 806)
         until = (START + timedelta(hours=1)).isoformat()

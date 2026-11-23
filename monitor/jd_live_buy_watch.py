@@ -639,6 +639,11 @@ def pending_events(conn, model, now):
 
     def validated(event):
         event_id, data = event['id'], event.get('data') or {}
+        if event_id.startswith('live-retest-reprice:'):
+            current = accounts(conn, now, selected_bank=data['bank'])
+            return event if any(advice['id'] == data['advice_id'] and advice['analyst'] == model
+                                and advice.get('retest_reprice_needed') for account in current
+                                for advice in account['advice']) else None
         if event_id.startswith('live-price:'):
             if data.get('buy_review'):
                 return None

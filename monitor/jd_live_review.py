@@ -59,6 +59,10 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
                 if ready:
                     from .jd_live_expiry import request_expiry_review
                     request_expiry_review(store,account,advice,now)
+                    if advice.get('retest_reprice_needed'):
+                        enqueue(store.conn,model,f'真实账户回踩买价已涨出区间，按新报价复评：{PRODUCTS[bank][1]}',0,
+                                event_id=f'live-retest-reprice:{model}:{bank}:{advice["id"]}',
+                                payload={**data,'advice_id':advice['id']})
                 if ready and not (advice.get('input_strategy_review') or {}).get('revalidate_unchanged_plan'):
                     from .jd_live_feedback import strategy_review
                     feedback=strategy_review(store.conn,account,model,now)

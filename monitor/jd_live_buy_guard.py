@@ -3,7 +3,8 @@ from collections import defaultdict
 from datetime import datetime
 import json
 
-from .jd_live_buy_watch import MAX_GAP, breakout_key, entry_review_reason, quote_tape, sample, watch_progress
+from .jd_live_buy_watch import (MAX_GAP, breakout_key, breakout_retest_price_status, entry_review_reason,
+                                quote_tape, sample, watch_progress)
 from .jd_live_conditions import stamp
 
 
@@ -393,6 +394,7 @@ def current_entry_state(conn, account, advice, now):
     quote_at = stamp(quote.get('quoted_at'))
     price = number(quote.get('buy_price_cny'))
     input_at = stamp(advice.get('input_quote_at'))
+    input_price = number(advice.get('input_buy_quote_cny'))
     limit = advice.get('price_cny')
     if (quote.get('status') != 'fresh' or not price or not quote_at or
             (input_at and quote_at < input_at) or not trading_session(now)['is_open']):
@@ -401,6 +403,11 @@ def current_entry_state(conn, account, advice, now):
         warning = f'当前本行买价{price:g}元/克超过建议上限{limit:g}元/克，暂停按该建议买入'
     elif limit is not None and advice.get('price_condition') == 'at_or_above' and price < limit:
         warning = f'当前本行买价{price:g}元/克低于建议触发价{limit:g}元/克，等待条件成立'
+    elif (advice.get('price_condition') != 'at_or_below' and routes and all(
+            breakout_retest_price_status(route, input_price) == 'within_retest_zone'
+            and breakout_retest_price_status(route, price) == 'above_retest_zone' for route in routes)):
+        warning = '当前本行买价已涨出本轮分析的回踩区，请按新报价复评'
+        advice['retest_reprice_needed'] = True
     else:
         return
     checks.append(warning)
