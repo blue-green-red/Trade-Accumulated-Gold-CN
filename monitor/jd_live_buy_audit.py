@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from .config import Settings
-from .jd_live_buy_watch import MAX_GAP, advance, extended, utc_text, valid_route
+from .jd_live_buy_watch import MAX_GAP, advance, eligible, extended, utc_text
 from .jd_live_conditions import stamp
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
 from .participation_audit import horizon_at, readonly
@@ -40,11 +40,11 @@ def entries(value, published, expires, quotes, now):
     minimum = number(value.get('input_minimum_buy_grams'))
     cash = number(value.get('input_participation_cash_cny'))
     if minimum and minimum > GRAMS:
-        return [unavailable('below_bank_minimum')] * 2
+        return unavailable('below_bank_minimum'), unavailable('below_bank_minimum'), None
     if (value.get('input_data_status') or {}).get('account') != 'fresh' or value.get('input_quote_status') != 'fresh':
-        return [unavailable('input_not_fresh')] * 2
+        return unavailable('input_not_fresh'), unavailable('input_not_fresh'), None
     if cash is None or fee is None or fee >= 1:
-        return [unavailable('cash_or_fee_unknown')] * 2
+        return unavailable('cash_or_fee_unknown'), unavailable('cash_or_fee_unknown'), None
 
     actionable = [p for p in quotes if published <= p[0] <= p[1] < expires]
     first = next((p for p in actionable if p[1] - published <= MAX_GAP), None)
@@ -54,17 +54,21 @@ def entries(value, published, expires, quotes, now):
         immediate = unavailable('pending' if now < min(expires, published + MAX_GAP) else 'publication_quote_missing')
 
     from .jd_live_semantics import blocking_checks
-    routes = [c for c in value.get('review_conditions', []) if valid_route(c, minimum)]
+    routes = [c for c in value.get('review_conditions', []) if eligible(c, minimum)]
     if not routes or blocking_checks(value):
-        return immediate, unavailable('no_valid_buy_review')
+        return immediate, unavailable('no_valid_buy_review'), None
 
     watch_end = stamp((value.get('buy_watch') or {}).get('expires_at'))
     deadlines = [watch_end if watch_end and extended(route) else expires for route in routes]
     last_deadline = max(deadlines)
+    boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
     actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline]
     states = [{} for _ in routes]
     too_expensive = False
     for point in actionable:
+        if watch_end and boundary is not None and point[3] <= boundary:
+            last_deadline = point[1]
+            break
         for i, route in enumerate(routes):
             if point[1] >= deadlines[i]:
                 continue
@@ -72,13 +76,14 @@ def entries(value, published, expires, quotes, now):
             states[i] = advance(previous, route, point[0], point[2])
             if states[i].get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 if point[2] * GRAMS <= cash:
-                    return immediate, point
+                    branch = review_branch({**route, 'confirmation_mode': states[i].get('confirmation_mode')})
+                    return immediate, point, branch
                 too_expensive = True
     if now < last_deadline:
-        return immediate, unavailable('pending')
+        return immediate, unavailable('pending'), None
     if not complete_sampling(published, last_deadline, actionable):
-        return immediate, unavailable('confirmation_quotes_missing')
-    return immediate, unavailable('insufficient_input_cash' if too_expensive else 'no_confirmation')
+        return immediate, unavailable('confirmation_quotes_missing'), None
+    return immediate, unavailable('insufficient_input_cash' if too_expensive else 'no_confirmation'), None
 
 
 def mark(entry, exit_quote, fee, quotes):
@@ -100,7 +105,7 @@ def mark(entry, exit_quote, fee, quotes):
 
 
 def evaluate(value, published, expires, quotes, now):
-    immediate, confirmed = entries(value, published, expires, quotes, now)
+    immediate, confirmed, branch = entries(value, published, expires, quotes, now)
     fee = number(value.get('input_sell_fee_rate'))
     horizons = []
     for days in (1, 3):
@@ -110,6 +115,8 @@ def evaluate(value, published, expires, quotes, now):
             target = stamp(session['next_open'])
         exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= target + MAX_GAP), None)
         row = {'trading_days': days, 'target_at': target.isoformat(), 'wait': {'status': 'valued', 'net_cny': 0.0}}
+        if branch:
+            row['confirmation_branch'] = branch
         if exit_quote:
             row['exit_quote_at'] = utc_text(exit_quote[0])
         for label, entry in (('immediate_10g', immediate), ('confirmed_10g', confirmed)):

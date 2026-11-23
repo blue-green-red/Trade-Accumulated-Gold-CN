@@ -413,3 +413,24 @@ class BuyAuditTests(unittest.TestCase):
         rows = evaluate(value, START, end, sparse, START + timedelta(days=4))
         self.assertEqual(rows[0]['immediate_10g']['status'], 'publication_quote_missing')
         self.assertEqual(rows[0]['confirmed_10g']['status'], 'confirmation_quotes_missing')
+
+    def test_replay_values_program_breakout_and_respects_position_boundary(self):
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        end = START + timedelta(minutes=2)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                 'buy_watch': {'expires_at': (START + timedelta(hours=1)).isoformat()},
+                 'review_conditions': [condition]}
+        samples = [point(m, p) for m, p in [(0, 804), (1, 805.5), (2, 806), (4, 806.4),
+                                             (1441, 812), (4321, 790)]]
+        rows = evaluate(value, START, end, samples, START + timedelta(days=4))
+        for row, price in zip(rows, (812, 790)):
+            self.assertEqual(row['confirmation_branch'], 'breakout_continuation')
+            self.assertEqual(row['confirmed_10g']['entry_cny_per_gram'], 806.4)
+            self.assertEqual(row['confirmed_10g']['net_cny'], round(10 * (price * .995 - 806.4), 2))
+
+        value['position_path'] = {'boundary_price_cny': 804}
+        rows = evaluate(value, START, end, samples, START + timedelta(days=4))
+        self.assertNotIn('confirmation_branch', rows[0])
+        self.assertEqual(rows[0]['confirmed_10g'], {'status': 'no_confirmation', 'net_cny': 0.0})
