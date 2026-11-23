@@ -32,7 +32,8 @@ def request_expiry_review(store,account,advice,now):
         observation=advice.get('buy_watch')
         if observation and observation_only(advice):
             if now<stamp(observation['expires_at']):return
-            event_id=f'live-watch-expired:{model}:{bank}:{observation["id"]}'
+            origin=observation.get('expiry_review_plan_id',observation['id'])
+            event_id=f'live-watch-expired:{model}:{bank}:{origin}'
             events=read(conn,model)
             if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
                 events['pending'].append({'id':event_id,'reason':f'真实账户观察到期复评：{PRODUCTS[bank][1]}',

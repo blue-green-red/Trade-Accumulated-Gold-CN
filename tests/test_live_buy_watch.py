@@ -281,6 +281,47 @@ class BuyWatchTests(unittest.TestCase):
             events = read(store.conn, 'codex')['pending']
             self.assertEqual([e['id'] for e in events], ['live-watch-expired:codex:zheshang:one-plan'])
 
+    def test_same_plan_reopens_after_expiry_without_another_timer_review(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
+                      'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+
+            def publish(advice_id, now):
+                deadline = (now + timedelta(minutes=15)).isoformat()
+                advice = {'id': advice_id, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                          'snapshot_revision': 'v1', 'created_at': now.isoformat(), 'expires_at': deadline,
+                          'action': 'hold', 'schema_version': 6, 'valid_for_minutes': 15, 'review_conditions': []}
+                with store.conn:
+                    set_watch(store.conn, 'zheshang', 'codex', advice, source, now, 10)
+                    store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                        (advice_id, 'zheshang', 'codex', advice_id, now.isoformat(), deadline, 'v1', json.dumps(advice)))
+                return advice
+
+            first = publish(1, START)
+            expiry = START + timedelta(hours=1)
+            request_expiry_review(store, account, first, expiry)
+            expiry_event = read(store.conn, 'codex')['pending'][0]['id']
+            renewed = publish(2, expiry + timedelta(minutes=2))
+            self.assertNotEqual(first['buy_watch']['id'], renewed['buy_watch']['id'])
+            self.assertEqual(first['buy_watch']['signature'], renewed['buy_watch']['signature'])
+            with store.conn:
+                acknowledge(store.conn, 'codex', [expiry_event])
+            for minute, price in [(62, 805.5), (63, 806), (65, 806.5)]:
+                quote = point(minute, price)
+                request(store, account, renewed, quote[1], quote)
+            events = read(store.conn, 'codex')['pending']
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]['data']['routes'][0]['confirmation_mode'], 'continuation')
+            self.assertEqual(events[0]['data']['plan_id'], renewed['buy_watch']['id'])
+            with store.conn:
+                acknowledge(store.conn, 'codex', [events[0]['id']])
+            request_expiry_review(store, account, renewed, expiry + timedelta(hours=1, minutes=2))
+            self.assertEqual(read(store.conn, 'codex')['pending'], [])
+
     def test_new_route_requires_recent_bank_context_and_calculates_with_fee(self):
         condition = zoned_route('at_or_above')
         source = {'sell_fee_rate': .005, 'recent_bank_quotes': {'status': 'available'}}

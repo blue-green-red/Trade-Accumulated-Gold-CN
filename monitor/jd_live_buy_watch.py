@@ -131,7 +131,7 @@ def watch_deadline(advice, condition):
 
 
 def set_watch(conn, bank, analyst, value, source, now, minimum):
-    """Save a bounded observation plan and retain its origin across identical advice."""
+    """Keep a live window across identical advice and reopen it once expired."""
     from .controls import control
     from .trading_hours import trading_session
     session = trading_session(now)
@@ -145,6 +145,8 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     prior_watch = previous.get('buy_watch') or {}
     if prior_watch.get('generation') != generation:
         previous, prior_watch = {}, {}
+    prior_end = stamp(prior_watch.get('expires_at'))
+    prior_active = prior_end is not None and now < prior_end
     conditions = value['review_conditions']
     evidence = source.get('recent_bank_quotes') or {}
     invalidated = (value.get('reassessment') or {}).get('thesis_status') == 'invalidated'
@@ -153,7 +155,7 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     # The model's condition limit does not include this program-managed observation.
     if value['action'] in ('wait', 'hold') and evidence.get('status') == 'available':
         prior = next((c for c in previous.get('review_conditions', []) if c.get('bank_breakout')), None)
-        if prior and stamp(prior_watch.get('expires_at')) > now:
+        if prior and prior_active:
             conditions.append(prior)
         else:
             windows = evidence['buy_price_windows_15m']
@@ -183,7 +185,8 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     path = value.get('position_path') or {}
     fingerprint = sha256(json.dumps([value['action'], path.get('boundary_price_cny'), terms],
                                     sort_keys=True).encode()).hexdigest()[:24]
-    if prior_watch.get('signature') == fingerprint:
+    same_plan = prior_watch.get('signature') == fingerprint
+    if same_plan and prior_active:
         value['buy_watch'] = prior_watch
         return
     duration = max(WATCH_WINDOW, timedelta(minutes=value['valid_for_minutes']))
@@ -192,6 +195,8 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
                           'starts_at': utc_text(now),
                           'expires_at': utc_text(min(now + duration, close)),
                           'generation': generation}
+    if same_plan:
+        value['buy_watch']['expiry_review_plan_id'] = prior_watch.get('expiry_review_plan_id', prior_watch['id'])
 
 
 def failed_breakout(at, buy):
