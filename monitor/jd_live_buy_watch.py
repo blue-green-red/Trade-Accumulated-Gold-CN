@@ -692,6 +692,14 @@ def pending_events(conn, model, now):
     return pending
 
 
+def stage_before_deadline(step, deadline):
+    last = stamp(step.get('last_at'))
+    original = stamp(step.get('observation_expires_at'))
+    if last and last < deadline and (original is None or deadline <= original):
+        return step.get('stage')
+    return None
+
+
 def retain_expired_progress(current, advice, now):
     expired={}
     for condition in advice.get('review_conditions', []):
@@ -699,14 +707,11 @@ def retain_expired_progress(current, advice, now):
             continue
         key=watch_route_key(condition)
         step=current['routes'].get(key,{})
-        last=stamp(step.get('last_at'))
-        original=stamp(step.get('observation_expires_at'))
-        if step.get('stage') and last and last<deadline and original in (None,deadline):
-            expired[key]={'stage':step['stage'],'expires_at':utc_text(deadline)}
+        if stage:=stage_before_deadline(step,deadline):
+            expired[key]={'stage':stage,'expires_at':utc_text(deadline)}
         else:
             prior=current.get('expired_routes',{}).get(key,{})
-            if stamp(prior.get('expires_at'))==deadline:
-                expired[key]=prior
+            expired[key]=prior if stamp(prior.get('expires_at'))==deadline else {'expires_at':utc_text(deadline)}
     if expired:
         current['expired_routes']=expired
     else:
@@ -761,6 +766,7 @@ def request(store, account, advice, now, point):
         if at <= cursor:
             return
         tape = quote_tape(conn, bank, cursor, point)
+        expired_routes = current.get('expired_routes', {})
         if watch:
             retain_expired_progress(current,advice,observed)
         current['last_quote_at'] = utc_text(at)
@@ -779,12 +785,16 @@ def request(store, account, advice, now, point):
             route_tape = tape
             if not previous and tape[0][0] < created:
                 route_tape = [quote for quote in tape if quote[0] >= created]
-            if (deadline := stamp(previous.get('observation_expires_at'))) and observed >= deadline:
-                if at < deadline:
-                    updated[fingerprint] = previous
+            deadline = stamp(previous.get('observation_expires_at') or expired_routes.get(fingerprint, {}).get('expires_at'))
+            if deadline and observed >= deadline:
+                start = max(deadline, published)
+                if at < start:
+                    updated[fingerprint] = previous or {'observation_expires_at': utc_text(deadline)}
                     continue
                 previous = {}
-                route_tape = [quote for quote in tape if quote[0] >= max(deadline, published)]
+                route_tape = [quote for quote in tape if quote[0] >= start]
+                if zoned_pullback(condition):
+                    reviewed.pop(fingerprint, None)
                 deadline = None
             if (candidate := candidate_deadline(advice, condition)) and not previous:
                 route_tape = [quote for quote in route_tape if quote[0] >= published]
@@ -795,8 +805,8 @@ def request(store, account, advice, now, point):
             step, confirmation_price, reentered = advance_observation(condition, route_tape, previous)
             if reentered:
                 reviewed.pop(fingerprint, None)
-            if step and candidate:
-                step['observation_expires_at'] = utc_text(min(deadline, candidate) if deadline else candidate)
+            if step and (deadline or candidate):
+                step['observation_expires_at'] = utc_text(min(deadline, candidate) if deadline and candidate else deadline or candidate)
             if (step.get('stage') == 'confirmed' and confirmation_price is not None
                     and fingerprint not in reviewed):
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(

@@ -420,9 +420,13 @@ class BuyGuardTests(unittest.TestCase):
                          {'status': 'expired', 'confirmation_stage': 'confirmed', 'expires_at': cutoff.isoformat()})
 
     def test_reissued_low_entry_after_its_deadline_requires_new_recovery(self):
-        self.update_quote(0, 801)
+        self.update_quote(0, 799)
         advice = self.publish_watch(1, START, 799, candidate_until=START + timedelta(minutes=5))
-        self.observe_watch(advice, [(1, 799), (2, 803.5), (4, 804)])
+        self.observe_watch(advice, [(0, 799), (1, 803.5), (4, 804)])
+        first, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
         self.update_quote(6, 804.2)
         later = self.publish_watch(2, START + timedelta(minutes=6), 799, candidate_until=START + timedelta(minutes=14))
         self.assertEqual(later['buy_watch']['id'], advice['buy_watch']['id'])
@@ -431,8 +435,45 @@ class BuyGuardTests(unittest.TestCase):
         self.observe_watch(later, [(8, 799), (9, 803.5), (11, 804), (12, 804.2)])
         event, = pending_events(self.conn, 'codex', START + timedelta(minutes=12))
         low, = event['data']['routes']
+        self.assertNotEqual(event['id'], first['id'])
         self.assertEqual(datetime.fromisoformat(low['confirmed_at']), START + timedelta(minutes=12))
         self.assertEqual(datetime.fromisoformat(low['signal_expires_at']), START + timedelta(minutes=14))
+
+    def test_untouched_expired_observation_retains_its_deadline_without_a_stage(self):
+        self.update_quote(0, 801)
+        end = START + timedelta(minutes=5)
+        advice = self.publish_watch(1, START, 799, candidate_until=end)
+        self.observe_watch(advice, [(1, 801), (3, 802), (6, 802)])
+        at = START + timedelta(minutes=6)
+        previous = model_input(self.conn, at)['accounts']['zheshang']['previous_advice'][0]
+        self.assertEqual(previous['review_conditions'][0]['monitoring'],
+                         {'status': 'expired', 'expires_at': end.isoformat()})
+
+    def test_reissued_low_observation_rejects_a_delayed_quote_from_before_publication(self):
+        self.update_quote(0, 799)
+        advice = self.publish_watch(1, START, 799, candidate_until=START + timedelta(minutes=5))
+        self.observe_watch(advice, [(0, 799), (1, 803.5), (4, 804), (5.5, 804)])
+        fingerprint = condition_key(advice['review_conditions'][0])
+        state = read_watch(self.conn, 'live-buy-watch:codex:zheshang')
+        self.assertNotIn(fingerprint, state['routes'])
+        self.assertIn(fingerprint, state['expired_routes'])
+
+        later = self.publish_watch(2, START + timedelta(minutes=6), 799)
+        self.assertEqual(later['buy_watch']['id'], advice['buy_watch']['id'])
+        stamped, received = START + timedelta(minutes=5.75), START + timedelta(minutes=6.25)
+        self.update_quote(5.75, 799)
+        with self.conn:
+            self.conn.execute('UPDATE jd_live_quote_samples SET observed_at=? WHERE bank=? AND quoted_at=?',
+                              (received.isoformat(timespec='microseconds'), 'zheshang', stamped.isoformat(timespec='microseconds')))
+        account = accounts(self.conn, received, include_advice=False)[0]
+        request(self.store, account, later, received, (stamped, received, 799, 799))
+        self.observe_watch(later, [(7, 803.5), (8, 804), (10, 804.2)])
+        self.assertEqual(pending_events(self.conn, 'codex', START + timedelta(minutes=10)), [])
+
+        self.observe_watch(later, [(11, 799), (12, 803.5), (15, 804)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=15))
+        low, = event['data']['routes']
+        self.assertEqual(datetime.fromisoformat(low['touched_at']), START + timedelta(minutes=11))
 
     def test_carried_low_entry_keeps_its_earlier_candidate_deadline(self):
         self.update_quote(0, 801)
