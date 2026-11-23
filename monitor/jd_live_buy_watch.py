@@ -392,8 +392,11 @@ def request(store, account, advice, now, point):
             previous = current['routes'].get(fingerprint, {})
             step = advance(previous, condition, at, buy)
             review = condition.get('buy_review')
-            if previous.get('stage') == 'confirmed' and at > stamp(previous['last_at']):
-                if condition.get('bank_breakout') and buy < condition['price_cny']:
+            last = stamp(previous.get('last_at'))
+            if previous.get('stage') == 'confirmed' and last and at > last:
+                if at - last > MAX_GAP:
+                    step = advance({}, condition, at, buy)
+                elif condition.get('bank_breakout') and buy < condition['price_cny']:
                     step = failed_breakout(at, buy)
                 elif review and buy > review['max_buy_price_cny']:
                     step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
@@ -402,6 +405,8 @@ def request(store, account, advice, now, point):
                             'last_price_cny': buy, 'hold_since': None, 'confirmed_at': None}
                     if buy < review['zone']['floor_cny']:
                         step['stage'] = 'pullback_lost'
+                else:
+                    step = {**previous, 'last_at': utc_text(at), 'last_price_cny': buy}
             updated[fingerprint] = step
             if step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 confirmed.append({'condition_key': fingerprint, 'condition': condition['condition'],

@@ -95,7 +95,7 @@ def prompt_for(context):
 
 
 
-def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
+def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entry_warnings=None):
     if not inputs:return
     now=now or datetime.now(timezone.utc)
     from .jd_live_readonly import enabled_banks,buy_minimums
@@ -157,6 +157,9 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         annotate(value,source)
         value['input_protection']=protection_state(source)
         value['checks']=warnings
+        if warning := (entry_warnings or {}).get(bank):
+            from .jd_live_buy_guard import block_entries
+            block_entries(value,warning)
         from .jd_live_buy_watch import set_watch
         set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))
         value['validation_version']=1

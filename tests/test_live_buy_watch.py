@@ -144,6 +144,28 @@ class BuyWatchTests(unittest.TestCase):
                 acknowledge(store.conn, 'codex', [second['id']])
             self.assertEqual(observe([(9, 804.9), (10, 806.3), (11, 806.5), (13, 806.9)]), [])
 
+    def test_continuous_quotes_keep_confirmation_but_a_gap_removes_the_pending_event(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            expires = (START + timedelta(minutes=30)).isoformat()
+            condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                         'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+            with store.conn:
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
+                                   ('zheshang', 'codex', 1, START.isoformat(), expires, 'v1', json.dumps({})))
+            advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'created_at': START.isoformat(), 'expires_at': expires, 'review_conditions': [condition]}
+            account = {'bank': 'zheshang', 'connected': True}
+            for minute, price in [(0, 806.1), (1, 806.2), (3, 806.4), (5, 806.4), (7, 806.4)]:
+                quote = point(minute, price)
+                request(store, account, advice, quote[1], quote)
+                self.assertEqual(len(read(store.conn, 'codex')['pending']), int(minute >= 3))
+            quote = point(11, 806.4)
+            request(store, account, advice, quote[1], quote)
+            self.assertEqual(read(store.conn, 'codex')['pending'], [])
+
     def test_program_breakout_can_coexist_with_a_buy_retest_at_the_same_level(self):
         with TemporaryDirectory() as tmp:
             with Store(Path(tmp) / 'test.db').conn as conn:

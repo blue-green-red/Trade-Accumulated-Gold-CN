@@ -450,6 +450,12 @@ class AIAnalyst:
             guard=finish(store.conn,self.analyst,attempt)
             data["_price_guard"]=guard
         view_ts = utc_now().isoformat(timespec="microseconds")
+        entry_warnings={}
+        if context.get("live_readonly_accounts"):
+            from .jd_live_buy_guard import review_failures, retire_failed_events
+            entry_warnings=review_failures(store.conn,context,covered_ids,datetime.fromisoformat(view_ts))
+            if entry_warnings:
+                covered_ids=retire_failed_events(store.conn,self.analyst,context,covered_ids,entry_warnings)
         data["_performance"]=metrics
         data.update({"_snapshot_at": snapshot_at, "_started_at": started_at,
                      "_completed_at": view_ts, "_covered_event_ids": covered_ids})
@@ -467,7 +473,8 @@ class AIAnalyst:
         if context.get("live_readonly_accounts"):
             from .jd_live_advice import save as save_live_advice
             save_live_advice(store.conn,self.analyst,cur.lastrowid,data["live_account_advice"],context["live_readonly_accounts"],
-                invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None)
+                invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
+                entry_warnings=entry_warnings)
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
         if not guard.get("invalidated_at"):acknowledge(store.conn, self.analyst, covered_ids)
         store.conn.commit()
