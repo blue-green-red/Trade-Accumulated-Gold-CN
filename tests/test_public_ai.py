@@ -119,7 +119,7 @@ class PublicTests(unittest.TestCase):
         account['recent_bank_quotes'] = {
             'buy_price_windows_15m': [{'low': 865.32, 'high': 870.08, 'last': 869.44}],
             'recent_samples': [[-120, 868.05]], 'break_even_buy_at_sampled_sell_high_cny': 866.91,
-            'earlier_sampled_ranges': [{'buy_low_cny': 862.17, 'sell_high_cny': 876.25}],
+            'earlier_sampled_ranges': [{'buy_low_cny': 862.17, 'buy_high_cny': 877.75, 'sell_high_cny': 876.25}],
             'sampled_sell_scenarios': {'hour_low': {'sell_price_cny': 864.23, 'net_cny_per_gram': -7.81}}}
         account['previous_advice'] = [{'review_conditions': [{'buy_review': {'zone': {'floor_cny': 866.12}},
                                                             'trigger_below_sampled_1h_low_cny_per_gram': 7.02}]}]
@@ -131,7 +131,7 @@ class PublicTests(unittest.TestCase):
         account['new_buy_capacity_at_input'] = {'cash_after_buy_orders_cny': 12042.32, 'cash_limited_grams': 14.35}
         account['participation_review'] = {'waiting': {'net_return_pct': -1.237}}
         for price in (865.32, 868.05, 866.12, 866.91, 872.93, 234.52, 3.66, 12042.32, 7.02, 2.47, 862.17, 876.25, 4.72,
-                      864.23, 7.81):
+                      864.23, 7.81, 877.75):
             d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
             self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
         d = content(); d['analysis']['outlook'] = '等待期扣费回报为-1.237%。'

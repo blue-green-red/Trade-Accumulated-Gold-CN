@@ -333,7 +333,7 @@ def review_condition_input(conn, account, advice, condition, watch_end):
     breakout=condition.get('bank_breakout')
     if breakout:
         item.pop('reason',None)
-        item['bank_breakout']={k:breakout[k] for k in ('retest_ceiling_cny','hold_minutes')}
+        item['bank_breakout']={k:breakout[k] for k in ('earlier_high','retest_ceiling_cny','hold_minutes') if k in breakout}
     state=condition.get('monitoring') or {}
     if condition.get('quote_side')!='buy' or condition.get('order_key') or not state:
         return item
@@ -343,7 +343,7 @@ def review_condition_input(conn, account, advice, condition, watch_end):
         item['bank_breakout'].update({k:state[k] for k in ('continuation_min_quotes','continuation_minutes')
                                      if state.get(k) is not None})
         modes=state.get('breakout_modes') or {}
-        if modes.get('continuation')!=modes.get('retest'):
+        if not breakout.get('earlier_high') and modes.get('continuation')!=modes.get('retest'):
             item['monitoring']=modes
             return item
     common=watch_end if condition.get('buy_review') or breakout else advice['expires_at']

@@ -511,10 +511,14 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(report['by_branch']['breakout_retest'], {'no_advice': 1})
 
     def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None,
-                      basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None, review_grams=10):
-        revision = accounts(self.conn, at, include_advice=False)[0]['revision']
-        source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
+                      basis='依据本行近一小时采样。', max_buy_price=806, candidate_until=None, review_grams=10,
+                      earlier_ranges=()):
+        account = accounts(self.conn, at, include_advice=False)[0]
+        revision = account['revision']
+        source = {'status': 'fresh', 'quote': account['quote'], 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+        if earlier_ranges:
+            source['recent_bank_quotes']['earlier_sampled_ranges'] = earlier_ranges
         deadline = (at + timedelta(minutes=15)).isoformat()
         conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
                        'buy_review': {'grams': review_grams, 'recovery_price_cny': 803, 'hold_minutes': 3,
@@ -541,6 +545,44 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
             request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_earlier_buy_high_requires_own_confirmation_after_nearby_breakout_review(self):
+        self.update_quote(0, 804.8)
+        advice = self.publish_watch(1, START, 799, earlier_ranges=[
+            {'buy_high_cny': 807.5, 'sell_high_cny': 810}, {'buy_high_cny': 814, 'sell_high_cny': 815},
+            {'buy_high_cny': 806.9, 'sell_high_cny': 808}])
+        earlier, = [c for c in advice['review_conditions'] if (c.get('bank_breakout') or {}).get('earlier_high')]
+        self.assertEqual((earlier['quote_side'], earlier['price_cny']), ('buy', 807.5))
+        self.observe_watch(advice, [(1, 805.1), (2, 805.7), (4, 806)])
+        low, = read(self.conn, 'codex')['pending']
+        route, = low['data']['routes']
+        self.assertEqual(route['threshold_cny'], 805)
+
+        def reviewed(event):
+            context = {'trigger_events': [event], 'live_readonly_accounts': {'accounts': {
+                'zheshang': {'revision': advice['snapshot_revision']}}}}
+            with self.conn:
+                remember_reviewed_breakouts(self.conn, 'codex', context, [event['id']], 0)
+                remember_reviewed_confirmations(self.conn, 'codex', [event])
+                acknowledge(self.conn, 'codex', [event['id']])
+
+        reviewed(low)
+        self.observe_watch(advice, [(5, 807.6), (6, 807.7), (7, 807.7)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        self.observe_watch(advice, [(8, 807.8)])
+        at = START + timedelta(minutes=8)
+        high, = pending_events(self.conn, 'codex', at)
+        route, = high['data']['routes']
+        self.assertEqual((route['threshold_cny'], route['confirmation_mode']), (807.5, 'continuation'))
+        self.assertLess((route['price_cny'] / 806 - 1) * 100, .4)
+        self.assertTrue(route['bank_breakout']['earlier_high'])
+        self.assertIn('更早高位', high['reason'])
+        reviewed(high)
+        receipt = 'live-breakout-reviewed:codex:zheshang'
+        self.assertEqual(read_watch(self.conn, receipt + ':continuation')['threshold_cny'], 805)
+        self.assertEqual(read_watch(self.conn, receipt + ':earlier:continuation')['threshold_cny'], 807.5)
+        self.observe_watch(advice, [(9, 807.9), (10, 808)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
 
     def test_cached_structured_watch_cannot_advance_after_bank_state_changes(self):
         self.update_quote(0, 799)

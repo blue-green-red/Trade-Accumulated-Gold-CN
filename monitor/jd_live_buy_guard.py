@@ -85,11 +85,13 @@ def remember_reviewed_price_observations(conn, model, context, event_ids, genera
         save(conn,key,{'generation':generation,'revision':revision,**{f:latest[f] for f in fields},'levels':levels})
 
 
-def reviewed_breakout(conn, model, account, threshold, now, mode=None):
+def reviewed_breakout(conn, model, account, threshold, now, mode=None, *, earlier=False):
     """Return the previously reviewed breakout while its quote sequence still holds."""
     from .controls import control
     from .price_guard import read
     key = f"live-breakout-reviewed:{model}:{account['bank']}"
+    if earlier:
+        key += ':earlier'
     generation = control(conn, model)['generation']
     for receipt_key in ((f'{key}:{mode}', key) if mode else (key,)):
         receipt = read(conn, receipt_key)
@@ -113,6 +115,8 @@ def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
             if not route.get('bank_breakout') or not (confirmed := stamp(route.get('confirmed_at'))):
                 continue
             key = f'live-breakout-reviewed:{model}:{bank}'
+            if route['bank_breakout'].get('earlier_high'):
+                key += ':earlier'
             if mode := route.get('confirmation_mode'):
                 key = f'{key}:{mode}'
             previous = read(conn, key)

@@ -216,7 +216,7 @@ def privacy_ok(content, context):
                         for field in ('low', 'high', 'last'):
                             yield from numbers(window.get(field))
                     for window in v.get('earlier_sampled_ranges', []):
-                        for field in ('buy_low_cny', 'sell_high_cny'):
+                        for field in ('buy_low_cny', 'buy_high_cny', 'sell_high_cny'):
                             yield from numbers(window.get(field))
                     for _, price in v.get('recent_samples', []):
                         yield from numbers(price)

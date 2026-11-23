@@ -452,8 +452,8 @@ def independent_branch_replay(value, published, expires, quotes, now, *, archive
         if archived_quotes and 'pullback_depth' not in condition and (depth := pullback_depth(
                 condition, archived_quotes, value.get('input_quote_at'), published)):
             condition = {**condition, 'pullback_depth': depth}
-        modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
-        for mode in modes:
+        for route in watch_routes([condition]):
+            mode = route.get('confirmation_mode')
             result = replay_one_branch(replay_value, condition, mode, start, expires, quotes, now, grams)
             if replay_value is not value:
                 result.update(observation_starts_at=utc_text(start), observation_ends_at=utc_text(end))
@@ -471,6 +471,8 @@ def review_branch(route):
         return {'at_or_above': 'buy_price_rise_touch', 'at_or_below': 'buy_price_drop_touch'}.get(
             route.get('condition'), 'buy_price_touch')
     if route.get('bank_breakout'):
+        if route['bank_breakout'].get('earlier_high'):
+            return 'breakout_extension'
         mode = route.get('confirmation_mode')
         return 'breakout_continuation' if mode == 'continuation' else (
             'breakout_retest' if mode == 'retest' else 'breakout_observation')

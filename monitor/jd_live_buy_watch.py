@@ -61,7 +61,7 @@ def quote_tape(conn, bank, after, point):
 def earlier_sampled_ranges(conn, bank, before, now):
     """Preserve the coverage of earlier Beijing-date samples, not official daily extrema."""
     rows = conn.execute('''
-        SELECT MIN(quoted_at),MAX(quoted_at),COUNT(*),MIN(buy_price_cny),MAX(sell_price_cny)
+        SELECT MIN(quoted_at),MAX(quoted_at),COUNT(*),MIN(buy_price_cny),MAX(buy_price_cny),MAX(sell_price_cny)
         FROM jd_live_quote_samples
         WHERE bank=? AND quoted_at BETWEEN ? AND ? AND observed_at>=quoted_at AND observed_at<=?
         GROUP BY date(quoted_at,'+8 hours')
@@ -69,10 +69,11 @@ def earlier_sampled_ranges(conn, bank, before, now):
         ORDER BY MAX(quoted_at) DESC
         ''', (bank, utc_text(before - timedelta(days=7)), utc_text(before), utc_text(now)))
     ranges = []
-    for first, last, count, low, high in rows:
+    for first, last, count, low, buy_high, sell_high in rows:
         if stamp(last) - stamp(first) < timedelta(minutes=15):
             continue
-        ranges.append({'from': first, 'to': last, 'n': count, 'buy_low_cny': low, 'sell_high_cny': high})
+        ranges.append({'from': first, 'to': last, 'n': count, 'buy_low_cny': low,
+                       'buy_high_cny': buy_high, 'sell_high_cny': sell_high})
         if len(ranges) == 2:
             break
     return ranges
@@ -204,8 +205,8 @@ def watch_route_key(condition):
 
 def watch_routes(conditions):
     for condition in conditions:
-        if condition.get('bank_breakout'):
-            for mode in BREAKOUT_MODES:
+        if breakout := condition.get('bank_breakout'):
+            for mode in ('continuation',) if breakout.get('earlier_high') else BREAKOUT_MODES:
                 yield {**condition, 'confirmation_mode': mode}
         else:
             yield condition
@@ -307,18 +308,28 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     invalidated = (value.get('reassessment') or {}).get('thesis_status') == 'invalidated'
     if invalidated:
         return
-    # The model's condition limit does not include this program-managed observation.
+    # Program-managed observations are independent of the model's condition limit.
     if value['action'] in ('wait', 'hold') and evidence.get('status') == 'available':
-        prior = next((c for c in previous.get('review_conditions', []) if c.get('bank_breakout')), None)
-        if prior and prior_active:
-            conditions.append(prior)
-        else:
-            conditions.append(bank_breakout_condition(evidence['buy_price_windows_15m']))
-        generated = conditions[-1]
-        if any(c.get('buy_review') and condition_key(c) == condition_key(generated) for c in conditions[:-1]):
-            generated['bank_breakout']['companion'] = True
-        conditions[:] = [c for c in conditions[:-1] if c.get('buy_review') or condition_key(c) != condition_key(generated)]
-        conditions.append(generated)
+        prior = {bool(c['bank_breakout'].get('earlier_high')): c for c in previous.get('review_conditions', [])
+                 if prior_active and c.get('bank_breakout')}
+        nearby = prior.get(False) or bank_breakout_condition(evidence['buy_price_windows_15m'])
+        earlier = prior.get(True)
+        buy = number(source['quote'].get('buy_price_cny'))
+        if earlier is None and buy:
+            ceiling = nearby['bank_breakout']['retest_ceiling_cny']
+            earlier_high = min((high for row in evidence.get('earlier_sampled_ranges', [])
+                                if (high := number(row.get('buy_high_cny'))) and high > ceiling and high >= buy), default=None)
+            if earlier_high is not None:
+                earlier = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': earlier_high,
+                           'bank_breakout': {'earlier_high': True}, 'checks': [],
+                           'reason': '突破本行更早高位后持续走高，再评估延续空间。'}
+        for generated in (c for c in (nearby, earlier) if c is not None):
+            key = condition_key(generated)
+            distinct = bool(generated['bank_breakout'].get('earlier_high'))
+            if any((distinct or c.get('buy_review')) and condition_key(c) == key for c in conditions):
+                generated['bank_breakout']['companion'] = True
+            conditions[:] = [c for c in conditions if c.get('buy_review') or condition_key(c) != condition_key(generated)]
+            conditions.append(generated)
     terms = []
     for c in conditions:
         if not extended(c) or not eligible(c, minimum):
@@ -374,6 +385,8 @@ def advance_breakout(state, condition, at, buy, *, breakout_mode=None):
     peak = state['peak']
     state['peak'] = max(peak, buy)
     rule = condition['bank_breakout']
+    if rule.get('earlier_high'):
+        return state
     if stage == 'touched':
         if buy > rule['retest_ceiling_cny'] or buy >= peak:
             return state
@@ -490,7 +503,9 @@ def entry_review_reason(bank, routes):
     from .jd_live_readonly import PRODUCTS
 
     modes = {r.get('confirmation_mode') for r in routes}
-    if 'continuation' in modes:
+    if any((r.get('bank_breakout') or {}).get('earlier_high') for r in routes):
+        label = '突破更早高位后持续走高'
+    elif 'continuation' in modes:
         label = '突破后持续走高与回踩均已确认' if 'retest' in modes else '突破后持续走高'
     else:
         label = '突破回踩已守稳' if 'retest' in modes else '观察条件已企稳'
@@ -541,7 +556,7 @@ def replay_observation(conn, account, stage, condition, boundary, now):
 def observation_terms(condition):
     breakout = condition.get('bank_breakout') or {}
     return (condition['condition'], condition['quote_side'], condition['price_cny'], *buy_review_terms(condition)[1:],
-            breakout.get('retest_ceiling_cny'), breakout.get('hold_minutes'))
+            breakout.get('retest_ceiling_cny'), breakout.get('hold_minutes'), bool(breakout.get('earlier_high')))
 
 
 def carry_entry_observations(conn, model, view_id, now):
@@ -632,7 +647,8 @@ def carry_entry_observations(conn, model, view_id, now):
             stage['observation_expires_at'] = utc_text(deadline)
             if stage['stage'] == 'confirmed':
                 receipt = condition.get('bank_breakout') and reviewed_breakout(
-                    conn, model, account, condition['price_cny'], now, mode)
+                    conn, model, account, condition['price_cny'], now, mode,
+                    earlier=condition['bank_breakout'].get('earlier_high', False))
                 if receipt:
                     stage.update(stage='episode_reviewed', confirmed_at=receipt['confirmed_at'], event_id=receipt['event_id'])
                 else:
@@ -767,7 +783,8 @@ def pending_events(conn, model, now):
                     routes = [{'position_boundary_cny': boundary, **route} for route in routes]
                 routes = active_routes(conn, current[0], routes, now)
                 routes = [r for r in routes if not r.get('bank_breakout') or not reviewed_breakout(
-                    conn, model, current[0], r['threshold_cny'], now, r.get('confirmation_mode'))]
+                    conn, model, current[0], r['threshold_cny'], now, r.get('confirmation_mode'),
+                    earlier=r['bank_breakout'].get('earlier_high', False))]
                 return with_active_routes(event, routes) if routes else None
         return event
 
@@ -907,7 +924,8 @@ def request(store, account, advice, now, point):
             if (step.get('stage') == 'confirmed' and confirmation_price is not None
                     and fingerprint not in reviewed):
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(
-                        conn, model, account, condition['price_cny'], observed, condition.get('confirmation_mode'))):
+                        conn, model, account, condition['price_cny'], observed, condition.get('confirmation_mode'),
+                        earlier=condition['bank_breakout'].get('earlier_high', False))):
                     updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
                                             'confirmed_at': receipt['confirmed_at'], 'event_id': receipt['event_id']}
                     continue

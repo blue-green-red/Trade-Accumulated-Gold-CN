@@ -104,6 +104,7 @@ const conditionState = (c) =>
       ? "data_unavailable"
       : c.monitoring?.status;
 const conditionHeading = (c) => {
+  if (c.bank_breakout?.earlier_high) return `更早高位 ${num(c.price_cny)} 元/克`;
   if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后观察`;
   const floor = c.buy_review?.zone?.floor_cny;
   if (floor != null) {
@@ -449,8 +450,10 @@ const proposalState = (order) => {
         <div v-if="c.bank_breakout" class="sub">
           突破后至少 {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
           跨满 {{ c.monitoring?.continuation_minutes ?? 3 }} 分钟且刷新突破后的高点时复评。
-          突破后回踩 {{ num(c.price_cny) }}–{{ num(c.bank_breakout.retest_ceiling_cny) }}
-          元/克，守住 {{ num(c.price_cny) }} 元/克满 {{ c.bank_breakout.hold_minutes }} 分钟后复评。
+          <template v-if="!c.bank_breakout.earlier_high">
+            突破后回踩 {{ num(c.price_cny) }}–{{ num(c.bank_breakout.retest_ceiling_cny) }}
+            元/克，守住 {{ num(c.price_cny) }} 元/克满 {{ c.bank_breakout.hold_minutes }} 分钟后复评。
+          </template>
         </div>
         <div v-if="c.buy_review?.zone && !c.checks?.length" class="sub">
           <template v-if="c.condition === 'at_or_above'">
