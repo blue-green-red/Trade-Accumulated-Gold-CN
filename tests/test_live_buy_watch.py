@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 
 from monitor.ai_events import enqueue, read
 from monitor.jd_live_buy_audit import evaluate
-from monitor.jd_live_buy_watch import advance, pending_events, record, request
-from monitor.jd_live_conditions import monitor_prices
+from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, valid_route
+from monitor.jd_live_conditions import monitor_prices, validate_structure
 from monitor.jd_live_readonly import ensure_schema
 from monitor.store import Store
 
@@ -25,11 +25,19 @@ def point(minute, price):
     return at, at + timedelta(seconds=10), price, price
 
 
+def zoned_route(direction='at_or_below'):
+    condition = route(direction)
+    condition['buy_review'].update(max_buy_price_cny=804, zone={
+        'floor_cny': 798, 'weak_target_cny': 818, 'risk_exit_cny': 797, 'basis': '本行15分钟报价区间。'})
+    return condition
+
+
 class BuyWatchTests(unittest.TestCase):
-    def advance_all(self, quotes, direction='at_or_below'):
+    def advance_all(self, quotes, direction='at_or_below', condition=None):
         state = {}
+        condition = condition or route(direction)
         for minute, price in quotes:
-            state = advance(state, route(direction), point(minute, price)[0], price)
+            state = advance(state, condition, point(minute, price)[0], price)
         return state.get('stage')
 
     def test_dip_requires_recovery_and_sustained_distinct_quotes(self):
@@ -43,6 +51,45 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(self.advance_all([(0, 805), (1, 807), (3, 807)], 'at_or_above'), 'touched')
         self.assertEqual(self.advance_all([(0, 805), (1, 807), (2, 806), (4, 806)], 'at_or_above'), 'touched')
         self.assertEqual(self.advance_all([(0, 805), (1, 807), (2, 804), (4, 804)], 'at_or_above'), 'confirmed')
+
+    def test_shallow_range_recovers_without_testing_its_floor(self):
+        condition = zoned_route()
+        self.assertEqual(self.advance_all([(0, 804), (1, 799.7), (2, 803), (4, 804)],
+                                         condition=condition), 'confirmed')
+        self.assertEqual(self.advance_all([(0, 804), (1, 797), (2, 803), (4, 804)],
+                                         condition=condition), 'pullback_lost')
+
+    def test_breakout_above_entry_cap_can_retest_and_confirm(self):
+        condition = zoned_route('at_or_above')
+        self.assertTrue(valid_route(condition))
+        self.assertEqual(self.advance_all([(0, 809), (1, 805), (2, 803), (4, 804)],
+                                         condition=condition), 'confirmed')
+        self.assertEqual(self.advance_all([(0, 809), (1, 797), (2, 803), (4, 804)],
+                                         condition=condition), 'pullback_lost')
+
+    def test_new_route_requires_recent_bank_context_and_calculates_with_fee(self):
+        condition = zoned_route('at_or_above')
+        source = {'sell_fee_rate': .005, 'recent_bank_quotes': {'status': 'available'}}
+        value = {'action': 'wait', 'order_management': [], 'review_conditions': [condition], 'valid_for_minutes': 15}
+        self.assertEqual(validate_structure(value, source, START, minimum_buy_grams=10), [])
+        self.assertEqual(condition['buy_review_costs'], {'weak_target_net_cny': 99.1, 'risk_exit_net_cny': -109.85})
+        value['review_conditions'] = [route()]
+        self.assertTrue(validate_structure(value, source, START, minimum_buy_grams=10))
+
+    def test_recent_context_uses_only_its_bank_and_keeps_current_verified_quote(self):
+        with TemporaryDirectory() as tmp:
+            with Store(Path(tmp) / 'test.db').conn as conn:
+                self.addCleanup(conn.close)
+                ensure_schema(conn)
+                for minute, price in [(-60, 700), (-16, 790), (-3, 799), (-1, 802), (1, 900)]:
+                    record(conn, 'zheshang', point(minute, price))
+                record(conn, 'minsheng', point(-2, 765))
+                quote = {'status': 'fresh', 'quoted_at': START.isoformat(), 'buy_price_cny': 804, 'sell_price_cny': 804}
+                account = {'bank': 'zheshang', 'connected': True, 'quote': quote}
+                result = quote_context(conn, account, START + timedelta(seconds=20))
+        self.assertEqual(result['status'], 'available')
+        self.assertEqual(result['recent_samples'], [[-180, 799], [-60, 802], [0, 804]])
+        self.assertEqual([bucket['low'] for bucket in result['buy_price_windows_15m']], [790, 799])
 
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
         with TemporaryDirectory() as tmp:

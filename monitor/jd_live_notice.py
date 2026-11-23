@@ -28,10 +28,14 @@ def follow_up(value):
     lines=[]
     for c in conditions[:4]:
         direction='涨到' if c['condition']=='at_or_above' else '跌到'
+        trigger=f"{direction}{c['price_cny']:g}元/克"
         if c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key'):
             scope='现有' if path.get('exit_scope')=='plan' else '本批'
             reason=f'暂停加仓，核对挂单后按退出方案处理{scope}持仓'
         elif review := c.get('buy_review'):
+            if zone := review.get('zone'):
+                interval=f"{zone['floor_cny']:g}–{c['price_cny']:g}元/克"
+                trigger=f"突破{c['price_cny']:g}后回踩{interval}" if c['condition']=='at_or_above' else f"回调至{interval}"
             reason=(f"守住{review['recovery_price_cny']:g}元/克满{review['hold_minutes']}分钟，"
                     f"买价≤{review['max_buy_price_cny']:g}元/克时复评{review['grams']:g}克")
         else:
@@ -43,7 +47,7 @@ def follow_up(value):
             elif entry and not c.get('order_key'):reason='重新评估是否加仓'
             else:reason=brief(raw,36).replace('…（详见账户页）','…').replace('比较','评估') or '重新分析，再决定是否买卖'
         scope='（指定挂单）' if c.get('order_key') else ''
-        lines.append(f"• {direction}{c['price_cny']:g}元/克{scope}：{reason}")
+        lines.append(f"• {trigger}{scope}：{reason}")
     if not lines:lines.append('下一次操作前，先更新账户并重新分析。')
     if path.get('manual_resolution_required'):
         lines.append('先确认旧买单已撤销或修改，再考虑新买单。')

@@ -26,11 +26,18 @@ class OrderManagement(BaseModel):
     replacement:Optional[ReplacementOrder]=Field(default=None,description='replace时填写需修改的参数；null字段保留原值，方向沿用原单')
     reason:str=Field(max_length=500)
 
+class BuyReviewZone(BaseModel):
+    floor_cny:float=Field(gt=0,allow_inf_nan=False,description='回调或突破后回踩区间下缘，跌穿则放弃本路径')
+    weak_target_cny:float=Field(gt=0,allow_inf_nan=False,description='本路径较弱反弹目标价')
+    risk_exit_cny:float=Field(gt=0,allow_inf_nan=False,description='本路径新增仓的退出测算价')
+    basis:str=Field(min_length=1,max_length=180,description='引用本行哪段近期报价作为区间与目标依据')
+
 class BuyReview(BaseModel):
     grams:float=Field(gt=0,allow_inf_nan=False)
     recovery_price_cny:float=Field(gt=0,allow_inf_nan=False,description='本银行买价回收后须守住的价位')
     hold_minutes:int=Field(ge=1,le=60,description='用至少两笔有时间的有效本行买价核对，本轮有效期内可观察的分钟数')
     max_buy_price_cny:float=Field(gt=0,allow_inf_nan=False,description='复评时可接受的最高本行买价，按较弱反弹的扣费空间和失守风险选择，不固定折扣')
+    zone:Optional[BuyReviewZone]=None
 
 class PriceReviewCondition(BaseModel):
     condition:Literal['at_or_above','at_or_below']
@@ -80,7 +87,7 @@ PROMPT="""
 - suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。已挂保护以本轮pending_orders为准，旧建议不等于已挂；无实际保护须说建议新挂。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
-- 后续可买须有buy_review：回调触价后回收并守住更高价，或突破后回踩至突破价以内，再守住观察价；给克数、守住分钟和按弱反弹扣费测出的买价上限。达到企稳才复评，报价超限放弃，复评时仍须检查现价、仓位和收益空间。无合理参数只观察；人工挂单期限独立，无账户输入填null。"""
+- 用recent_bank_quotes的本行近期高低与波动定区间，公开价仅参考。分别评估浅回调回升、突破后回踩；可行才填buy_review及zone，列区间下缘、弱目标、退出价、买价上限、克数及守稳时长。回调的price_cny是入区上缘；突破价可高于回踩买价上限。守稳后复评，跌穿或买入窗口超价则放弃；未采用的路径给理由，可只观察或等待。人工挂单期限独立，无账户输入填null。"""
 
 
 def prompt_for(context):
@@ -102,6 +109,10 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         strict_entry='limit_buy_reviews' in raw
         strict_path='position_path' in raw
         value=LiveAdvice.model_validate(raw).model_dump();warnings=[]
+        for condition in value['review_conditions']:
+            review=condition.get('buy_review')
+            if review and review.get('zone') is None:
+                review.pop('zone',None)
         if inputs.get('text_contract')=='complete_sentences_v1':
             from .jd_live_text import incomplete_fields
             fields=incomplete_fields(value)

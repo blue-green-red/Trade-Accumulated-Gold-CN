@@ -277,6 +277,8 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
 
 
 def model_input(conn,now=None):
+    from .jd_live_buy_watch import quote_context
+    now=now or datetime.now(timezone.utc)
     rows=accounts(conn,now,include_advice=True)
     if not any(r.get('fetched_at') for r in rows):return None
     fields=('bank','name','product_sku','status','fetched_at','revision','total_grams','sellable_grams','frozen_grams',
@@ -287,6 +289,7 @@ def model_input(conn,now=None):
             values[row['bank']]['minimum_buy_grams'] = row['minimum_buy_grams']
         from .trade_costs import position_comparison
         quote=row.get('quote') or {}
+        values[row['bank']]['recent_bank_quotes']=quote_context(conn,row,now)
         if row['connected'] and quote.get('status')=='fresh':
             comparison=position_comparison(row.get('total_grams'),quote.get('sell_price_cny'),row.get('sell_fee_rate'))
             if comparison:values[row['bank']]['position_comparison']=comparison

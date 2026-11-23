@@ -38,6 +38,40 @@ def record(conn, bank, point):
                          (bank, utc_text(observed - timedelta(days=40))))
 
 
+def quote_context(conn, account, now):
+    """Compact observed buy-price history, aligned to the bank quote in this request."""
+    current = sample(account, now)
+    if current is None:
+        return {'status': 'unavailable'}
+    anchor, _, buy, _ = current
+    start = anchor - timedelta(hours=1)
+    has_samples = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone()
+    prices = {
+        stamp(at): price for at, price in conn.execute(
+            'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
+            'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at<=?',
+            (account['bank'], utc_text(start), utc_text(anchor), utc_text(now))
+        )
+    } if has_samples else {}
+    prices[anchor] = buy
+    points = sorted(prices.items())
+    windows = []
+    for index in range(4):
+        end = start + timedelta(minutes=(index + 1) * 15)
+        window = [(at, p) for at, p in points if end - timedelta(minutes=15) < at <= end]
+        if window:
+            values = [p for _, p in window]
+            windows.append({'from': utc_text(window[0][0]), 'to': utc_text(window[-1][0]),
+                            'n': len(values), 'low': min(values), 'high': max(values), 'last': values[-1]})
+    recent = [(at, p) for at, p in points if anchor - timedelta(minutes=10) < at]
+    return {'status': 'available' if len(recent) >= 3 and recent[-1][0] - recent[0][0] >= timedelta(minutes=2)
+            else 'limited', 'as_of': utc_text(anchor), 'buy_price_windows_15m': windows,
+            'recent_samples': [[int((at-anchor).total_seconds()), p] for at, p in recent[-6:]],
+            'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
+            'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
+                                    for left, right in zip(points, points[1:])), default=None)}
+
+
 def valid_route(condition, minimum=None):
     review = condition.get('buy_review')
     if not review or condition.get('checks') or condition.get('order_key') or condition.get('quote_side') != 'buy':
@@ -47,6 +81,11 @@ def valid_route(condition, minimum=None):
     trigger = condition['price_cny']
     recovery = review['recovery_price_cny']
     cap = review['max_buy_price_cny']
+    if zone := review.get('zone'):
+        floor = zone['floor_cny']
+        return (zone['risk_exit_cny'] <= floor and recovery <= cap < zone['weak_target_cny']
+                and (floor < trigger < recovery if condition['condition'] == 'at_or_below'
+                     else floor < recovery <= trigger))
     if condition['condition'] == 'at_or_below':
         return trigger < recovery <= cap
     return recovery <= trigger <= cap
@@ -55,7 +94,7 @@ def valid_route(condition, minimum=None):
 def advance(state, condition, at, buy):
     """Require ordered quotes with no stale gap across the setup and its hold."""
     previous_at = stamp(state.get('last_at'))
-    if state.get('stage') in ('confirmed', 'above_cap') or (previous_at and at <= previous_at):
+    if state.get('stage') in ('confirmed', 'above_cap', 'pullback_lost') or (previous_at and at <= previous_at):
         return state
     if previous_at and at - previous_at > MAX_GAP:
         state = {}
@@ -64,20 +103,27 @@ def advance(state, condition, at, buy):
     trigger = condition['price_cny']
     recovery = review['recovery_price_cny']
     cap = review['max_buy_price_cny']
+    zone = review.get('zone')
+    floor = zone['floor_cny'] if zone else None
     breakout = condition['condition'] == 'at_or_above'
     stage = state.get('stage')
     if not stage:
         if not (buy >= trigger if breakout else buy <= trigger):
             return state
-        state.update(stage='above_cap' if buy > cap else 'touched', touched_at=utc_text(at), peak=buy)
+        if floor is not None and buy < floor:
+            return {**state, 'stage': 'pullback_lost'}
+        state.update(stage='above_cap' if buy > cap and not (breakout and zone) else 'touched',
+                     touched_at=utc_text(at), peak=buy)
         return state
-    if buy > cap:
+    if buy > cap and not (breakout and zone and stage == 'touched'):
         return {**state, 'stage': 'above_cap', 'hold_since': None}
     if breakout and stage == 'touched':
-        if buy > trigger or buy >= state['peak']:
+        if buy > trigger or buy >= state['peak'] or (zone and buy > cap):
             return {**state, 'peak': max(state['peak'], buy)}
         # A pullback from the observed breakout must precede confirmation.
         state['stage'] = 'retest'
+    if floor is not None and buy < floor:
+        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
     if buy < recovery:
         return {**state, 'stage': state['stage'] if state['stage'] in ('touched', 'retest') else 'retest',
                 'hold_since': None}
@@ -152,9 +198,15 @@ def request(store, account, advice, now, point):
             fingerprint = condition_key(condition)
             previous = current['routes'].get(fingerprint, {})
             step = advance(previous, condition, at, buy)
-            cap = condition['buy_review']['max_buy_price_cny']
-            if (previous.get('stage') == 'confirmed' and at > stamp(previous['last_at']) and buy > cap):
-                step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
+            review = condition['buy_review']
+            if previous.get('stage') == 'confirmed' and at > stamp(previous['last_at']):
+                if buy > review['max_buy_price_cny']:
+                    step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
+                elif review.get('zone') and buy < review['recovery_price_cny']:
+                    step = {**previous, 'stage': 'retest', 'last_at': utc_text(at),
+                            'last_price_cny': buy, 'hold_since': None, 'confirmed_at': None}
+                    if buy < review['zone']['floor_cny']:
+                        step['stage'] = 'pullback_lost'
             updated[fingerprint] = step
             if step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 confirmed.append({'condition_key': fingerprint, 'condition': condition['condition'],

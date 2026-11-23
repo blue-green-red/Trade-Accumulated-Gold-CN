@@ -114,6 +114,16 @@ class PublicTests(unittest.TestCase):
         d = content(); d["analysis"]["outlook"] = "公共京东参考价850元/克。"
         self.assertEqual(self.publish(d), "ready")
 
+    def test_private_recent_bank_quote_or_review_zone_cannot_become_public_price(self):
+        account = self.context['live_readonly_accounts']['accounts']['zheshang']
+        account['recent_bank_quotes'] = {
+            'buy_price_windows_15m': [{'low': 865.32, 'high': 870.08, 'last': 869.44}],
+            'recent_samples': [[-120, 868.05]]}
+        account['previous_advice'] = [{'review_conditions': [{'buy_review': {'zone': {'floor_cny': 866.12}}}]}]
+        for price in (865.32, 868.05, 866.12):
+            d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
+            self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
+
     def test_only_verified_public_unit_examples_become_percentages(self):
         self.context['public_reference']={'sell_fee_rate':.004,'spread_cny':0}
         d=content();d['decision_basis']['entry_scenario']={'entry_price_cny':850,'target_price_cny':880,

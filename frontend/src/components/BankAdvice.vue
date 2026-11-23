@@ -41,6 +41,7 @@ const monitorStates = {
   reviewed: "已触发 · 已纳入复评",
   latched: "持续满足 · 不重复触发",
   price_limit_exceeded: "已超过买价上限 · 本轮放弃",
+  pullback_lost: "已跌穿回踩区间 · 本轮放弃",
   market_closed: "休市暂停",
   expired: "已到期",
   account_changed: "账户或委托变化 · 已失效",
@@ -100,6 +101,15 @@ const conditionState = (c) =>
     : !props.quoteFresh
       ? "data_unavailable"
       : c.monitoring?.status;
+const conditionHeading = (c) => {
+  const floor = c.buy_review?.zone?.floor_cny;
+  if (floor != null) {
+    return c.condition === "at_or_above"
+      ? `突破 ${num(c.price_cny)} 元/克后等回踩`
+      : `浅回调区间 ${num(floor)}–${num(c.price_cny)} 元/克`;
+  }
+  return `${props.account.name}金价 ${symbol[c.condition]} ${num(c.price_cny)} 元/克`;
+};
 const associated = (c) =>
   (props.account.pending_orders?.records || []).find(
     (o) => o.order_key === c.order_key,
@@ -410,9 +420,7 @@ const proposalState = (order) => {
         class="live-quote"
       >
         <div class="live-section-heading">
-          <strong
-            >{{ account.name }}金价 {{ symbol[c.condition] }}
-            {{ num(c.price_cny) }} 元/克</strong
+          <strong>{{ conditionHeading(c) }}</strong
           ><span class="sub">{{
             (conditionState(c) === "monitoring"
               ? confirmationStages[c.monitoring?.confirmation_stage]
@@ -430,7 +438,18 @@ const proposalState = (order) => {
           }}
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
-        <div v-if="c.buy_review && !c.checks?.length" class="sub">
+        <div v-if="c.buy_review?.zone && !c.checks?.length" class="sub">
+          <template v-if="c.condition === 'at_or_above'">
+            回踩观察区 {{ num(c.buy_review.zone.floor_cny) }}–{{ num(c.price_cny) }}
+            元/克。
+          </template>
+          买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
+          {{ c.buy_review.hold_minutes }} 分钟、且不超过
+          {{ num(c.buy_review.max_buy_price_cny) }} 元/克，再评估买入
+          {{ quantity(c.buy_review.grams) }}。跌穿区间下缘则放弃。
+          {{ c.buy_review.zone.basis }}
+        </div>
+        <div v-else-if="c.buy_review && !c.checks?.length" class="sub">
           {{ c.condition === "at_or_above" ? "突破后等回踩" : "回调触价后等回升" }}，
           买价守住 {{ num(c.buy_review.recovery_price_cny) }} 元/克满
           {{ c.buy_review.hold_minutes }} 分钟，再评估买入

@@ -76,10 +76,29 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
             if minimum_buy_grams is not None and buy_review['grams'] < minimum_buy_grams:
                 checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
             trigger=condition['price_cny'];recovery=buy_review['recovery_price_cny']
+            cap=buy_review['max_buy_price_cny'];zone=buy_review.get('zone')
             if condition['condition']=='at_or_below' and trigger>=recovery:
                 checks.append('回调触价须低于企稳价')
-            if condition['condition']=='at_or_above' and not recovery<=trigger<=buy_review['max_buy_price_cny']:
+            if zone:
+                floor=zone['floor_cny']
+                if not floor<min(trigger,recovery) or recovery>trigger and condition['condition']=='at_or_above':
+                    checks.append('回调或回踩区间与企稳价关系无效')
+                if not zone['risk_exit_cny']<=floor or zone['weak_target_cny']<=cap:
+                    checks.append('退出测算价应在区间下缘或更低，弱反弹目标须高于买价上限')
+                from .trade_costs import cost_reference
+                fee=source.get('sell_fee_rate')
+                target=cost_reference(zone['weak_target_cny'],fee)
+                exit_price=cost_reference(zone['risk_exit_cny'],fee)
+                if target and exit_price:
+                    def delta(mark):
+                        return round((mark['net_sell_price_cny']-cap)*buy_review['grams'],2)
+                    condition['buy_review_costs']={'weak_target_net_cny':delta(target),'risk_exit_net_cny':delta(exit_price)}
+                else:
+                    checks.append('缺本行卖费，无法核对复评候选的扣费空间')
+            elif condition['condition']=='at_or_above' and not recovery<=trigger<=cap:
                 checks.append('突破触价须介于回踩守住价与买价上限之间')
+            if not zone and (source.get('recent_bank_quotes') or {}).get('status')=='available':
+                checks.append('买入复评须按本行近期报价提供区间及扣费测算')
         if key and (key not in orders or orders[key].get('status') not in ('pending','partially_filled')):checks.append('复评条件关联的挂单不在有效输入中')
         fingerprint=condition_key(condition)
         if sum(condition_key(c)==fingerprint for c in value['review_conditions'])>1:checks.append('重复的价格复评条件')
@@ -141,6 +160,7 @@ def condition_state(conn,account,advice,condition,now):
         event_id=f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{advice["id"]}'
         status='monitoring' if valid_route(condition,account.get('minimum_buy_grams')) else 'review_required'
         if stage.get('stage')=='above_cap':status='price_limit_exceeded'
+        if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
             status='queued' if any(e['id']==event_id for e in pending) else 'reviewed'
         return {**result,'status':status,'confirmation_stage':stage.get('stage'),

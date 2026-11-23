@@ -216,14 +216,16 @@ class BankMoveReviewTests(unittest.TestCase):
         self.review(2);self.review(2)
         self.assertFalse(any(e['id'].startswith('live-plan-review:') for e in read(self.s.conn,'codex')['pending']))
 
-    def test_prompt_reuses_existing_fields_instead_of_forcing_trade_or_new_schema(self):
+    def test_prompt_uses_bank_quotes_to_evaluate_both_routes_without_forcing_trade(self):
         from monitor.trade_costs import PROMPT as COMPARISON_PROMPT
         self.assertEqual(PROMPT.count('previous_advice.strategy_review'),1)
         self.assertIn('分开评估首笔（含本户最小克数）与后续追加',PROMPT)
         self.assertIn('追加须用最新报价、仓位和独立依据',PROMPT)
         self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
-        self.assertIn('无合理参数只观察',PROMPT)
+        self.assertIn('用recent_bank_quotes的本行近期高低与波动定区间',PROMPT)
+        self.assertIn('分别评估浅回调回升、突破后回踩',PROMPT)
+        self.assertIn('未采用的路径给理由，可只观察或等待',PROMPT)
         self.assertIn('不强制交易',PROMPT)
 
     def test_international_and_two_bank_triggers_are_covered_by_one_model_call(self):
