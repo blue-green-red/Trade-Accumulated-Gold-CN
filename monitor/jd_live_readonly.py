@@ -370,6 +370,7 @@ def review_condition_input(conn, account, advice, condition, watch_end):
 
 def model_input(conn,now=None):
     from .jd_live_buy_watch import quote_context
+    from .jd_live_risk import buy_capacity_reference
     from .participation_review import bank_cash, pending_buy_exposure
     now=now or datetime.now(timezone.utc)
     rows=accounts(conn,now,include_advice=True)
@@ -391,11 +392,8 @@ def model_input(conn,now=None):
                 values[row['bank']]['new_buy_break_even_sell_cny']=round(buy/(1-fee),2)
             # Reserve against the full pending-order list before shortening the model input.
             if buy and (free_cash:=bank_cash(row)) is not None:
-                values[row['bank']]['new_buy_capacity_at_input']={
-                    'cash_after_buy_orders_cny':free_cash,
-                    'cash_limited_grams':math.floor(free_cash*100/buy)/100,
-                    'pending_buy_exposure':pending_buy_exposure(row),
-                }
+                values[row['bank']]['new_buy_capacity_at_input']=buy_capacity_reference(
+                    row,buy,free_cash,pending_buy_exposure(row))
         active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
         previous=[];counts={}
         for value in row['advice']+row['advice_history']:

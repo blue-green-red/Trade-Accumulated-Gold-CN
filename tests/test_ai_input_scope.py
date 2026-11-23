@@ -129,6 +129,15 @@ class InputScopeTests(unittest.TestCase):
         self.assertNotIn('entry_review_payoffs_at_input', by_bank['minsheng'])
         self.assertNotIn('entry_review_payoffs_at_input', account)
         self.assertEqual(compact_context(result), result)
+        larger_case = deepcopy(original)
+        funded = larger_case['live_readonly_accounts']['accounts']['zheshang']
+        funded.update(cash_cny=100_000, account_risk={'risk_budget_cny':1000},
+                      new_buy_capacity_at_input={'cash_after_buy_orders_cny':100_000,
+                                                 'pending_buy_exposure':{'grams':0,'cost_cny':0}})
+        with_capacity = compact_context(larger_case)['live_readonly_accounts']['accounts']['zheshang']
+        reference = with_capacity['entry_review_payoffs_at_input']['pullback']['cash_and_exit_risk_reference']
+        self.assertEqual(reference['grams'], 79.10)
+        self.assertEqual(reference['position_after_pct'], round(121.1 * 806 / (100_000 + 42 * 806) * 100, 4))
         review['grams'] = 69
         resized = compact_context(original)['live_readonly_accounts']['accounts']['zheshang']
         self.assertEqual(resized['entry_review_payoffs_at_input'], payoffs)

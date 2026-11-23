@@ -55,6 +55,22 @@ class LivePathTests(unittest.TestCase):
         self.assertIn('非本轮追加指令',format_path(v))
         self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
 
+    def test_large_immediate_add_round_trips_with_a_full_position_target(self):
+        self.f.data['cash_cny'] = 850_000
+        self.f.snapshot()
+        value = self.saved(action='buy', grams=500, price_condition='reference', price_cny=850, suggested_orders=[])
+        self.assertEqual(blocking_checks(value), [])
+        self.assertEqual(value['grams'], 500)
+        self.assertEqual(value['position_path']['target_position_pct'], 100)
+        sizing, = value['buy_sizing_at_input']
+        self.assertEqual(sizing['position_after_pct'], 50.495)
+        self.assertEqual(sizing['remaining_after_batch_grams'], 500)
+        self.assertEqual(notification_parts(value)['grams'], 500)
+        full = self.saved(action='buy', grams=1000, price_condition='reference', price_cny=850, suggested_orders=[])
+        self.assertEqual(blocking_checks(full), [])
+        self.assertEqual(full['buy_sizing_at_input'][0]['position_after_pct'], 100.)
+        self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0], 0)
+
     def test_exit_review_has_a_slot_and_can_use_the_protection_reserve(self):
         ensure_ai_schema(self.f.s)
         ordinary = [{'condition': 'at_or_above', 'price_cny': price, 'quote_side': 'sell', 'reason': '普通行情观察。'}

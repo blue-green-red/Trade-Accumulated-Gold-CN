@@ -85,8 +85,11 @@ class LiveAccountTests(unittest.TestCase):
         inputs=model_input(self.c,NOW)
         account=inputs['accounts']['zheshang']
         self.assertEqual(len(account['pending_orders']['records']),5)
+        gross = 15000 + account['total_grams'] * 850
         self.assertEqual(account['new_buy_capacity_at_input'],{'cash_after_buy_orders_cny':5400,'cash_limited_grams':6.35,
-            'pending_buy_exposure':{'grams':12,'cost_cny':9600}})
+            'pending_buy_exposure':{'grams':12,'cost_cny':9600},
+            'grams_per_position_point':round(gross / 850 / 100, 4),
+            'cash_limited_position_after_pct':round((account['total_grams'] + 6.35) * 850 / gross * 100, 4)})
         save(self.c,'codex',1,{'zheshang':{**advice(),'action':'buy','grams':6.36,
              'price_cny':849,'price_condition':'reference'}},inputs,NOW)
         current=accounts(self.c,NOW)[0]['advice'][0]
