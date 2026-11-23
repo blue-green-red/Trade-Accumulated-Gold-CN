@@ -4,7 +4,7 @@ from datetime import datetime,timedelta,timezone
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .jd_live_proposals import SuggestedOrder,validate_proposals,proposal_signature
-from .jd_live_semantics import immediate_signature,management_signature,notification_parts,minimum_buy_checks
+from .jd_live_semantics import immediate_signature,live_notification_parts,management_signature,notification_parts,minimum_buy_checks
 from .jd_live_entry import LimitBuyReview
 from .jd_live_path import PositionPath
 
@@ -192,13 +192,14 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
     if not view_id:return []
     from .jd_live_readonly import accounts
     events=[]
+    current_time=now or datetime.now(timezone.utc)
     for account in accounts(conn,now,selected_bank=selected_bank):
         row=conn.execute('SELECT id,advice_json,snapshot_revision,expires_at FROM jd_live_advice WHERE bank=? AND analyst=? AND view_id=?',
                          (account['bank'],analyst,view_id)).fetchone()
         if not row:continue
         current=next((a for a in account['advice'] if a['id']==row[0]),None)
-        if not current or current.get('action_status',current['status'])!='current':continue
-        raw_value=json.loads(row[1]);value=notification_parts(current)
+        if not current:continue
+        raw_value=json.loads(row[1]);value=live_notification_parts(current,account,current_time)
         if value is None:continue
         if value.get('notification_partial') and value['action'] in ('hold','wait') and not value['suggested_orders'] and not any(o['action'] in ('cancel','replace') for o in value['order_management']):continue
         from .jd_live_notice_rules import reasons
@@ -218,7 +219,6 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
         from .jd_live_conditions import stamp
         from .jd_live_orders import proposal_progress
         old_drafts=[p for p in (old or {}).get('suggested_orders',[]) if proposal_progress(p,previous[2],account['order_history'],old.get('valid_for_minutes',240))['status']=='not_observed']
-        current_time=now or datetime.now(timezone.utc)
         renewed=bool(value.get('suggested_orders')) and any(stamp(p.get('expires_at')) and stamp(p['expires_at'])<=current_time for p in old_drafts)
         proposal_notice=(proposed_changed or renewed) and bool(old_drafts or value.get('suggested_orders'))
         manual_order_action=any(o['action'] in ('cancel','replace') for v in (old,value) if v for o in v.get('order_management',[]))
@@ -237,10 +237,11 @@ def notification_events(conn,analyst,view_id,*,now=None,selected_bank=None,inclu
             action='仓位变化复评' if 'position_changed' in notice_reasons else '当日首次评估'
         if value['action'] in ('buy','sell') and (order_notice or proposal_notice):
             action={'buy':'买入建议','sell':'卖出建议'}[value['action']]+'＋'+action
-        if value['action'] in ('hold','wait') and action not in ('持有','观望'):
+        if value['action'] in ('hold','wait') and action not in ('持有','观望') and not value.get('immediate_buy_paused'):
             action={'hold':'持有','wait':'观望'}[value['action']]+'·'+action
         from .jd_live_notice import body as notification_body
-        body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders'))
+        body=notification_body(account,current,value,notice_reasons,proposal_notice and not value.get('suggested_orders')
+                               and not value.get('immediate_buy_paused'))
         events.append({'key':key,'live_advice_id':row[0],'notification_reasons':notice_reasons,'notification_topic':f"{analyst}:live_{account['bank']}",
                        'title':f"💡{analyst.title()}账户建议｜{account['name'].removesuffix('积存金')}｜{action}",'body':body})
     return events

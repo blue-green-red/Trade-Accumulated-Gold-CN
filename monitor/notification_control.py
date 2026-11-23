@@ -70,8 +70,9 @@ def selected_events(conn, events, mode=DEFAULT_MODE, *, now=None):
             return notification_current(conn,e,now)
         if not e.get('live_advice_id'):return True
         from .jd_live_readonly import accounts
-        from .jd_live_semantics import notification_parts
-        return any(v['id']==e['live_advice_id'] and v.get('action_status',v['status'])=='current' and notification_parts(v) is not None and (v.get('position_path') or {}).get('state')!='boundary_reached'
+        from .jd_live_semantics import live_notification_parts
+        return any(v['id']==e['live_advice_id'] and (v.get('position_path') or {}).get('state')!='boundary_reached'
+                   and live_notification_parts(v,a,now or datetime.now(timezone.utc)) is not None
                    for a in accounts(conn,now) for v in a['advice'])
     return [e for e in events if event_topic(e) in enabled and current(e)]
 

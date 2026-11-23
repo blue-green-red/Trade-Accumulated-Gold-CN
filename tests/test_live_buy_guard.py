@@ -40,13 +40,14 @@ class BuyGuardTests(unittest.TestCase):
         self.addCleanup(self.conn.close)
         ensure_schema(self.conn)
 
-    def update_quote(self, minute, price, bank='zheshang', *, sell_price=None):
+    def update_quote(self, minute, price, bank='zheshang', *, sell_price=None, pending=()):
         at = START + timedelta(minutes=minute)
         sell_price = price if sell_price is None else sell_price
         snapshot = parse_account(bank, payload(bank))
         snapshot.update(cash_cny=20_000, cash_source='jd_electronic_account_api',
                         quote={'buy_price_cny': price, 'sell_price_cny': sell_price, 'quoted_at': at.isoformat()},
-                        pending_order_count=0, pending_orders={'records': [], 'total_count': 0, 'complete': True},
+                        pending_order_count=len(pending),
+                        pending_orders={'records': list(pending), 'total_count': len(pending), 'complete': True},
                         coverage={'pending_orders': 'available'}, component_times={'pending_orders': at.isoformat()})
         record_success(self.conn, bank, snapshot, at.isoformat())
         record(self.conn, bank, (at, at, price, sell_price))
@@ -1196,11 +1197,11 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM ai_runs').fetchone()[0], 1)
 
     def save_advice(self, action='buy', condition='at_or_below', orders=(), routes=None, view=1, *, basis=None, now=START,
-                    price_events=()):
+                    price_events=(), management=()):
         raw = {'action': action, 'grams': 10 if action == 'buy' else None,
                'price_condition': condition, 'price_cny': 806 if condition != 'none' else None,
                'valid_for_minutes': 15, 'reason': '本轮按实际报价评估。', 'risk_note': '先核对实时买价。',
-               'suggested_orders': list(orders), 'entry_trigger_key': basis}
+               'suggested_orders': list(orders), 'order_management': list(management), 'entry_trigger_key': basis}
         with self.conn:
             save(self.conn, 'codex', view, {'zheshang': raw}, model_input(self.conn, now), now,
                  entry_routes={'zheshang': routes} if routes else None, submitted_price_events=price_events)
@@ -1349,6 +1350,39 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(view['action_status'], 'current')
         self.assertEqual(len(notification_events(self.conn, 'codex', 1, now=now)), 1)
         self.assertEqual(pending_events(self.conn, 'codex', now), [])
+
+    def test_paused_buy_retry_keeps_independent_protection_and_buy_cancellation(self):
+        until = (START + timedelta(hours=1)).isoformat()
+        orders = [{'kind': 'limit_buy', 'grams': 10, 'price_cny': 805, 'expires_at': until, 'reason': '等待回调。'},
+                  {'kind': 'take_profit_stop_loss', 'grams': 2, 'price_cny': 820, 'loss_price_cny': 790,
+                   'expires_at': until, 'reason': '独立保护现有持仓。'}]
+        old = {'order_key': 'b'*24, 'kind': 'limit_buy', 'action': 'buy', 'status': 'pending',
+               'price_cny': 799, 'grams': 12, 'filled_grams': 0, 'expires_at': until, 'price_condition': 'at_or_below'}
+        management = [{'order_key': old['order_key'], 'action': 'cancel', 'reason': '撤销后重新评估买入40克。'}]
+        retest = self.route(condition_key='retest', bank_breakout={'hold_minutes': 3, 'retest_ceiling_cny': 806},
+                            confirmation_mode='retest')
+        self.update_quote(0, 805.8, pending=[old])
+        self.save_advice(condition='reference', orders=orders, routes=[retest], basis='retest', management=management)
+        set_subscription(self.conn, 'codex:live_zheshang', True)
+        notifier = Mock()
+        notifier.send.side_effect = [False, True]
+        notifier.last_receipt = {'status': 'failed'}
+        dispatch(self.store, notifier, notification_events(self.conn, 'codex', 1, now=START), START)
+        self.assertIn('买入 10克', notifier.send.call_args.args[1])
+
+        self.update_quote(1, 806.1, pending=[old])
+        at = START + timedelta(minutes=1)
+        partial, = notification_events(self.conn, 'codex', 1, now=at, include_recorded=True)
+        self.assertNotIn('买入建议', partial['title'])
+        dispatch(self.store, notifier, [], at)
+        self.assertEqual(notifier.send.call_count, 2)
+        text = notifier.send.call_args.args[1]
+        self.assertIn('即时买入建议已暂停', text)
+        self.assertIn('止损 ≤ 790元/克', text)
+        self.assertIn('建议撤单', text)
+        self.assertNotIn('买入 10克', text)
+        self.assertNotIn('买入10克', text)
+        self.assertNotIn('买入40克', text)
 
     def test_retest_band_does_not_override_an_explicit_limit_or_broader_basis(self):
         rule = {'hold_minutes': 3, 'retest_ceiling_cny': 805.9}

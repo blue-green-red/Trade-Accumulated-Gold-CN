@@ -73,12 +73,41 @@ def blocking_checks(value):
     return [c for c in value.get('checks',[]) if c not in local]
 
 
-def notification_parts(value):
+def notification_parts(value, *, ignored_warning=None):
     """Keep unknown/global warnings blocking; omit only explicitly checked local items."""
-    if blocking_checks(value):return None
+    if any(check != ignored_warning for check in blocking_checks(value)):return None
     result=deepcopy(value)
     for field in ('order_management','review_conditions','suggested_orders'):
         result[field]=[item for item in result.get(field,[]) if not item.get('checks')]
     result['notification_partial']=bool(value.get('checks'))
     result['checks']=[]
     return result
+
+
+def live_notification_parts(value, account, now):
+    """Keep independently validated protection when an immediate buy is paused."""
+    if value.get('action_status',value['status']) == 'current':
+        return notification_parts(value)
+    pause = value.get('entry_pause_reason')
+    quote = account.get('quote') or {}
+    if (not pause or value.get('action') != 'buy' or value.get('lifecycle_status') != 'current'
+            or not account.get('connected') or quote.get('status') != 'fresh'):
+        return None
+    from .jd_live_conditions import management_state, stamp
+    quote_at, input_at = stamp(quote.get('quoted_at')), stamp(value.get('input_quote_at'))
+    if not quote_at or (input_at and quote_at < input_at):
+        return None
+    from .trading_hours import trading_session
+    if not trading_session(now)['is_open'] or not (result := notification_parts(value, ignored_warning=pause)):
+        return None
+
+    result.update(action='wait', action_status='current', grams=None, price_condition='none', price_cny=None,
+                  immediate_buy_paused=True, review_conditions=[], limit_buy_reviews=[])
+    result['suggested_orders']=[order for order in result['suggested_orders']
+                                if order['kind'] in ('limit_sell','take_profit_stop_loss')]
+    pending_buys = {order['order_key'] for order in (account.get('pending_orders') or {}).get('records', [])
+                    if order.get('action') == 'buy'}
+    result['order_management']=[{**order,'reason':''} for order in result['order_management']
+                                if order['action']=='cancel' and order['order_key'] in pending_buys
+                                and management_state(account,result,order,now)=='current']
+    return result if result['suggested_orders'] or result['order_management'] else None

@@ -87,7 +87,8 @@ def body(account,current,value,notice_reasons=(),proposal_withdrawn=False):
     management=value.get('order_management',[])
     manual=[o for o in management if o['action'] in ('cancel','replace')]
     conclusions={'buy':'建议买入','sell':'建议卖出','hold':'继续持有，本轮不立即买卖','wait':'继续观望，本轮不立即买卖'}
-    lines=['**本轮结论：'+conclusions[action]+'。**']
+    conclusion='即时买入建议已暂停' if value.get('immediate_buy_paused') else conclusions[action]
+    lines=['**本轮结论：'+conclusion+'。**']
     tasks=[conclusions[action]] if action in ('buy','sell') else []
     if drafts:tasks.append(f'{len(drafts)}笔新条件单建议')
     for operation,label in (('cancel','撤单'),('replace','改单')):
