@@ -9,7 +9,7 @@ from .jd_live_buy_watch import MAX_GAP, advance, eligible, extended, utc_text
 from .jd_live_conditions import stamp
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
 from .participation_audit import horizon_at, readonly
-from .trade_costs import number
+from .trade_costs import bank_review_payoff, number
 from .trading_hours import trading_session
 
 GRAMS = 10
@@ -164,35 +164,68 @@ def evaluate(value, published, expires, quotes, now):
     return evaluate_entries(immediate, confirmed, branch, published, number(value.get('input_sell_fee_rate')), quotes, now)
 
 
-def independent_branch_replay(value, published, expires, quotes, now):
+def replay_one_branch(value, condition, mode, published, expires, quotes, now):
+    branch = review_branch({**condition, 'confirmation_mode': mode})
+    fee = number(value.get('input_sell_fee_rate'))
+    progress = {}
+    immediate, confirmation, _ = entries({**value, 'review_conditions': [condition]}, published, expires, quotes, now,
+                                         breakout_mode=mode, progress=progress)
+    gap = progress.get('closest_trigger_gap_cny_per_gram')
+    if gap is not None:
+        progress['closest_trigger_gap_cny_per_gram'] = round(gap,2)
+    outcomes = evaluate_entries(immediate, confirmation, branch, published, fee, quotes, now)
+    evidence = (confirmation if isinstance(confirmation, dict) else
+                {'status': 'confirmed', 'quoted_at': utc_text(confirmation[0]),
+                 'observed_at': utc_text(confirmation[1]), 'buy_cny_per_gram': confirmation[2]})
+    return {'branch': branch, 'threshold_cny': condition['price_cny'], 'confirmation': evidence,
+            'observation_progress': progress,
+            'horizons': [{'trading_days': row['trading_days'], 'target_at': row['target_at'],
+                          'confirmed_10g': row['confirmed_10g']} for row in outcomes]}
+
+
+def shallow_level_sensitivity(value, condition, archived_quotes, published, expires, quotes, now):
+    """Test an alternative zone anchored to the analysis inputs available at the time."""
+    anchor = stamp(archived_quotes.get('as_of'))
+    lows = [low for w in archived_quotes.get('buy_price_windows_15m', []) if (low := number(w.get('low')))]
+    if (archived_quotes.get('status') != 'available' or not anchor or anchor > published
+            or anchor != stamp(value.get('input_quote_at')) or not lows):
+        return unavailable('archived_bank_quotes_unavailable')
+    sampled_low = min(lows)
+    shift = round(sampled_low - condition['price_cny'], 2)
+    if shift <= 0:
+        return {'status': 'already_at_or_above_sampled_low', 'sampled_low_cny': sampled_low}
+    review = condition['buy_review']
+    zone = review['zone']
+    candidate_review = {**review, 'recovery_price_cny': round(review['recovery_price_cny'] + shift, 2),
+                        'max_buy_price_cny': round(review['max_buy_price_cny'] + shift, 2),
+                        'zone': {**zone, 'floor_cny': round(zone['floor_cny'] + shift, 2)}}
+    candidate = {**condition, 'price_cny': sampled_low, 'buy_review': candidate_review}
+    result = {'sampled_low_cny': sampled_low, 'trigger_shift_cny_per_gram': shift,
+              'candidate_max_buy_cny': candidate_review['max_buy_price_cny']}
+    if not eligible(candidate, number(value.get('input_minimum_buy_grams'))):
+        return {'status': 'shifted_zone_incompatible_with_original_terms', **result}
+    payoff = bank_review_payoff(candidate_review['max_buy_price_cny'], GRAMS, zone, value.get('input_sell_fee_rate'))
+    return {'status': 'replayed', **result, 'payoff_10g_at_candidate_cap_cny': payoff,
+            'replay': replay_one_branch(value, candidate, None, published, expires, quotes, now)}
+
+
+def independent_branch_replay(value, published, expires, quotes, now, *, archived_quotes=None):
     """Use each condition alone and preserve the original observation window."""
     watch = value.get('buy_watch')
     if watch and stamp(watch.get('starts_at')) != published:
         return []
     minimum = number(value.get('input_minimum_buy_grams'))
-    fee = number(value.get('input_sell_fee_rate'))
     cases = []
     for condition in value.get('review_conditions', []):
         if not eligible(condition, minimum):
             continue
-        only_condition = {**value, 'review_conditions': [condition]}
         modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
         for mode in modes:
-            branch = review_branch({**condition, 'confirmation_mode': mode})
-            progress = {}
-            immediate, confirmation, _ = entries(only_condition, published, expires, quotes, now,
-                                                 breakout_mode=mode, progress=progress)
-            gap = progress.get('closest_trigger_gap_cny_per_gram')
-            if gap is not None:
-                progress['closest_trigger_gap_cny_per_gram'] = round(gap,2)
-            outcomes = evaluate_entries(immediate, confirmation, branch, published, fee, quotes, now)
-            evidence = (confirmation if isinstance(confirmation, dict) else
-                        {'status': 'confirmed', 'quoted_at': utc_text(confirmation[0]),
-                         'observed_at': utc_text(confirmation[1]), 'buy_cny_per_gram': confirmation[2]})
-            cases.append({'branch': branch, 'threshold_cny': condition['price_cny'], 'confirmation': evidence,
-                          'observation_progress': progress,
-                          'horizons': [{'trading_days': row['trading_days'], 'target_at': row['target_at'],
-                                        'confirmed_10g': row['confirmed_10g']} for row in outcomes]})
+            result = replay_one_branch(value, condition, mode, published, expires, quotes, now)
+            if result['branch'] == 'shallow_pullback' and archived_quotes is not None:
+                result['sampled_low_sensitivity'] = shallow_level_sensitivity(value, condition, archived_quotes,
+                                                                             published, expires, quotes, now)
+            cases.append(result)
     return cases
 
 
@@ -375,9 +408,10 @@ def report(conn, bank, model, limit, now):
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone():
         return {'status': 'sampling_not_initialized', 'cases': []}
     cases = []
-    recent = conn.execute('SELECT id,created_at,expires_at,advice_json FROM jd_live_advice '
+    recent = conn.execute('SELECT id,created_at,expires_at,advice_json,view_id FROM jd_live_advice '
                           'WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT ?', (bank, model, limit)).fetchall()
-    for advice_id, created, expires, raw in recent:
+    has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
+    for advice_id, created, expires, raw, view_id in recent:
         published, end = stamp(created), stamp(expires)
         if not published or not end or published > now:
             continue
@@ -393,9 +427,17 @@ def report(conn, bank, model, limit, now):
                                        "ORDER BY id LIMIT 1", (bank, model, advice_id, watch['id'])).fetchone()
             if replacement:
                 watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
+        archived_quotes = {}
+        if has_history and any(review_branch(c)=='shallow_pullback' for c in value.get('review_conditions', [])):
+            entry = conn.execute('SELECT json_extract(s.value, ?) FROM ai_views v JOIN state s '
+                                 "ON s.key='ai_model_input:'||v.run_id||':'||v.analyst WHERE v.rowid=? AND v.analyst=?",
+                                 (f'$.live_readonly_accounts.accounts.{bank}.recent_bank_quotes', view_id, model)).fetchone()
+            if entry and entry[0]:
+                archived_quotes = json.loads(entry[0])
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now),
-                      'independent_branch_replay': independent_branch_replay(value, published, end, points, now)})
+                      'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
+                                                                            archived_quotes=archived_quotes)})
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': GRAMS, 'cases': cases,
             'observed_reviews': observed_reviews(conn, bank, model, limit, now)}
 

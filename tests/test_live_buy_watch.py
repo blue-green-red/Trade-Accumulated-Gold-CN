@@ -405,6 +405,34 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_shallow_replay_uses_only_the_contemporaneous_bank_low(self):
+        end = START + timedelta(minutes=8)
+        now = end + timedelta(minutes=1)
+        quote_at = (START - timedelta(minutes=1)).isoformat()
+        value = {'input_quote_at': quote_at, 'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                 'review_conditions': [zoned_route()]}
+        archived = {'status': 'available', 'as_of': quote_at, 'buy_price_windows_15m': [{'low': 805}]}
+        points = [point(m, p) for m, p in ((1, 804.9), (2, 808.1), (4, 808.2), (6, 808.2), (7, 808.2))]
+
+        row, = independent_branch_replay(value, START, end, points, now, archived_quotes=archived)
+        self.assertEqual(row['confirmation']['status'], 'no_confirmation')
+        shadow = row['sampled_low_sensitivity']
+        self.assertEqual(shadow['status'], 'replayed')
+        self.assertEqual(shadow['candidate_max_buy_cny'], 809)
+        self.assertEqual(shadow['replay']['confirmation']['buy_cny_per_gram'], 808.2)
+        self.assertEqual(datetime.fromisoformat(shadow['replay']['confirmation']['quoted_at']), point(4, 808.2)[0])
+        self.assertEqual(shadow['payoff_10g_at_candidate_cap_cny']['risk_exit_net_cny'],
+                         round(10 * (797 * .995 - 809), 2))
+        self.assertEqual(value['review_conditions'], [zoned_route()])
+
+        value['review_conditions'][0]['buy_review']['zone']['weak_target_cny'] = 808
+        row, = independent_branch_replay(value, START, end, points, now, archived_quotes=archived)
+        self.assertEqual(row['sampled_low_sensitivity']['status'], 'shifted_zone_incompatible_with_original_terms')
+        row, = independent_branch_replay(value, START, end, points, now,
+                                        archived_quotes={**archived, 'as_of': now.isoformat()})
+        self.assertEqual(row['sampled_low_sensitivity']['status'], 'archived_bank_quotes_unavailable')
+
     def test_replay_distinguishes_the_stages_before_a_shallow_pullback_confirms(self):
         end = START + timedelta(minutes=8)
         value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
