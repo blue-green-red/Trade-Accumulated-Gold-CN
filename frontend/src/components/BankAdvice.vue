@@ -322,6 +322,41 @@ const proposalState = (order) => {
               signed(size.account_at_exit_change_pct, 3)
             }}%）
           </div>
+          <template v-if="size.combined_buys">
+            <div>
+              若本批和其他买单都成交，共买入
+              {{ num(size.combined_buys.total_buy_grams) }} 克， 占用
+              {{ num(size.combined_buys.total_spending_cny) }} 元
+              <template v-if="size.combined_buys.position_after_pct != null">
+                · 成交后总仓位 {{ num(size.combined_buys.position_after_pct) }}%
+              </template>
+              <template
+                v-else-if="size.combined_buys.cash_covers_all === false"
+              >
+                · 现金不足以覆盖</template
+              >
+            </div>
+            <div
+              v-if="
+                size.combined_buys.cash_cap_grams != null &&
+                size.combined_buys.cash_cap_grams !== size.cash_cap_grams
+              "
+            >
+              为其他买单留足资金后，本批现金上限
+              {{ num(size.combined_buys.cash_cap_grams) }} 克
+            </div>
+            <div v-if="size.combined_buys.account_at_exit_change_cny != null">
+              同一退出价的扣费净值变化
+              {{ signed(size.combined_buys.account_at_exit_change_cny) }} 元
+              （{{
+                signed(size.combined_buys.account_at_exit_change_pct, 3)
+              }}%）
+              <template v-if="size.combined_buys.risk_cap_grams != null">
+                · 计入其他买单后，本批风险上限参考
+                {{ num(size.combined_buys.risk_cap_grams) }} 克
+              </template>
+            </div>
+          </template>
         </div>
       </section>
       <DownsideReview :items="advice.downside_scenarios" />
@@ -515,9 +550,7 @@ const proposalState = (order) => {
           突破后至少
           {{ c.monitoring?.continuation_min_quotes ?? 3 }} 笔买价在高位上方，
           跨满
-          {{
-            c.monitoring?.continuation_minutes ?? 3
-          }}
+          {{ c.monitoring?.continuation_minutes ?? 3 }}
           分钟且刷新突破后的高点时复评。
           <template v-if="!c.bank_breakout.earlier_high">
             突破后回踩 {{ num(c.price_cny) }}–{{

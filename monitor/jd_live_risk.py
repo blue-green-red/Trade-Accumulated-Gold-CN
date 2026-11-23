@@ -84,7 +84,7 @@ def annotate(value,source):
             order['account_effects']['stop_loss']=effect(source,order.get('loss_price_cny'),side,order['grams'])
 
 
-def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None):
+def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, committed=None):
     """Recalculate a proposed batch at its entry price using the saved bank inputs."""
     state = advice.get('input_state') or {}
     assets = advice.get('input_account_risk') or {}
@@ -108,6 +108,21 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None):
             data['spending_nav_pct'] = round(spending / net * 100, 4)
         if gross_at_entry and spending <= cash + 1e-8:
             data['position_after_pct'] = round((holding + sized) * entry / gross_at_entry * 100, 4)
+    combined = None
+    if committed is not None and committed[0] > 0 and sized is not None:
+        other_grams, other_cost = committed
+        total_grams, total_cost = sized + other_grams, sized * entry + other_cost
+        combined = {'other_buy_grams': round(other_grams, 4), 'total_buy_grams': round(total_grams, 4),
+                    'total_spending_cny': round(total_cost, 2)}
+        if cash is not None:
+            combined['cash_cap_grams'] = floor(max(0., cash - other_cost) / entry * 100) / 100
+            combined['cash_covers_all'] = total_cost <= cash + 1e-8
+            if combined['cash_covers_all'] and holding is not None:
+                gold_after = (holding + total_grams) * entry
+                gross_after = cash - total_cost + gold_after
+                if gross_after > 0:
+                    combined['position_after_pct'] = round(gold_after / gross_after * 100, 4)
+        data['combined_buys'] = combined
 
     fee = number(advice.get('input_sell_fee_rate'))
     if not exit_price or exit_price >= entry or fee is None or fee >= 1:
@@ -127,6 +142,14 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None):
         account_delta = -(held_loss + sized * added_loss)
         data.update(account_at_exit_change_cny=round(account_delta, 2),
                     account_at_exit_change_pct=round(account_delta / net * 100, 4))
+    if combined is not None:
+        other_loss = other_cost - other_grams * net_at_exit
+        if budget is not None:
+            risk_left = max(0., budget - max(0., held_loss) - max(0., other_loss))
+            combined['risk_cap_grams'] = floor(risk_left / added_loss * 100) / 100
+        if combined.get('cash_covers_all'):
+            delta = -(held_loss + other_loss + sized * added_loss)
+            combined.update(account_at_exit_change_cny=round(delta, 2), account_at_exit_change_pct=round(delta / net * 100, 4))
     return data
 
 
@@ -139,22 +162,49 @@ def buy_sizing(advice):
     target = number(path.get('target_position_pct')) if not path.get('checks') else None
     if target is not None and target > 100:
         target = None
+    from .jd_live_entry import same_order
+    from .jd_live_semantics import blocking_checks
+
+    known = advice.get('input_pending_buy_exposure') or {}
+    pending = number(known.get('grams')),number(known.get('cost_cny'))
+    status = advice.get('input_data_status') or {}
+    if pending == (None, None) and status.get('orders') == 'fresh' and status.get('orders_complete') is True:
+        if (advice.get('input_state') or {}).get('pending_order_count') == 0:
+            pending = (0., 0.)  # Older saved advice can only establish zero orders here.
+    orders = [o for o in advice.get('suggested_orders', []) if o.get('kind') == 'limit_buy' and not o.get('checks')
+              and number(o.get('grams')) and number(o.get('price_cny'))]
+    planned_grams = sum(o['grams'] for o in orders)
+    planned_cost = sum(o['grams'] * o['price_cny'] for o in orders)
+
+    def committed(extra_grams, extra_cost):
+        if None not in pending:
+            return max(0., pending[0] + extra_grams), max(0., pending[1] + extra_cost)
+        return None
+
     result = []
+    immediate_grams = immediate_cost = 0.
     if advice.get('action') == 'buy' and (grams := number(advice.get('grams'))):
         reference = number(advice.get('price_cny')) or 0
         quote = number(advice.get('input_buy_quote_cny')) or 0
         entry = reference if advice.get('price_condition') == 'at_or_below' else max(reference, quote)
         if entry:
             exit_price = number(path.get('boundary_price_cny')) if not path.get('checks') else None
-            result.append({'kind': 'immediate', **buy_size_metrics(advice, entry, grams, target=target, exit_price=exit_price)})
+            result.append({'kind': 'immediate', **buy_size_metrics(advice, entry, grams, target=target, exit_price=exit_price,
+                committed=committed(planned_grams, planned_cost))})
+            if not blocking_checks(advice):
+                immediate_grams, immediate_cost = grams, grams * entry
     candidates = [review for review in advice.get('limit_buy_reviews', []) if not review.get('checks')
                   and review.get('decision') in ('recommend', 'needs_review') and number(review.get('entry_price_cny'))]
     candidate_target = target if advice.get('action') in ('hold', 'wait') and len(candidates) == 1 else None
     for review in candidates:
         grams = number(review.get('grams'))
         if grams or candidate_target is not None:
-            result.append({'kind': review['decision'], **buy_size_metrics(advice, float(review['entry_price_cny']),
-                grams, target=candidate_target, exit_price=number(review.get('risk_exit_cny')))})
+            entry = float(review['entry_price_cny'])
+            included = grams and review['decision'] == 'recommend' and any(same_order(review, order) for order in orders)
+            others = committed(planned_grams + immediate_grams - (grams if included else 0.),
+                               planned_cost + immediate_cost - (grams * entry if included else 0.))
+            result.append({'kind': review['decision'], **buy_size_metrics(advice, entry,
+                grams, target=candidate_target, exit_price=number(review.get('risk_exit_cny')), committed=others)})
     return result
 
 

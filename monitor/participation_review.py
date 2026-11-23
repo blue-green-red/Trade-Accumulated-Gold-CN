@@ -97,21 +97,35 @@ def simulation(conn,account,quote,as_of,fee,spread):
     return value
 
 
-def bank_cash(account):
-    cash=number(account.get('cash_cny'));orders=account.get('pending_orders') or {}
-    if cash is None or orders.get('status')!='fresh':return None
+def pending_buy_exposure(account):
+    """Remaining buy quantity and reserved cash at the confirmed limit prices."""
+    orders=account.get('pending_orders') or {}
+    if orders.get('status')!='fresh':return None
     if orders.get('complete') is not True:
         if orders.get('source_complete') is True and orders.get('omitted_count'):
-            free_cash=number((account.get('new_buy_capacity_at_input') or {}).get('cash_after_buy_orders_cny'))
-            if free_cash is not None and free_cash<=cash:return free_cash
+            exposure=(account.get('new_buy_capacity_at_input') or {}).get('pending_buy_exposure') or {}
+            grams,cost=number(exposure.get('grams')),number(exposure.get('cost_cny'))
+            if grams is not None and cost is not None:return {'grams':grams,'cost_cny':cost}
         return None
     from .jd_live_path import remaining
+    qty=cost=0.
     for o in orders.get('records',[]):
         if o.get('status') not in ('pending','partially_filled') or o.get('action')!='buy':continue
         grams=remaining(o);price=number(o.get('price_cny'))
         if grams is None or not price:return None
-        cash-=grams*price
-    return max(0,cash)
+        qty+=grams;cost+=grams*price
+    return {'grams':qty,'cost_cny':cost}
+
+
+def bank_cash(account):
+    cash=number(account.get('cash_cny'));orders=account.get('pending_orders') or {}
+    if cash is None or orders.get('status')!='fresh':return None
+    if (exposure:=pending_buy_exposure(account)) is not None:
+        return max(0,cash-exposure['cost_cny'])
+    if orders.get('complete') is not True and orders.get('source_complete') is True and orders.get('omitted_count'):
+        free_cash=number((account.get('new_buy_capacity_at_input') or {}).get('cash_after_buy_orders_cny'))
+        if free_cash is not None and free_cash<=cash:return free_cash
+    return None
 
 
 def live(conn,account,model,now=None):

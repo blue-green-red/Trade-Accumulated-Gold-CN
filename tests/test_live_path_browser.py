@@ -49,6 +49,8 @@ class LivePathBrowserTests(unittest.TestCase):
                     self.assertTrue(page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
                 response=page.request.get(url+'/api/pages/strategies?view=live%2Fzheshang%2Fadvice').json()
                 account=response['live_account'];entry=account['advice'][0]
+                entry['presentation']['buy_sizing'][0]['combined_buys']={'total_buy_grams':12,'total_spending_cny':10470,
+                    'account_at_exit_change_cny':-1297.12,'account_at_exit_change_pct':-1.923,'cash_covers_all':True}
                 entry['review_conditions'].append({'condition':'at_or_above','quote_side':'buy','price_cny':892,
                     'bank_breakout':{'earlier_high':True},'reason':'突破更早高位后持续走高，再评估延续空间。',
                     'monitoring':{'status':'monitoring'}})
@@ -61,6 +63,8 @@ class LivePathBrowserTests(unittest.TestCase):
                 current_state(entry,account)
                 page.route('**/api/pages/strategies*',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps(response)))
                 page.reload()
+                expect(page.locator('[data-buy-sizing]')).to_contain_text('共买入 12.00 克')
+                expect(page.locator('[data-buy-sizing]')).to_contain_text('同一退出价的扣费净值变化')
                 extension=page.locator('.live-quote').filter(has_text='更早高位 892.00 元/克')
                 expect(extension).to_contain_text('跨满 3 分钟')
                 expect(extension).not_to_contain_text('突破后回踩')

@@ -111,6 +111,39 @@ class AccountRiskTests(unittest.TestCase):
         self.assertEqual(buy_sizing({**value,'input_quote_status':'historical'}),[])
         self.assertEqual(buy_sizing({**value,'limit_buy_reviews':[case,{**case,'entry_price_cny':890}]}),[])
 
+    def test_combined_sizing_counts_each_new_batch_once_and_reserves_risk(self):
+        from monitor.jd_live_presentation import presentation
+
+        order={'kind':'limit_buy','price_cny':905,'grams':3,'expires_at':'2026-11-30T00:00:00+00:00'}
+        review={'decision':'recommend','entry_price_cny':905,'risk_exit_cny':870,'grams':3,'expires_at':order['expires_at']}
+        value={'action':'buy','price_condition':'at_or_below','price_cny':920,'grams':2,
+               'input_data_status':{'account':'fresh'},'input_quote_status':'fresh','input_buy_quote_cny':1000,
+               'input_quote_cny':1000,'input_sell_fee_rate':.004,'input_state':{'cash_cny':10000,'total_grams':10},
+               'input_participation_cash_cny':9090,'input_pending_buy_exposure':{'grams':1,'cost_cny':910},
+               'input_account_risk':{'net_assets_cny':19960,'risk_budget_cny':1500},
+               'position_path':{'target_position_pct':60,'boundary_price_cny':880},
+               'suggested_orders':[order],'limit_buy_reviews':[review]}
+        immediate,limit=buy_sizing(value)
+        together=immediate['combined_buys']
+        self.assertEqual((together['other_buy_grams'],together['total_buy_grams'],together['total_spending_cny']),(4,6,5465))
+        self.assertEqual(together['account_at_exit_change_cny'],-1401.32)
+        self.assertEqual((together['cash_cap_grams'],together['risk_cap_grams']),(6.92,4.26))
+        self.assertEqual((limit['combined_buys']['other_buy_grams'],limit['combined_buys']['total_buy_grams']),(3,6))
+        self.assertNotIn('combined_buys',buy_sizing({**value,'input_pending_buy_exposure':None})[0])
+        archived={**value,'buy_sizing_at_input':[immediate,limit],'suggested_orders':[{**order,'checks':['已到期']}]}
+        self.assertEqual(presentation(archived)['buy_sizing'],[immediate,limit])
+
+    def test_pending_exposure_counts_partial_order_remaining_quantity(self):
+        from monitor.participation_review import pending_buy_exposure
+
+        part={'status':'fresh','complete':True,'records':[
+            {'action':'buy','status':'partially_filled','grams':5,'filled_grams':2,'price_cny':800},
+            {'action':'buy','status':'cancelled','grams':9,'price_cny':800},
+            {'action':'sell','status':'pending','grams':3,'price_cny':850}]}
+        self.assertEqual(pending_buy_exposure({'pending_orders':part}),{'grams':3,'cost_cny':2400})
+        part['records'][0]['filled_grams']=None
+        self.assertIsNone(pending_buy_exposure({'pending_orders':part}))
+
     def test_annotation_does_not_rewrite_orders_or_create_notification_churn(self):
         order={'kind':'take_profit_stop_loss','grams':100.,'price_cny':900.,'loss_price_cny':840.}
         value={'suggested_orders':[order],'downside_scenarios':[scenario()]}

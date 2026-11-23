@@ -62,5 +62,6 @@ def presentation(value):
     from .jd_live_risk import buy_sizing
 
     path=value.get('position_path') or {}
+    sizing=value['buy_sizing_at_input'] if 'buy_sizing_at_input' in value else buy_sizing(value)
     return {'basis':basis(value),'plan_steps':plan_steps(path),'execution_note':full_text(path.get('execution_note')),
-            'buy_sizing':buy_sizing(value)}
+            'buy_sizing':sizing}

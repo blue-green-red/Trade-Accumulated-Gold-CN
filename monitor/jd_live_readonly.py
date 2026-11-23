@@ -369,7 +369,7 @@ def review_condition_input(conn, account, advice, condition, watch_end):
 
 def model_input(conn,now=None):
     from .jd_live_buy_watch import quote_context
-    from .participation_review import bank_cash
+    from .participation_review import bank_cash, pending_buy_exposure
     now=now or datetime.now(timezone.utc)
     rows=accounts(conn,now,include_advice=True)
     if not any(r.get('fetched_at') for r in rows):return None
@@ -393,6 +393,7 @@ def model_input(conn,now=None):
                 values[row['bank']]['new_buy_capacity_at_input']={
                     'cash_after_buy_orders_cny':free_cash,
                     'cash_limited_grams':math.floor(free_cash*100/buy)/100,
+                    'pending_buy_exposure':pending_buy_exposure(row),
                 }
         active_links={i for o in row['order_history'] if o['status'] in ('pending','partially_filled') for i in o.get('advice_links',{}).values()}
         previous=[];counts={}

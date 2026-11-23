@@ -132,8 +132,9 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         value['input_buy_quote_cny']=price((source.get('quote') or {}).get('buy_price_cny')) if value['input_quote_status']=='fresh' else None
         previous=next((v for v in source.get('previous_advice',[]) if v.get('analyst')==analyst),{})
         if previous.get('strategy_review') is not None:value['input_strategy_review']=previous['strategy_review']
-        from .participation_review import bank_cash
+        from .participation_review import bank_cash,pending_buy_exposure
         value['input_participation_cash_cny']=bank_cash(source)
+        value['input_pending_buy_exposure']=pending_buy_exposure(source)
         input_orders=source.get('pending_orders') or {}
         value['input_data_status']={'account':source.get('status'),'orders':input_orders.get('status'),
             'orders_complete':input_orders.get('source_complete',input_orders.get('complete')),
@@ -157,7 +158,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         warnings.extend(validate_structure(value,source,now,minimum_buy_grams=minimums.get(bank)))
         warnings.extend(minimum_buy_checks(value,minimums.get(bank)))
         warnings.extend(validate_proposals(value,source,now))
-        from .jd_live_risk import validate_downside,annotate,protection_state
+        from .jd_live_risk import annotate,buy_sizing,protection_state,validate_downside
         warnings.extend(validate_downside(value,source,require=strict_downside))
         from .jd_live_entry import validate as validate_entry
         warnings.extend(validate_entry(value,source,now,require=strict_entry))
@@ -183,6 +184,7 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None,entr
         if warning:
             from .jd_live_buy_guard import block_entries
             block_entries(value,warning,include_reviews=bank in (entry_warnings or {}))
+        value['buy_sizing_at_input']=buy_sizing(value)
         from .jd_live_buy_watch import set_watch
         if not bank_guard:
             set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))

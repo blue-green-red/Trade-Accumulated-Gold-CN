@@ -85,12 +85,16 @@ class LiveAccountTests(unittest.TestCase):
         inputs=model_input(self.c,NOW)
         account=inputs['accounts']['zheshang']
         self.assertEqual(len(account['pending_orders']['records']),5)
-        self.assertEqual(account['new_buy_capacity_at_input'],{'cash_after_buy_orders_cny':5400,'cash_limited_grams':6.35})
+        self.assertEqual(account['new_buy_capacity_at_input'],{'cash_after_buy_orders_cny':5400,'cash_limited_grams':6.35,
+            'pending_buy_exposure':{'grams':12,'cost_cny':9600}})
         save(self.c,'codex',1,{'zheshang':{**advice(),'action':'buy','grams':6.36,
              'price_cny':849,'price_condition':'reference'}},inputs,NOW)
         current=accounts(self.c,NOW)[0]['advice'][0]
         self.assertIn('新增买入与待成交买单的预算合计超过本户可用资金',current['checks'])
         self.assertEqual(current['action_status'],'review_required')
+        sizing,=current['buy_sizing_at_input']
+        self.assertEqual(sizing['combined_buys']['total_buy_grams'],18.36)
+        self.assertFalse(sizing['combined_buys']['cash_covers_all'])
         save(self.c,'codex',2,{'zheshang':{**advice(),'action':'buy','grams':6.36,
              'price_cny':849,'price_condition':'at_or_below'}},inputs,NOW)
         current=accounts(self.c,NOW)[0]['advice'][0]
