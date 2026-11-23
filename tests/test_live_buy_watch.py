@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import evaluate, followup_quote, observed_reviews
+from monitor.jd_live_buy_audit import evaluate, first_observed_quote, followup_quote, observed_review_horizons, observed_reviews
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -404,6 +404,32 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_actual_branch_marks_both_timings_on_same_day_quote_and_drawdown(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'horizon.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            confirmed = datetime(2026, 11, 20, 18, 24, tzinfo=timezone.utc)
+            published = confirmed + timedelta(minutes=1)
+            monday_open = datetime(2026, 11, 23, 1, tzinfo=timezone.utc)
+            for at, buy, sell in ((confirmed, 800, 800), (published, 802, 801),
+                                  (confirmed + timedelta(minutes=2), 810, 810),
+                                  (confirmed + timedelta(minutes=4), 798, 798),
+                                  (monday_open, 803, 801)):
+                record(store.conn, 'zheshang', (at, at, buy, sell))
+            publication = first_observed_quote(store.conn, 'zheshang', published, published + timedelta(minutes=3))
+            day, later = observed_review_horizons(store.conn, 'zheshang', confirmed, 800, .005, published,
+                                                  publication, monday_open + timedelta(minutes=1))
+            self.assertEqual(datetime.fromisoformat(day['target_at']), monday_open)
+            self.assertEqual(day['wait']['net_cny'], 0)
+            for key, entry in (('at_confirmation_10g', 800), ('after_analysis_10g', 802)):
+                self.assertEqual(day[key]['net_cny'], round((801*.995-entry)*10, 2))
+                self.assertEqual(day[key]['sampled_max_drawdown_cny'], round((810-798)*.995*10, 2))
+            self.assertEqual(later['at_confirmation_10g']['status'], 'pending')
+            missing, _ = observed_review_horizons(store.conn, 'zheshang', confirmed, 800, .005, published,
+                                                   publication, monday_open - timedelta(seconds=1))
+            self.assertEqual(missing['after_analysis_10g']['status'], 'pending')
+
     def test_report_counts_actual_review_branches_and_never_implies_a_fill(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
         with TemporaryDirectory() as tmp:
@@ -481,6 +507,7 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(row['confirmed_10g']['net_cny'], round(10 * (price * .995 - 805), 2))
             self.assertEqual(row['wait']['net_cny'], 0.)
             self.assertIsNone(row['confirmed_10g']['sampled_adverse_excursion_cny'])
+            self.assertIsNone(row['confirmed_10g']['sampled_max_drawdown_cny'])
         self.assertGreater(rows[0]['confirmed_10g']['missed_gain_by_waiting_cny'], 0)
         self.assertGreater(rows[1]['confirmed_10g']['loss_avoided_by_waiting_cny'], 0)
 

@@ -98,10 +98,28 @@ def mark(entry, exit_quote, fee, quotes):
     marks = [p for p in quotes if quoted_at <= p[0] <= end_at and p[1] <= exit_quote[1]]
     net = lambda sell: (sell * (1 - fee) - buy) * GRAMS
     complete = complete_sampling(quoted_at, end_at, marks)
+    adverse = drawdown = None
+    if complete:
+        peak = low = drawdown = 0.
+        for _, _, _, sell in marks:
+            value = net(sell)
+            peak = max(peak, value)
+            low = min(low, value)
+            drawdown = max(drawdown, peak - value)
+        adverse, drawdown = round(-low,2), round(drawdown,2)
     return {'status': 'valued', 'entry_at': utc_text(observed_at), 'entry_cny_per_gram': buy,
-            'net_cny': round(net(exit_quote[3]), 2),
-            'sampled_adverse_excursion_cny': round(max(0., -min(net(p[3]) for p in marks)), 2) if complete else None,
-            'mark_samples': len(marks)}
+            'net_cny': round(net(exit_quote[3]), 2), 'sampled_adverse_excursion_cny': adverse,
+            'sampled_max_drawdown_cny': drawdown, 'mark_samples': len(marks)}
+
+
+def trading_horizon(anchor, days):
+    target = horizon_at(anchor.isoformat(), days)
+    session = trading_session(target)
+    if not session['is_open']:
+        target = stamp(session['next_open'])
+        session = trading_session(target)
+    deadline = min(target + MAX_GAP, stamp(session['close_at']) - timedelta(microseconds=1))
+    return target, deadline
 
 
 def evaluate(value, published, expires, quotes, now):
@@ -109,11 +127,8 @@ def evaluate(value, published, expires, quotes, now):
     fee = number(value.get('input_sell_fee_rate'))
     horizons = []
     for days in (1, 3):
-        target = horizon_at(published.isoformat(), days)
-        session = trading_session(target)
-        if not session['is_open']:
-            target = stamp(session['next_open'])
-        exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= target + MAX_GAP), None)
+        target, deadline = trading_horizon(published, days)
+        exit_quote = next((p for p in quotes if target <= p[0] <= p[1] <= deadline), None)
         row = {'trading_days': days, 'target_at': target.isoformat(), 'wait': {'status': 'valued', 'net_cny': 0.0}}
         if branch:
             row['confirmation_branch'] = branch
@@ -122,7 +137,7 @@ def evaluate(value, published, expires, quotes, now):
         for label, entry in (('immediate_10g', immediate), ('confirmed_10g', confirmed)):
             if not isinstance(entry, dict) and entry[1] > target:
                 result = {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
-            elif exit_quote is None and now < target + MAX_GAP and not isinstance(entry, dict):
+            elif exit_quote is None and now < deadline and not isinstance(entry, dict):
                 result = unavailable('pending')
             else:
                 result = mark(entry, exit_quote, fee, quotes)
@@ -204,6 +219,50 @@ def followup_quote(conn, bank, confirmed, price, minutes, now, *, fee=None, publ
     return result
 
 
+def observed_review_horizons(conn, bank, confirmed, price, fee, published, publication_quote, now):
+    """Mark fixed-size hypothetical additions at common trading-day horizons."""
+    horizons = []
+    for days in (1, 3):
+        row = {'trading_days': days, 'wait': {'status': 'valued', 'net_cny': 0.0}}
+        if not confirmed or not price:
+            row.update(at_confirmation_10g=unavailable('signal_unavailable'), after_analysis_10g=unavailable('signal_unavailable'))
+            horizons.append(row)
+            continue
+        target, deadline = trading_horizon(confirmed, days)
+        row['target_at'] = utc_text(target)
+        cutoff = min(now, deadline)
+        exit_quote = first_observed_quote(conn, bank, target, cutoff)
+        if not exit_quote:
+            status = 'pending' if now < deadline else 'horizon_quote_missing'
+            row.update(at_confirmation_10g=unavailable(status), after_analysis_10g=unavailable(status))
+            horizons.append(row)
+            continue
+        row['exit_quote_at'] = exit_quote[0]
+        if fee is None or fee >= 1:
+            row.update(at_confirmation_10g=unavailable('fee_unknown'), after_analysis_10g=unavailable('fee_unknown'))
+            horizons.append(row)
+            continue
+        sampled = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
+                               'WHERE bank=? AND quoted_at>=? AND quoted_at<? AND observed_at>=quoted_at AND observed_at<=? '
+                               'ORDER BY quoted_at', (bank, utc_text(confirmed), exit_quote[0], exit_quote[3]))
+        quotes = [(stamp(quoted), stamp(seen), buy, sell) for quoted, seen, buy, sell in sampled]
+        exit_point = stamp(exit_quote[0]), stamp(exit_quote[3]), exit_quote[1], exit_quote[2]
+        quotes.append(exit_point)
+        entry = quotes[0] if quotes[0][0] == confirmed and quotes[0][2] == price else unavailable('confirmation_quote_missing')
+        if published is None:
+            later = unavailable('analysis_not_published')
+        elif published >= target or (publication_quote and stamp(publication_quote[3]) >= target):
+            later = {'status': 'no_entry_by_horizon', 'net_cny': 0.0}
+        elif not publication_quote:
+            later = unavailable('publication_quote_missing')
+        else:
+            quoted, buy, sell, seen = publication_quote
+            later = stamp(quoted), stamp(seen), buy, sell
+        row.update(at_confirmation_10g=mark(entry, exit_point, fee, quotes), after_analysis_10g=mark(later, exit_point, fee, quotes))
+        horizons.append(row)
+    return horizons
+
+
 def observed_reviews(conn, bank, model, limit, now):
     """Actual review events and outcomes, with a separately labeled quote comparison."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
@@ -253,7 +312,9 @@ def observed_reviews(conn, bank, model, limit, now):
                               'quote_change_to_publication_cny': round(mark[1] - price, 2) if mark and price else None,
                               'quote_followups': [followup_quote(conn, bank, confirmed, price, minutes, now,
                                                                  fee=fee, publication_quote=mark)
-                                                  for minutes in (15, 60)]})
+                                                  for minutes in (15, 60)],
+                              'trading_day_followups': observed_review_horizons(conn, bank, confirmed, price, fee,
+                                                                                 released, mark, now)})
                 if (branch, outcome) not in counted:
                     summary[branch][outcome] += 1
                     counted.add((branch, outcome))
