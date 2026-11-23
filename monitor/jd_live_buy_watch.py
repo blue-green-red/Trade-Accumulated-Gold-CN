@@ -150,7 +150,8 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     invalidated = (value.get('reassessment') or {}).get('thesis_status') == 'invalidated'
     if invalidated:
         return
-    if value['action'] in ('wait', 'hold') and evidence.get('status') == 'available' and len(conditions) < 4:
+    # The model's condition limit does not include this program-managed observation.
+    if value['action'] in ('wait', 'hold') and evidence.get('status') == 'available':
         prior = next((c for c in previous.get('review_conditions', []) if c.get('bank_breakout')), None)
         if prior and stamp(prior_watch.get('expires_at')) > now:
             conditions.append(prior)

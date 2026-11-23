@@ -181,6 +181,37 @@ class BuyWatchTests(unittest.TestCase):
         self.assertNotEqual(condition_key(conditions[0]), condition_key(conditions[1]))
         self.assertTrue(conditions[1]['bank_breakout']['companion'])
 
+    def test_full_model_conditions_leave_room_for_an_early_continuation_review(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
+                      'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+            model_conditions = [zoned_route(), zoned_route('at_or_above'),
+                                {'condition': 'at_or_above', 'quote_side': 'sell', 'price_cny': 815},
+                                {'condition': 'at_or_below', 'quote_side': 'sell', 'price_cny': 795}]
+            deadline = (START + timedelta(minutes=15)).isoformat()
+            advice = {'id': 1, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                      'snapshot_revision': 'v1', 'created_at': START.isoformat(), 'expires_at': deadline,
+                      'action': 'hold', 'valid_for_minutes': 15, 'review_conditions': list(model_conditions)}
+            with store.conn:
+                set_watch(store.conn, 'zheshang', 'codex', advice, source, START, 10)
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                                   (1, 'zheshang', 'codex', 1, START.isoformat(), deadline, 'v1', json.dumps(advice)))
+            self.assertEqual(advice['review_conditions'][:-1], model_conditions)
+            self.assertEqual(advice['review_conditions'][-1]['price_cny'], 805)
+            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+            for minute, price in [(0, 805.5), (1, 805.9), (3, 806.4), (4, 806.5)]:
+                quote = point(minute, price)
+                request(store, account, advice, quote[1], quote)
+                events = read(store.conn, 'codex')['pending']
+                self.assertEqual(len(events), int(minute >= 3))
+            self.assertLess(806.4 / 805 - 1, .004)
+            self.assertEqual(events[0]['data']['routes'][0]['confirmation_mode'], 'continuation')
+            self.assertEqual(events[0]['min_gap_minutes'], 0)
+            self.assertEqual(advice['action'], 'hold')
+
     def test_watch_survives_action_expiry_and_an_unchanged_advice(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'test.db')
