@@ -496,9 +496,9 @@ class AIAnalyst:
                 remember_reviewed_confirmations(store.conn, self.analyst, submitted)
                 pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, submitted)
             acknowledge(store.conn, self.analyst, [event_id for event_id in covered_ids if event_id not in pending_entry_ids])
-            if data.get('live_account_advice'):
-                from .jd_live_buy_watch import carry_pending_breakouts
-                carry_pending_breakouts(store.conn, self.analyst, cur.lastrowid, datetime.fromisoformat(view_ts))
+            if context.get('live_readonly_accounts') and data.get('live_account_advice'):
+                from .jd_live_buy_watch import carry_breakout_observations
+                carry_breakout_observations(store.conn, self.analyst, cur.lastrowid, datetime.fromisoformat(view_ts))
         store.conn.commit()
         if public_status == "unavailable":
             log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)

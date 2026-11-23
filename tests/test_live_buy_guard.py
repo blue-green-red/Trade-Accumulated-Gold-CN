@@ -14,7 +14,7 @@ from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import carry_pending_breakouts, pending_events, record, request, set_watch
+from monitor.jd_live_buy_watch import carry_breakout_observations, pending_events, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
@@ -170,55 +170,105 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
                          late['confirmed_at'])
 
-    def test_pending_breakout_survives_a_change_to_an_independent_pullback(self):
-        self.update_quote(0, 805.5)
-        revision = accounts(self.conn, START, include_advice=False)[0]['revision']
+    def publish_watch(self, advice_id, at, pullback, boundary=795):
+        revision = accounts(self.conn, at, include_advice=False)[0]['revision']
         source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+        deadline = (at + timedelta(minutes=15)).isoformat()
+        conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
+                       'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
+                                      'max_buy_price_cny': 806, 'zone': {'floor_cny': 797,
+                                          'weak_target_cny': 818, 'risk_exit_cny': 796}}}]
+        advice = {'id': advice_id, 'analyst': 'codex', 'action': 'hold', 'status': 'current', 'action_status': 'current',
+                  'valid_for_minutes': 15, 'review_conditions': conditions, 'created_at': at.isoformat(),
+                  'expires_at': deadline, 'snapshot_revision': revision, 'position_path': {'boundary_price_cny': boundary}}
+        with self.conn:
+            set_watch(self.conn, 'zheshang', 'codex', advice, source, at, 10)
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                (advice_id, 'zheshang', 'codex', advice_id, at.isoformat(), deadline, revision, json.dumps(advice)))
+        return advice
 
-        def publish(advice_id, at, pullback, boundary):
-            deadline = (at + timedelta(minutes=15)).isoformat()
-            conditions = [{'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': pullback,
-                           'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
-                                          'max_buy_price_cny': 806, 'zone': {'floor_cny': 797,
-                                              'weak_target_cny': 818, 'risk_exit_cny': 796}}}]
-            advice = {'id': advice_id, 'analyst': 'codex', 'action': 'hold', 'status': 'current', 'action_status': 'current',
-                      'valid_for_minutes': 15, 'review_conditions': conditions, 'created_at': at.isoformat(),
-                      'expires_at': deadline, 'snapshot_revision': revision, 'position_path': {'boundary_price_cny': boundary}}
-            with self.conn:
-                set_watch(self.conn, 'zheshang', 'codex', advice, source, at, 10)
-                self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
-                    (advice_id, 'zheshang', 'codex', advice_id, at.isoformat(), deadline, revision, json.dumps(advice)))
-            return advice
-
-        first = publish(1, START, 799, 795)
-        for minute, price in [(0, 805.5), (1, 806), (3, 806.5)]:
+    def observe_watch(self, advice, quotes):
+        for minute, price in quotes:
             at = START + timedelta(minutes=minute)
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
-            request(self.store, account, first, at, (at, at, price, price))
+            request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_pending_breakout_survives_a_change_to_an_independent_pullback(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806), (3, 806.5)])
         old_event, = read(self.conn, 'codex')['pending']
         at = START + timedelta(minutes=4)
-        second = publish(2, at, 800, 795)
+        second = self.publish_watch(2, at, 800)
         self.assertNotEqual(first['buy_watch']['id'], second['buy_watch']['id'])
         with self.conn:
-            carry_pending_breakouts(self.conn, 'codex', 2, at)
+            carry_breakout_observations(self.conn, 'codex', 2, at)
         carried, = pending_events(self.conn, 'codex', at)
         self.assertEqual(carried['data']['plan_id'], second['buy_watch']['id'])
         self.assertNotEqual(carried['id'], old_event['id'])
         self.assertEqual(carried['data']['routes'], old_event['data']['routes'])
         self.assertEqual(read_watch(self.conn, 'live-buy-watch:codex:zheshang')['plan_id'], second['buy_watch']['id'])
 
-        self.update_quote(4, 806.6)
-        account = accounts(self.conn, at, include_advice=False)[0]
-        request(self.store, account, second, at, (at, at, 806.6, 806.6))
+        self.observe_watch(second, [(4, 806.6)])
         self.assertEqual(pending_events(self.conn, 'codex', at), [carried])
 
         later = START + timedelta(minutes=5)
-        publish(3, later, 800, 794)
+        self.publish_watch(3, later, 800, 794)
         with self.conn:
-            carry_pending_breakouts(self.conn, 'codex', 3, later)
+            carry_breakout_observations(self.conn, 'codex', 3, later)
         self.assertEqual(pending_events(self.conn, 'codex', later), [])
+
+    def test_two_breakout_quotes_survive_a_change_to_an_independent_pullback(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+        at = START + timedelta(minutes=2)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_breakout_observations(self.conn, 'codex', 2, at)
+        step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
+        self.assertEqual(step['breakout_quote_count'], 2)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        self.observe_watch(second, [(3, 806.5)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=3))
+        self.assertEqual(event['data']['plan_id'], second['buy_watch']['id'])
+        self.assertEqual(event['data']['routes'][0]['confirmation_mode'], 'continuation')
+        self.assertEqual(datetime.fromisoformat(event['data']['routes'][0]['touched_at']), START)
+
+    def test_breakout_progress_is_reset_after_a_quote_gap(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806)])
+
+        at = START + timedelta(minutes=5)
+        self.update_quote(5, 806.5)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_breakout_observations(self.conn, 'codex', 2, at)
+        self.observe_watch(second, [(5, 806.5)])
+        step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
+        self.assertEqual(step['breakout_quote_count'], 1)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
+    def test_breakout_progress_is_not_carried_if_the_recorded_price_fell_back(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5)])
+        self.update_quote(.5, 804.9)
+        self.observe_watch(first, [(1, 806)])
+
+        at = START + timedelta(minutes=2)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_breakout_observations(self.conn, 'codex', 2, at)
+        self.observe_watch(second, [(3, 806.5)])
+        step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
+        self.assertEqual(step['breakout_quote_count'], 1)
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
 
     def test_sell_and_existing_protection_can_still_pass_independent_validation(self):
         advice = {'action': 'sell', 'checks': [], 'suggested_orders': [

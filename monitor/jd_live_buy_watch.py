@@ -301,8 +301,8 @@ def advance(state, condition, at, buy):
     return state
 
 
-def carry_pending_breakouts(conn, model, view_id, now):
-    """Keep a confirmed program breakout when a fresh advisory changes another route."""
+def carry_breakout_observations(conn, model, view_id, now):
+    """Keep quote progress when a new advisory changes an unrelated condition."""
     from .ai_events import read, write
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, with_active_routes
     from .jd_live_readonly import accounts
@@ -311,57 +311,77 @@ def carry_pending_breakouts(conn, model, view_id, now):
 
     events = read(conn, model)
     changed = False
-    for index, event in enumerate(events['pending']):
-        if not event['id'].startswith(ENTRY_EVENT_PREFIX):
+    published = conn.execute('SELECT id,bank,snapshot_revision,advice_json FROM jd_live_advice WHERE analyst=? AND view_id=?',
+                             (model, view_id)).fetchall()
+    for advice_id, bank, revision, new_raw in published:
+        new = json.loads(new_raw)
+        watch = new.get('buy_watch')
+        if not watch or not observation_only(new):
             continue
-        data = event['data']
-        route = next((r for r in data['routes'] if r.get('bank_breakout')), None)
-        if not route or not data.get('plan_id'):
+        previous_row = conn.execute('SELECT snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND analyst=? '
+                                    'AND id<? ORDER BY id DESC LIMIT 1', (bank, model, advice_id)).fetchone()
+        if not previous_row or previous_row[0] != revision:
             continue
-        bank = data['bank']
-        rows = conn.execute('SELECT id,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND analyst=? '
-                            'AND (id=? OR view_id=?) ORDER BY id', (bank, model, data['advice_id'], view_id)).fetchall()
-        if len(rows) != 2 or rows[0][0] != data['advice_id'] or rows[0][1] != rows[1][1]:
-            continue
-        _, revision, old_raw = rows[0]
-        advice_id, _, new_raw = rows[1]
-        old, new = json.loads(old_raw), json.loads(new_raw)
-        previous, watch = old.get('buy_watch') or {}, new.get('buy_watch') or {}
-        if (not watch or previous.get('id') != data['plan_id'] or watch['id'] == previous['id']
-                or watch['generation'] != previous['generation'] or now >= stamp(previous['expires_at'])
-                or not observation_only(new)):
+        old = json.loads(previous_row[1])
+        previous = old.get('buy_watch')
+        if (not previous or watch['id'] == previous['id'] or watch['generation'] != previous['generation']
+                or now >= stamp(previous['expires_at'])):
             continue
         old_path, new_path = old.get('position_path') or {}, new.get('position_path') or {}
         if any(new_path.get(key) != old_path.get(key) for key in ('boundary_price_cny', 'boundary_role', 'exit_scope')):
             continue
         boundary = new_path.get('boundary_price_cny')
+        previous_condition = next((c for c in old['review_conditions'] if c.get('bank_breakout')), None)
         condition = next((c for c in new['review_conditions'] if c.get('bank_breakout') and not c.get('checks')), None)
-        if not condition or condition['price_cny'] != route['threshold_cny']:
+        if not previous_condition or not condition or condition['price_cny'] != previous_condition['price_cny']:
             continue
         rule = condition['bank_breakout']
-        if any(rule.get(key) != route['bank_breakout'].get(key) for key in ('retest_ceiling_cny', 'hold_minutes')):
+        if any(rule.get(key) != previous_condition['bank_breakout'].get(key) for key in ('retest_ceiling_cny', 'hold_minutes')):
             continue
         key = f'live-buy-watch:{model}:{bank}'
         current = read_watch(conn, key)
-        stage = current.get('routes', {}).get(route['condition_key'], {})
+        previous_key = condition_key(previous_condition)
+        stage = current.get('routes', {}).get(previous_key, {})
         if (current.get('plan_id') != previous['id'] or current.get('invalidated_at')
-                or stage.get('stage') != 'confirmed' or stage.get('confirmed_at') != route['confirmed_at']):
+                or stage.get('stage') not in ('touched', 'holding', 'confirmed')):
             continue
         current_accounts = accounts(conn, now, include_advice=False, selected_bank=bank)
         if not current_accounts:
             continue
         account = current_accounts[0]
-        route = {**route, 'condition_key': condition_key(condition), 'bank_breakout': rule}
-        if boundary is not None:
-            route['position_boundary_cny'] = boundary
-        if not active_window({**new, 'snapshot_revision': revision}, account) or not active_routes(conn, account, [route], now):
+        if not active_window({**new, 'snapshot_revision': revision}, account):
             continue
-        updated = with_active_routes(event, [route])
-        events['pending'][index] = {**updated, 'id': f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}',
-            'data': {**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']}}
+        new_key = condition_key(condition)
+        if stage['stage'] == 'confirmed':
+            event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{previous["id"]}'
+            index = next((i for i, event in enumerate(events['pending']) if event['id'] == event_id), None)
+            if index is None:
+                continue
+            event = events['pending'][index]
+            route = next((r for r in event['data']['routes'] if r.get('bank_breakout')
+                          and r['condition_key'] == previous_key and r['confirmed_at'] == stage['confirmed_at']), None)
+            if not route:
+                continue
+            route = {**route, 'condition_key': new_key, 'bank_breakout': rule}
+            if boundary is not None:
+                route['position_boundary_cny'] = boundary
+            if not active_routes(conn, account, [route], now):
+                continue
+            updated = with_active_routes(event, [route])
+            events['pending'][index] = {**updated, 'id': f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}',
+                'data': {**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']}}
+            changed = True
+        else:
+            point = sample(account, now)
+            # Unprocessed quotes can reset the counter or change the high.
+            if not point or point[0] != stamp(stage['last_at']) or point[2] != stage['last_price_cny']:
+                continue
+            evidence = {'confirmed_at': stage['touched_at'], 'threshold_cny': condition['price_cny'],
+                        'position_boundary_cny': boundary}
+            if not active_routes(conn, account, [evidence], now):
+                continue
         save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
-                         'routes': {route['condition_key']: stage}})
-        changed = True
+                         'routes': {new_key: stage}})
     if changed:
         write(conn, model, events)
 
