@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from monitor.ai import AIAnalyst, MarketView
-from monitor.ai_events import enqueue, read
+from monitor.ai_events import acknowledge, enqueue, read
 from monitor.config import Settings
 from monitor.controls import set_enabled
 from monitor.__main__ import Monitor
@@ -49,6 +49,36 @@ class EventTimingTests(unittest.TestCase):
         with patch("monitor.ai.utc_now", return_value=self.now + timedelta(minutes=16)):
             self.assertEqual(restarted.due(), "new important event")
         self.assertEqual([e["id"] for e in read(self.store.conn, "codex")["pending"]], ["one"])
+
+    def test_market_move_episode_survives_acknowledgment_but_rearms_on_reversal_and_reset(self):
+        from monitor.alerts import AlertEngine
+        from monitor.cadence import request_market_move
+
+        self.store.add_tick({'ts': self.now - timedelta(minutes=30), 'xauusd': 100, 'market_open': True})
+        engine = AlertEngine(self.settings, self.store)
+        analysts = {'codex': self.a}
+
+        def observe(minute, price):
+            move = engine.measure_move({'xauusd': price, 'market_open': True})
+            request_market_move(self.store, analysts, move, self.now + timedelta(minutes=minute))
+
+        observe(0, 101)
+        observe(1, 102)
+        first, = read(self.store.conn, 'codex')['pending']
+        self.assertEqual(first['data']['change_pct'], 1)
+        self.assertEqual(first['data']['observed_xauusd'], 101)
+        with self.store.conn:
+            acknowledge(self.store.conn, 'codex', [first['id']])
+        observe(2, 103)
+        self.assertEqual(read(self.store.conn, 'codex')['pending'], [])
+
+        observe(3, 99)
+        observe(4, 100)
+        observe(5, 101)
+        down, next_up = read(self.store.conn, 'codex')['pending']
+        self.assertTrue(down['id'].startswith('market-move:down:'))
+        self.assertTrue(next_up['id'].startswith('market-move:up:'))
+        self.assertNotEqual(first['id'], next_up['id'])
 
     def test_only_successfully_covered_events_are_acknowledged(self):
         self.a.request_refresh("first", 0, event_id="one", payload={"actual": 0})

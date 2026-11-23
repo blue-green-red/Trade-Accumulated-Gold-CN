@@ -48,3 +48,23 @@ def request_periodic(settings, store, analysts, snap, now):
         if change<settings.ai_periodic_min_move_pct and age<settings.ai_review_max_idle_minutes: continue
         analyst.request_refresh(f"周期复查：距上次{age:.0f}分钟，金价变化{change:.2f}%",interval,
             event_id=f"periodic:{name}:{row['rowid']}",payload={"source":"周期复查","change_pct":round(change,3)})
+
+
+def request_market_move(store, analysts, move, now):
+    """Keep one persistent event per continuous directional movement."""
+    key = 'ai_market_move_episode'
+    episode = store.get_state(key, {})
+    if not move:
+        if episode:
+            store.set_state(key, {})
+        return
+    event, current = move
+    direction = event['key'].split(':', 1)[1]
+    window = current['window_minutes']
+    if episode.get('direction') != direction or (episode.get('data') or {}).get('window_minutes') != window:
+        data = {**current, 'first_seen_at': now.isoformat()}
+        episode = {'direction': direction, 'id': f'market-move:{direction}:{now.isoformat()}', 'data': data}
+        store.set_state(key, episode)
+    reason = f"{window}分钟{'急涨' if direction == 'up' else '急跌'}"
+    for analyst in analysts.values():
+        analyst.request_refresh(reason, min_gap_minutes=30, event_id=episode['id'], payload=episode['data'])

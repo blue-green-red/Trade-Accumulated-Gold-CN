@@ -7,6 +7,16 @@ import test_four_account as fixtures
 
 
 class InputScopeTests(unittest.TestCase):
+    def test_duplicate_legacy_move_records_trimmed_without_losing_coverage_or_directional_events(self):
+        legacy = [{'id': f'old-{i}', 'reason': '30分钟异动', 'data': {}} for i in range(3)]
+        new = [{'id': f'market-move:{side}:test', 'reason': '30分钟异动',
+                'data': {'change_pct': pct}} for side, pct in (('up', 1), ('down', -1))]
+        context = {'trigger_events': legacy + new, 'event_coverage': {'codex': [e['id'] for e in legacy + new]}}
+        result = compact_context(context)
+        self.assertEqual(result['trigger_events'], legacy[:1] + new)
+        self.assertEqual(result['event_coverage'], context['event_coverage'])
+        self.assertEqual(compact_context(result), result)
+
     def test_live_waiting_comparison_retains_returns_without_repeated_cash_examples(self):
         full = {'status': 'ready', 'reference_amounts_cny': [1000, 5000],
                 'up_delta_cny': [15, 75], 'down_delta_cny': [-25, -125],

@@ -78,7 +78,7 @@ class LiveOnlyTests(unittest.TestCase):
         m.portfolios=None;m.accounts=None;m.short_books={};m.retired_short_books={};m.legacy_short=None
         for name in ('poll_jin10_if_due','refresh_macro_if_due','request_ai_after_data_release'):
             setattr(m,name,Mock())
-        m.run_ai_if_due=Mock(return_value=[]);m.alerts.check=Mock(return_value=[])
+        m.run_ai_if_due=Mock(return_value=[]);m.alerts.measure_move=Mock(return_value=None)
         m.market=Mock();m.market.snapshot.return_value=old.snapshot(1010)
         c=m.store.conn
         attempt=c.execute("INSERT INTO ai_runs(analyst,started_at,trigger,run_id,status) VALUES('codex',?,'test','test','running')",(f.snap['ts'].isoformat(),)).lastrowid

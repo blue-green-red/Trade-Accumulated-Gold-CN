@@ -108,6 +108,16 @@ def compact_waiting_review(container):
 def market_context(context):
     """Select decision evidence without changing the monitoring snapshot or account ledger."""
     out=deepcopy(context)
+    if 'trigger_events' in out:
+        kept, seen = [], set()
+        for event in out['trigger_events']:
+            reason = event.get('reason') or ''
+            if not event.get('data') and reason.endswith('分钟异动') and reason.removesuffix('分钟异动').isdigit():
+                if reason in seen:
+                    continue
+                seen.add(reason)
+            kept.append(event)
+        out['trigger_events'] = kept
     prepare_bank_entry_context(out)
     if not out.get('trading_accounts'):
         for account in (out.get('live_readonly_accounts') or {}).get('accounts', {}).values():

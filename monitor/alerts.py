@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import math
 from typing import Any, Dict, List, Optional
 
 from .config import BANK_NAMES, BJ, Settings
@@ -64,20 +65,25 @@ class AlertEngine:
         window = timedelta(minutes=minutes if minutes is not None else self.settings.move_cooldown_minutes)
         return last is None or utc_now() - last >= window
 
-    def check(self, snap: Dict[str, Any]) -> List[Dict[str, str]]:
+    def measure_move(self, snap: Dict[str, Any]):
         if not snap.get("market_open") or snap.get("xauusd") is None:
-            return []
-        events: List[Dict[str, str]] = []
+            return None
         price = snap["xauusd"]
 
         # 1. 短时异动（默认 30 分钟 ±0.6%）
         window = int(self.settings.move_window_minutes)
         prev = self.store.price_minutes_ago(window)
-        if prev:
-            pct = (price - prev) / prev * 100
-            if abs(pct) >= self.settings.move_pct:
-                events.append({"key": f"move:{'up' if pct > 0 else 'down'}",
-                               "title": f"⚡{window}分钟{'急涨' if pct > 0 else '急跌'} {pct:+.2f}%",
-                               "body": f"XAUUSD {window} 分钟内 {prev:.2f} → {price:.2f}（{pct:+.2f}%），达到异动复评阈值，交由已开启模型调度；不代表买卖建议"})
+        if not prev:
+            return None
+        pct = (price - prev) / prev * 100
+        if not math.isfinite(pct) or abs(pct) < self.settings.move_pct:
+            return None
+        event = {"key": f"move:{'up' if pct > 0 else 'down'}",
+                 "title": f"⚡{window}分钟{'急涨' if pct > 0 else '急跌'} {pct:+.2f}%",
+                 "body": f"XAUUSD {window} 分钟内 {prev:.2f} → {price:.2f}（{pct:+.2f}%），达到异动复评阈值，交由已开启模型调度；不代表买卖建议"}
+        return event, {"source": "XAUUSD", "window_minutes": window, "change_pct": round(pct, 3),
+                       "reference_xauusd": round(prev, 2), "observed_xauusd": round(price, 2)}
 
-        return [e for e in events if self.cooled_down(e["key"])]
+    def check(self, snap: Dict[str, Any]) -> List[Dict[str, str]]:
+        move = self.measure_move(snap)
+        return [move[0]] if move and self.cooled_down(move[0]["key"]) else []

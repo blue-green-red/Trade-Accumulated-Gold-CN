@@ -514,6 +514,7 @@ class Monitor:
         return plan
 
     def tick(self, force_bank: bool = False, force_ai: bool = False):
+        from .cadence import request_market_move, request_periodic
         events: List[Dict[str, str]] = []
         if self.portfolios:self.portfolios.expire_plans()
         self.market.refresh_fx_if_due()
@@ -522,6 +523,7 @@ class Monitor:
         snap["market_open"] = snap["jd_session"]["is_open"]
         if not snap["market_open"]:
             self.store.set_state("jd_session_closed", True)
+            request_market_move(self.store, {}, None, utc_now())
         elif execution_quote(snap) and self.store.get_state("jd_session_closed", False):
             from .ai_events import enqueue
             for name in self.enabled_analysts():
@@ -553,8 +555,11 @@ class Monitor:
         if self.portfolios:
             events += self.portfolios.on_tick(snap)
         self.request_ai_after_data_release()
-        from .cadence import request_periodic
-        request_periodic(self.settings,self.store,self.enabled_analysts(),snap,utc_now())
+        analysts = self.enabled_analysts()
+        now = utc_now()
+        request_periodic(self.settings,self.store,analysts,snap,now)
+        move = self.alerts.measure_move(snap)
+        request_market_move(self.store,analysts,move,now)
         self.check_live_reviews()
         events += self.run_ai_if_due(snap, force=force_ai)
         cost = {"spread_cny": self.settings.spread_cny, "sell_fee_rate": self.settings.sell_fee_rate,
@@ -563,11 +568,8 @@ class Monitor:
         views = {name: a.latest(self.settings.ai_view_max_age_hours) for name, a in self.analysts.items()} if not self.portfolios and self.settings.ai_trading_mode!='live_only' else {}
         ai_plans = {name: self.build_ai_led_plan(snap, view, cost) for name, view in views.items() if view}
         plan = base_plan  # Technical levels remain available without rule trading accounts.
-        alert_events = self.alerts.check(snap)
-        if self.ai and any(e["key"].startswith("move:") for e in alert_events):
-            for analyst in self.enabled_analysts().values():
-                analyst.request_refresh(f"{int(self.settings.move_window_minutes)}分钟异动", min_gap_minutes=30)
-        events += alert_events
+        if move and self.alerts.cooled_down(move[0]["key"]):
+            events.append(move[0])
         for key, book in self.short_books.items():
             model, _ = identity(key)
             if model:
