@@ -361,6 +361,11 @@ class BuyWatchTests(unittest.TestCase):
         key = 'break_even_buy_at_sampled_sell_high_cny'
         self.assertEqual(result[key], 801.5 * .996)
         self.assertNotIn(key, no_fee)
+        self.assertEqual(result['sampled_sell_scenarios'], {
+            'hour_high': {'sell_price_cny': 801.5, 'net_cny_per_gram': -5.71},
+            'hour_low': {'sell_price_cny': 789, 'net_cny_per_gram': -18.16},
+        })
+        self.assertNotIn('sampled_sell_scenarios', no_fee)
 
     def test_earlier_bank_ranges_keep_sampling_coverage_and_side(self):
         with TemporaryDirectory() as tmp:
@@ -392,6 +397,13 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual((previous['buy_low_cny'], previous['sell_high_cny'], previous['n']), (790, 792, 3))
             self.assertEqual(datetime.fromisoformat(previous['from']), friday)
             self.assertEqual(context['break_even_buy_at_sampled_sell_high_cny'], 806 * .996)
+            self.assertEqual(context['sampled_sell_scenarios'], {
+                'hour_high': {'sell_price_cny': 806, 'net_cny_per_gram': -2.22},
+                'hour_low': {'sell_price_cny': 804, 'net_cny_per_gram': -4.22},
+                'earlier_above_hour_high': {'sell_price_cny': 824, 'net_cny_per_gram': 15.7},
+            })
+            above = {**account, 'quote': {**account['quote'], 'buy_price_cny': 825, 'sell_price_cny': 825}}
+            self.assertNotIn('earlier_above_hour_high', quote_context(store.conn, above, now)['sampled_sell_scenarios'])
 
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
         with TemporaryDirectory() as tmp:

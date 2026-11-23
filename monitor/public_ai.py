@@ -190,7 +190,8 @@ def privacy_ok(content, context):
         r"(?<![0-9.])\d[\d,]*(?:\.\d+)?(?=\s*元\s*(?:[/／]|每)\s*克)", text)}
     percentages = {float(m) for m in re.findall(r"(?<![0-9.])\d+(?:\.\d+)?(?=\s*[%％])", text)}
     per_gram_fields = {'at_breakout_level_net_cny_per_gram', 'at_earlier_sell_high_net_cny_per_gram',
-                       'trigger_below_sampled_1h_low_cny_per_gram', 'weak_target_net_cny_per_gram', 'risk_exit_net_cny_per_gram'}
+                       'trigger_below_sampled_1h_low_cny_per_gram', 'weak_target_net_cny_per_gram', 'risk_exit_net_cny_per_gram',
+                       'net_cny_per_gram'}
     sensitive = {"average_cost_cny", "avg_cost", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
                  "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
                  "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
@@ -207,6 +208,10 @@ def privacy_ok(content, context):
                     for n in numbers(v):yield abs(n)
                 elif k == 'recent_bank_quotes' and isinstance(v, dict):
                     yield from numbers(v.get('break_even_buy_at_sampled_sell_high_cny'))
+                    for scenario in (v.get('sampled_sell_scenarios') or {}).values():
+                        yield from numbers(scenario.get('sell_price_cny'))
+                        for amount in numbers(scenario.get('net_cny_per_gram')):
+                            yield abs(amount)
                     for window in v.get('buy_price_windows_15m', []):
                         for field in ('low', 'high', 'last'):
                             yield from numbers(window.get(field))

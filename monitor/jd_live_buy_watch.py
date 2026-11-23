@@ -104,10 +104,24 @@ def quote_context(conn, account, now):
                'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
                'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
                                        for left, right in zip(points, points[1:])), default=None)}
-    if available and (ref := cost_reference(max(s for _, _, s in tape), account.get('sell_fee_rate'))):
-        context['break_even_buy_at_sampled_sell_high_cny'] = ref['net_sell_price_cny']
-    if has_samples and (ranges := earlier_sampled_ranges(conn, account['bank'], start, now)):
+    ranges = earlier_sampled_ranges(conn, account['bank'], start, now) if has_samples else []
+    if ranges:
         context['earlier_sampled_ranges'] = ranges
+    sell_low = min(s for _, _, s in tape)
+    sell_high = max(s for _, _, s in tape)
+    fee = account.get('sell_fee_rate')
+    if available and (ref := cost_reference(sell_high, fee)):
+        context['break_even_buy_at_sampled_sell_high_cny'] = ref['net_sell_price_cny']
+        levels = {'hour_high': sell_high}
+        if sell_low < sell_high:
+            levels['hour_low'] = sell_low
+        earlier_high = max((window['sell_high_cny'] for window in ranges), default=0)
+        if earlier_high > max(sell_high, buy):
+            levels['earlier_above_hour_high'] = earlier_high
+        context['sampled_sell_scenarios'] = {
+            name: {'sell_price_cny': price, 'net_cny_per_gram': round(net['net_sell_price_cny'] - buy, 2)}
+            for name, price in levels.items() if (net := cost_reference(price, fee))
+        }
     return context
 
 
