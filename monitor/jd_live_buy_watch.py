@@ -120,6 +120,11 @@ def eligible(condition, minimum=None):
     return (not condition.get('checks') and bool(condition.get('bank_breakout'))) or valid_route(condition, minimum)
 
 
+def boundary_terms(advice):
+    path = advice.get('position_path') or {}
+    return tuple(path.get(key) for key in ('boundary_price_cny', 'boundary_role', 'exit_scope'))
+
+
 def active_window(advice, account):
     from .jd_live_semantics import blocking_checks
     blocking = [check for check in blocking_checks(advice) if check != advice.get('entry_pause_reason')]
@@ -213,7 +218,7 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
     path = value.get('position_path') or {}
     fingerprint = sha256(json.dumps([value['action'], path.get('boundary_price_cny'), terms],
                                     sort_keys=True).encode()).hexdigest()[:24]
-    same_plan = prior_watch.get('signature') == fingerprint
+    same_plan = prior_watch.get('signature') == fingerprint and boundary_terms(previous) == boundary_terms(value)
     if same_plan and prior_active:
         value['buy_watch'] = prior_watch
         return
@@ -350,10 +355,13 @@ def advance_watch(previous, condition, at, buy):
 def confirmed_route(condition, stage, price, boundary, advice):
     review = condition.get('buy_review')
     mode = stage.get('confirmation_mode')
+    deadline = watch_deadline(advice, condition)
+    if carried_until := stamp(stage.get('observation_expires_at')):
+        deadline = min(deadline, carried_until)
     return {'condition_key': condition_key(condition), 'condition': condition['condition'],
             'threshold_cny': condition['price_cny'], 'touched_at': stage['touched_at'], 'hold_since': stage['hold_since'],
             'confirmed_at': stage['confirmed_at'], 'price_cny': price,
-            'signal_expires_at': utc_text(watch_deadline(advice, condition)),
+            'signal_expires_at': utc_text(deadline),
             **({'source_advice_id': advice['id']} if not extended(condition) else {}),
             **({'position_boundary_cny': boundary} if boundary is not None else {}),
             **({'confirmation_mode': mode} if mode else {}),
@@ -377,7 +385,7 @@ def pending_plan_review(events, bank, identity):
                  and event['data'].get('plan_id', event['data'].get('advice_id')) == identity), None)
 
 
-def replay_breakout(conn, account, stage, condition, boundary, now):
+def replay_observation(conn, account, stage, condition, boundary, now):
     point = sample(account, now)
     start = stamp(stage.get('touched_at'))
     if not point or not start or point[0] < stamp(stage['last_at']):
@@ -396,10 +404,16 @@ def replay_breakout(conn, account, stage, condition, boundary, now):
     return rebuilt, confirmation_price
 
 
-def carry_breakout_observations(conn, model, view_id, now):
+def observation_terms(condition):
+    breakout = condition.get('bank_breakout') or {}
+    return (condition['condition'], condition['quote_side'], condition['price_cny'], condition.get('buy_review'),
+            breakout.get('retest_ceiling_cny'), breakout.get('hold_minutes'))
+
+
+def carry_entry_observations(conn, model, view_id, now):
     """Keep quote progress when a new advisory changes an unrelated condition."""
     from .ai_events import read, write
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, reviewed_breakout, with_active_routes
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, confirmation_key, reviewed_breakout, with_active_routes
     from .jd_live_readonly import accounts
     from .price_guard import save
     from .jd_live_conditions import read_watch
@@ -419,26 +433,16 @@ def carry_breakout_observations(conn, model, view_id, now):
             continue
         old = json.loads(previous_row[1])
         previous = old.get('buy_watch')
-        if (not previous or watch['id'] == previous['id'] or watch['generation'] != previous['generation']
-                or now >= stamp(previous['expires_at'])):
+        previous_end = stamp((previous or {}).get('expires_at'))
+        if (not previous_end or watch['id'] == previous['id'] or watch['generation'] != previous['generation']
+                or now >= previous_end):
             continue
-        old_path, new_path = old.get('position_path') or {}, new.get('position_path') or {}
-        if any(new_path.get(key) != old_path.get(key) for key in ('boundary_price_cny', 'boundary_role', 'exit_scope')):
+        if boundary_terms(old) != boundary_terms(new):
             continue
-        boundary = new_path.get('boundary_price_cny')
-        previous_condition = next((c for c in old['review_conditions'] if c.get('bank_breakout')), None)
-        condition = next((c for c in new['review_conditions'] if c.get('bank_breakout') and not c.get('checks')), None)
-        if not previous_condition or not condition or condition['price_cny'] != previous_condition['price_cny']:
-            continue
-        rule = condition['bank_breakout']
-        if any(rule.get(key) != previous_condition['bank_breakout'].get(key) for key in ('retest_ceiling_cny', 'hold_minutes')):
-            continue
+        boundary = (new.get('position_path') or {}).get('boundary_price_cny')
         key = f'live-buy-watch:{model}:{bank}'
         current = read_watch(conn, key)
-        previous_key = condition_key(previous_condition)
-        stage = current.get('routes', {}).get(previous_key, {})
-        if (current.get('plan_id') != previous['id'] or current.get('invalidated_at')
-                or stage.get('stage') not in ('touched', 'holding', 'confirmed')):
+        if current.get('plan_id') != previous['id'] or current.get('invalidated_at'):
             continue
         current_accounts = accounts(conn, now, include_advice=False, selected_bank=bank)
         if not current_accounts:
@@ -446,42 +450,63 @@ def carry_breakout_observations(conn, model, view_id, now):
         account = current_accounts[0]
         if not active_window({**new, 'snapshot_revision': revision}, account):
             continue
-        new_key = condition_key(condition)
-        if stage['stage'] == 'confirmed':
-            event = pending_plan_review(events, bank, previous['id'])
-            if event is None:
+        minimum = account.get('minimum_buy_grams')
+        old_conditions = [c for c in old['review_conditions'] if extended(c) and eligible(c, minimum)]
+        event = pending_plan_review(events, bank, previous['id'])
+        queued = {confirmation_key(r): r for r in event['data']['routes']} if event else {}
+        event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
+        progress, signals = {}, []
+        active_stages = ('touched', 'retest', 'holding', 'confirmed')
+        for condition in new['review_conditions']:
+            if not extended(condition) or not eligible(condition, minimum):
                 continue
-            route = next((r for r in event['data']['routes'] if r.get('bank_breakout')
-                          and r['condition_key'] == previous_key and r['confirmed_at'] == stage['confirmed_at']), None)
-            if not route:
+            previous_condition = next((c for c in old_conditions if observation_terms(c) == observation_terms(condition)), None)
+            if not previous_condition:
                 continue
-            route = {**route, 'condition_key': new_key, 'bank_breakout': rule}
-            if boundary is not None:
-                route['position_boundary_cny'] = boundary
-            if not active_routes(conn, account, [route], now):
+            previous_key = condition_key(previous_condition)
+            stage = current.get('routes', {}).get(previous_key, {})
+            if (stage.get('stage') not in active_stages or stage.get('reviewed_confirmation_at')
+                    or previous_key in current.get('reviewed_routes', {})):
                 continue
-            updated = with_active_routes(event, [route])
-            event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
-            event.update(id=event_id, data={**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']},
-                         reason=updated['reason'])
-            stage['event_id'] = event_id
-            changed = True
-        else:
-            stage, confirmation_price = replay_breakout(conn, account, stage, condition, boundary, now)
-            if stage.get('stage') not in ('touched', 'holding', 'confirmed'):
+            deadline = min(previous_end, stamp(watch['expires_at']),
+                           stamp(stage.get('observation_expires_at')) or previous_end)
+            if now >= deadline:
                 continue
+            new_key = condition_key(condition)
             if stage['stage'] == 'confirmed':
-                receipt = reviewed_breakout(conn, model, account, condition['price_cny'], now)
+                route = queued.get((previous_key, stage['confirmed_at']))
+                if not route or not active_routes(conn, account, [route], now):
+                    continue
+                deadline = min(deadline, stamp(route.get('signal_expires_at')) or deadline)
+                route = {**route, 'condition_key': new_key, 'signal_expires_at': utc_text(deadline)}
+                if condition.get('bank_breakout'):
+                    route['bank_breakout'] = condition['bank_breakout']
+                signals.append(route)
+                progress[new_key] = {**stage, 'event_id': event_id, 'observation_expires_at': utc_text(deadline)}
+                continue
+            stage, confirmation_price = replay_observation(conn, account, stage, condition, boundary, now)
+            if stage.get('stage') not in active_stages:
+                continue
+            stage['observation_expires_at'] = utc_text(deadline)
+            if stage['stage'] == 'confirmed':
+                receipt = condition.get('bank_breakout') and reviewed_breakout(conn, model, account, condition['price_cny'], now)
                 if receipt:
                     stage.update(stage='episode_reviewed', confirmed_at=receipt['confirmed_at'], event_id=receipt['event_id'])
                 else:
-                    event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
-                    route = confirmed_route(condition, stage, confirmation_price, boundary, new)
-                    events['pending'].append(review_event(event_id, bank, advice_id, watch, [route], now))
+                    signals.append(confirmed_route(condition, stage, confirmation_price, boundary, new))
                     stage['event_id'] = event_id
-                    changed = True
-        save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
-                         'routes': {new_key: stage}})
+            progress[new_key] = stage
+        if signals:
+            if event:
+                updated = with_active_routes(event, signals)
+                event.update(id=event_id, data={**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']},
+                             reason=updated['reason'])
+            else:
+                events['pending'].append(review_event(event_id, bank, advice_id, watch, signals, now))
+            changed = True
+        if progress:
+            save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
+                             'routes': progress})
     if changed:
         write(conn, model, events)
 
@@ -609,6 +634,11 @@ def request(store, account, advice, now, point):
             previous = current['routes'].get(fingerprint, {})
             if previous.get('reviewed_confirmation_at'):
                 reviewed.setdefault(fingerprint, previous.get('event_id', event_id))
+            if (deadline := stamp(previous.get('observation_expires_at'))) and observed >= deadline:
+                if at < deadline:
+                    updated[fingerprint] = previous
+                    continue
+                previous = {}
             step = advance_watch(previous, condition, at, buy)
             if (step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed'
                     and fingerprint not in reviewed):

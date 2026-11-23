@@ -170,6 +170,11 @@ def condition_state(conn,account,advice,condition,now,latest=True):
         identity=watch_id(advice)
         same_plan=latest and current.get('plan_id',current.get('advice_id'))==identity
         stage=current.get('routes',{}).get(result['condition_key'],{}) if same_plan else {}
+        carried_until=stamp(stage.get('observation_expires_at'))
+        if carried_until and now>=carried_until:
+            stage={}
+        elif carried_until and independent:
+            result['expires_at']=min(watch_deadline(advice,condition),carried_until).isoformat()
         previous_review=current.get('reviewed_routes',{}).get(result['condition_key']) if same_plan else None
         event_id=stage.get('event_id',f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{identity}')
         status='monitoring' if eligible(condition,account.get('minimum_buy_grams')) else 'review_required'

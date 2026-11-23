@@ -15,7 +15,7 @@ from monitor.jd_live_advice import notification_events, save
 from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakouts, remember_reviewed_confirmations,
                                        remember_reviewed_price_observations, review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import carry_breakout_observations, pending_events, record, request, set_watch
+from monitor.jd_live_buy_watch import carry_entry_observations, pending_events, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, condition_state, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
@@ -225,7 +225,7 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(read_watch(self.conn, watch_key)['routes'][late['condition_key']]['reviewed_confirmation_at'],
                          late['confirmed_at'])
 
-    def publish_watch(self, advice_id, at, pullback, boundary=795):
+    def publish_watch(self, advice_id, at, pullback, boundary=795, *, retest_price=None, exit_scope=None):
         revision = accounts(self.conn, at, include_advice=False)[0]['revision']
         source = {'status': 'fresh', 'quote': {'status': 'fresh'}, 'revision': revision,
                   'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
@@ -234,9 +234,12 @@ class BuyGuardTests(unittest.TestCase):
                        'buy_review': {'grams': 10, 'recovery_price_cny': 803, 'hold_minutes': 3,
                                       'max_buy_price_cny': 806, 'zone': {'floor_cny': 797,
                                           'weak_target_cny': 818, 'risk_exit_cny': 796}}}]
+        if retest_price is not None:
+            conditions.append({**conditions[0], 'condition': 'at_or_above', 'price_cny': retest_price})
         advice = {'id': advice_id, 'analyst': 'codex', 'action': 'hold', 'status': 'current', 'action_status': 'current',
                   'valid_for_minutes': 15, 'review_conditions': conditions, 'created_at': at.isoformat(),
-                  'expires_at': deadline, 'snapshot_revision': revision, 'position_path': {'boundary_price_cny': boundary}}
+                  'expires_at': deadline, 'snapshot_revision': revision,
+                  'position_path': {'boundary_price_cny': boundary, 'exit_scope': exit_scope}}
         with self.conn:
             set_watch(self.conn, 'zheshang', 'codex', advice, source, at, 10)
             self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
@@ -309,7 +312,7 @@ class BuyGuardTests(unittest.TestCase):
         second = self.publish_watch(2, at, 800)
         self.assertNotEqual(first['buy_watch']['id'], second['buy_watch']['id'])
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         carried, = pending_events(self.conn, 'codex', at)
         self.assertEqual(carried['data']['plan_id'], second['buy_watch']['id'])
         self.assertNotEqual(carried['id'], old_event['id'])
@@ -322,7 +325,7 @@ class BuyGuardTests(unittest.TestCase):
         later = START + timedelta(minutes=5)
         self.publish_watch(3, later, 800, 794)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 3, later)
+            carry_entry_observations(self.conn, 'codex', 3, later)
         self.assertEqual(pending_events(self.conn, 'codex', later), [])
 
     def test_two_breakout_quotes_survive_a_change_to_an_independent_pullback(self):
@@ -334,7 +337,7 @@ class BuyGuardTests(unittest.TestCase):
         at = START + timedelta(minutes=2)
         second = self.publish_watch(2, at, 800)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
         self.assertEqual(step['breakout_quote_count'], 2)
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
@@ -392,7 +395,7 @@ class BuyGuardTests(unittest.TestCase):
         at = START + timedelta(minutes=3, seconds=10)
         second = self.publish_watch(2, at, 800)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         event, = pending_events(self.conn, 'codex', at)
         self.assertEqual(event['data']['plan_id'], second['buy_watch']['id'])
         route, = event['data']['routes']
@@ -400,6 +403,70 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(route['price_cny'], 806.5)
         self.observe_watch(second, [(4, 806.8)])
         self.assertEqual(pending_events(self.conn, 'codex', START + timedelta(minutes=4)), [event])
+
+    def test_new_retest_plan_preserves_unchanged_pullback_progress_and_deadline(self):
+        self.update_quote(0, 799)
+        first = self.publish_watch(1, START, 799, retest_price=805)
+        self.observe_watch(first, [(0, 799), (1, 803.5), (3, 804)])
+
+        at = START + timedelta(minutes=3, seconds=10)
+        second = self.publish_watch(2, at, 799, retest_price=806)
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        account = accounts(self.conn, at, include_advice=False)[0]
+        state = condition_state(self.conn, account, second, second['review_conditions'][0], at)
+        original_end = datetime.fromisoformat(first['buy_watch']['expires_at'])
+        self.assertEqual(state['confirmation_stage'], 'holding')
+        self.assertEqual(datetime.fromisoformat(state['expires_at']), original_end)
+
+        self.observe_watch(second, [(4, 804.1)])
+        event, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        route, = event['data']['routes']
+        self.assertEqual(event['data']['plan_id'], second['buy_watch']['id'])
+        self.assertEqual(datetime.fromisoformat(route['hold_since']), START + timedelta(minutes=1))
+        self.assertEqual(datetime.fromisoformat(route['signal_expires_at']), original_end)
+
+    def test_one_queued_retest_survives_when_its_queued_sibling_changes(self):
+        self.update_quote(0, 799)
+        first = self.publish_watch(1, START, 799, retest_price=805)
+        self.observe_watch(first, [(0, 799), (1, 805.1), (2, 804), (4, 804.1), (5, 804.2)])
+        event, = read(self.conn, 'codex')['pending']
+        self.assertEqual(len(event['data']['routes']), 2)
+
+        at = START + timedelta(minutes=6)
+        second = self.publish_watch(2, at, 800, retest_price=805)
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        queued, = pending_events(self.conn, 'codex', at)
+        self.assertEqual(queued['data']['plan_id'], second['buy_watch']['id'])
+        route, = queued['data']['routes']
+        self.assertEqual(route, next(r for r in event['data']['routes'] if r['condition'] == 'at_or_above'))
+
+    def test_late_quote_cannot_complete_a_carried_pullback_after_the_old_deadline(self):
+        self.update_quote(0, 802)
+        first = self.publish_watch(1, START, 799, retest_price=805)
+        self.observe_watch(first, [(56, 799), (57.5, 803.5), (59, 804)])
+        at = START + timedelta(minutes=59, seconds=10)
+        second = self.publish_watch(2, at, 799, retest_price=806)
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.observe_watch(second, [(60.5, 804.1)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        state = read_watch(self.conn, 'live-buy-watch:codex:zheshang')
+        self.assertNotIn('stage', state['routes'][condition_key(second['review_conditions'][0])])
+
+    def test_same_price_with_a_changed_exit_scope_does_not_carry_a_confirmation(self):
+        self.update_quote(0, 799)
+        first = self.publish_watch(1, START, 799, exit_scope='tranche')
+        self.observe_watch(first, [(0, 799), (1, 803.5), (4, 804)])
+        self.assertEqual(len(read(self.conn, 'codex')['pending']), 1)
+
+        at = START + timedelta(minutes=5)
+        second = self.publish_watch(2, at, 799, exit_scope='whole_position')
+        self.assertNotEqual(first['buy_watch']['id'], second['buy_watch']['id'])
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.assertEqual(pending_events(self.conn, 'codex', at), [])
 
     def test_breakout_progress_is_reset_after_a_quote_gap(self):
         self.update_quote(0, 805.5)
@@ -410,7 +477,7 @@ class BuyGuardTests(unittest.TestCase):
         self.update_quote(5, 806.5)
         second = self.publish_watch(2, at, 800)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         self.observe_watch(second, [(5, 806.5)])
         step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
         self.assertEqual(step['breakout_quote_count'], 1)
@@ -426,7 +493,7 @@ class BuyGuardTests(unittest.TestCase):
         at = START + timedelta(minutes=2)
         second = self.publish_watch(2, at, 800)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         self.observe_watch(second, [(3, 806.5)])
         step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
         self.assertEqual(step['breakout_quote_count'], 2)
@@ -443,7 +510,7 @@ class BuyGuardTests(unittest.TestCase):
         at = START + timedelta(minutes=3, seconds=10)
         second = self.publish_watch(2, at, 800)
         with self.conn:
-            carry_breakout_observations(self.conn, 'codex', 2, at)
+            carry_entry_observations(self.conn, 'codex', 2, at)
         step = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(second['review_conditions'][-1])]
         self.assertEqual(step['peak'], 807)
         self.assertEqual(read(self.conn, 'codex')['pending'], [])
