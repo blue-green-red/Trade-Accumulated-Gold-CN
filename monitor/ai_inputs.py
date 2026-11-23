@@ -15,6 +15,30 @@ def fill_cause(reason):
     return 'AI委托成交'
 
 
+def compare_previous_pullbacks(account):
+    from .jd_live_conditions import stamp
+    from .trade_costs import number
+
+    evidence = account.get('recent_bank_quotes') or {}
+    quote = account.get('quote') or {}
+    sample_at = stamp(evidence.get('as_of'))
+    lows = [low for window in evidence.get('buy_price_windows_15m', []) if (low := number(window.get('low')))]
+    usable = (account.get('status') == 'fresh' and quote.get('status') == 'fresh'
+              and evidence.get('status') == 'available' and sample_at is not None
+              and sample_at == stamp(quote.get('quoted_at')) and bool(lows))
+    sampled_low = min(lows) if usable else None
+    field = 'trigger_below_sampled_1h_low_cny_per_gram'
+    for advice in account.get('previous_advice', []):
+        for condition in advice.get('review_conditions', []):
+            condition.pop(field, None)
+            if (sampled_low is None or condition.get('condition') != 'at_or_below' or condition.get('quote_side') != 'buy'
+                    or not (condition.get('buy_review') or {}).get('zone')):
+                continue
+            trigger = number(condition.get('price_cny'))
+            if trigger and (gap := round(sampled_low - trigger, 2)) > 0:
+                condition[field] = gap
+
+
 def prepare_bank_entry_context(out):
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
     from .jd_live_conditions import stamp
@@ -22,6 +46,7 @@ def prepare_bank_entry_context(out):
 
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
     for account in accounts.values():
+        compare_previous_pullbacks(account)
         account.pop('entry_review_payoffs_at_input', None)
         if account.get('status') != 'fresh' or (account.get('quote') or {}).get('status') != 'fresh':
             account.pop('new_buy_capacity_at_input', None)

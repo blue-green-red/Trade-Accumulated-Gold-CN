@@ -7,6 +7,31 @@ import test_four_account as fixtures
 
 
 class InputScopeTests(unittest.TestCase):
+    def test_previous_shallow_pullback_compares_to_current_sampled_bank_low(self):
+        as_of = '2026-11-23T02:00:00+00:00'
+        condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 792.4,
+                     'buy_review': {'zone': {'floor_cny': 790}}}
+        account = {
+            'status': 'fresh', 'quote': {'status': 'fresh', 'quoted_at': as_of},
+            'recent_bank_quotes': {'as_of': as_of, 'status': 'available',
+                                   'buy_price_windows_15m': [{'low': 802}, {'low': 800}]},
+            'previous_advice': [{'review_conditions': [condition, {**condition, 'price_cny': 801},
+                                                      {**condition, 'condition': 'at_or_above'}]}],
+        }
+        original = {'live_readonly_accounts': {'accounts': {'zheshang': account}}}
+        packed = compact_context(original)
+        field = 'trigger_below_sampled_1h_low_cny_per_gram'
+        readout = packed['live_readonly_accounts']['accounts']['zheshang']
+        shallow, inside, breakout = readout['previous_advice'][0]['review_conditions']
+        self.assertEqual(shallow[field], 7.6)
+        self.assertNotIn(field, inside)
+        self.assertNotIn(field, breakout)
+        self.assertNotIn(field, condition)
+        self.assertEqual(compact_context(packed), packed)
+        readout['quote']['quoted_at'] = '2026-11-23T02:01:00+00:00'
+        updated = compact_context(packed)['live_readonly_accounts']['accounts']['zheshang']
+        self.assertNotIn(field, updated['previous_advice'][0]['review_conditions'][0])
+
     def test_live_entry_payoff_uses_same_bank_input_quote_and_its_fee(self):
         confirmed = '2026-11-23T02:00:00+00:00'
         quote = {'status': 'fresh', 'buy_price_cny': 806, 'sell_price_cny': 805,
