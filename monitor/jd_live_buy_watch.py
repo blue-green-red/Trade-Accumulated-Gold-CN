@@ -5,7 +5,7 @@ from datetime import timedelta, timezone
 from statistics import median
 
 from .jd_live_conditions import condition_key, stamp, unchanged_buy_observation
-from .trade_costs import number
+from .trade_costs import cost_reference, number
 
 MAX_GAP = timedelta(minutes=3)
 WATCH_WINDOW = timedelta(hours=1)
@@ -56,22 +56,15 @@ def quote_tape(conn, bank, after, point):
 
 
 def quote_context(conn, account, now):
-    """Compact observed buy-price history, aligned to the bank quote in this request."""
+    """Compact price history and fee-adjusted rebound reference aligned to the current bank quote."""
     current = sample(account, now)
     if current is None:
         return {'status': 'unavailable'}
-    anchor, _, buy, _ = current
+    anchor, _, buy, sell = current
     start = anchor - timedelta(hours=1)
     has_samples = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone()
-    prices = {
-        stamp(at): price for at, price in conn.execute(
-            'SELECT quoted_at,buy_price_cny FROM jd_live_quote_samples '
-            'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at<=?',
-            (account['bank'], utc_text(start), utc_text(anchor), utc_text(now))
-        )
-    } if has_samples else {}
-    prices[anchor] = buy
-    points = sorted(prices.items())
+    tape = quote_tape(conn, account['bank'], start, current) if has_samples else [(anchor, buy, sell)]
+    points = [(at, price) for at, price, _ in tape]
     windows = []
     for index in range(4):
         end = start + timedelta(minutes=(index + 1) * 15)
@@ -81,12 +74,16 @@ def quote_context(conn, account, now):
             windows.append({'from': utc_text(window[0][0]), 'to': utc_text(window[-1][0]),
                             'n': len(values), 'low': min(values), 'high': max(values), 'last': values[-1]})
     recent = [(at, p) for at, p in points if anchor - timedelta(minutes=10) < at]
-    return {'status': 'available' if len(recent) >= 3 and recent[-1][0] - recent[0][0] >= timedelta(minutes=2)
-            else 'limited', 'as_of': utc_text(anchor), 'buy_price_windows_15m': windows,
-            'recent_samples': [[int((at-anchor).total_seconds()), p] for at, p in recent[-6:]],
-            'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
-            'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
-                                    for left, right in zip(points, points[1:])), default=None)}
+    available = len(recent) >= 3 and recent[-1][0] - recent[0][0] >= timedelta(minutes=2)
+    context = {'status': 'available' if available else 'limited', 'as_of': utc_text(anchor),
+               'buy_price_windows_15m': windows,
+               'recent_samples': [[int((at-anchor).total_seconds()), p] for at, p in recent[-6:]],
+               'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
+               'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
+                                       for left, right in zip(points, points[1:])), default=None)}
+    if available and (ref := cost_reference(max(s for _, _, s in tape), account.get('sell_fee_rate'))):
+        context['break_even_buy_at_sampled_sell_high_cny'] = ref['net_sell_price_cny']
+    return context
 
 
 def valid_route(condition, minimum=None):

@@ -340,15 +340,19 @@ class BuyWatchTests(unittest.TestCase):
             with Store(Path(tmp) / 'test.db').conn as conn:
                 self.addCleanup(conn.close)
                 ensure_schema(conn)
-                for minute, price in [(-60, 700), (-16, 790), (-3, 799), (-1, 802), (1, 900)]:
-                    record(conn, 'zheshang', point(minute, price))
-                record(conn, 'minsheng', point(-2, 765))
-                quote = {'status': 'fresh', 'quoted_at': START.isoformat(), 'buy_price_cny': 804, 'sell_price_cny': 804}
-                account = {'bank': 'zheshang', 'connected': True, 'quote': quote}
+                for minute, price, sell in [(-60, 700, 902), (-16, 790, 789), (-3, 799, 798), (-1, 802, 801.5), (1, 900, 899)]:
+                    record(conn, 'zheshang', (*point(minute, price)[:3], sell))
+                record(conn, 'minsheng', point(-2, 965))
+                quote = {'status': 'fresh', 'quoted_at': START.isoformat(), 'buy_price_cny': 804, 'sell_price_cny': 800}
+                account = {'bank': 'zheshang', 'connected': True, 'quote': quote, 'sell_fee_rate': .004}
                 result = quote_context(conn, account, START + timedelta(seconds=20))
+                no_fee = quote_context(conn, {**account, 'sell_fee_rate': None}, START + timedelta(seconds=20))
         self.assertEqual(result['status'], 'available')
         self.assertEqual(result['recent_samples'], [[-180, 799], [-60, 802], [0, 804]])
         self.assertEqual([bucket['low'] for bucket in result['buy_price_windows_15m']], [790, 799])
+        key = 'break_even_buy_at_sampled_sell_high_cny'
+        self.assertEqual(result[key], 801.5 * .996)
+        self.assertNotIn(key, no_fee)
 
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
         with TemporaryDirectory() as tmp:

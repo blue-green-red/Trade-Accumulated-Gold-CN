@@ -204,6 +204,7 @@ def privacy_ok(content, context):
                          'exit_cost_cny','entry_review_payoffs_at_input','new_buy_capacity_at_input'):
                     for n in numbers(v):yield abs(n)
                 elif k == 'recent_bank_quotes' and isinstance(v, dict):
+                    yield from numbers(v.get('break_even_buy_at_sampled_sell_high_cny'))
                     for window in v.get('buy_price_windows_15m', []):
                         for field in ('low', 'high', 'last'):
                             yield from numbers(window.get(field))
