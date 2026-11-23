@@ -480,7 +480,11 @@ class AIAnalyst:
                 invalidation_note="分析期间行情已明显变化，需重新分析" if guard.get('invalidated_at') else None,
                 entry_warnings=entry_warnings)
         store.conn.execute("UPDATE ai_runs SET status='completed',completed_at=?,view_rowid=? WHERE id=?",(view_ts,cur.lastrowid,attempt))
-        if not guard.get("invalidated_at"):acknowledge(store.conn, self.analyst, covered_ids)
+        if not guard.get("invalidated_at"):
+            if context.get("live_readonly_accounts"):
+                from .jd_live_buy_guard import remember_reviewed_breakouts
+                remember_reviewed_breakouts(store.conn,self.analyst,context,covered_ids,self._generation)
+            acknowledge(store.conn, self.analyst, covered_ids)
         store.conn.commit()
         if public_status == "unavailable":
             log.warning("%s 本轮公众内容缺失或未通过发布校验，私人分析照常保存", self.display_name)

@@ -237,7 +237,7 @@ def advance(state, condition, at, buy):
     previous_at = stamp(state.get('last_at'))
     stage = state.get('stage')
     bank_breakout = condition.get('bank_breakout')
-    if stage in ('confirmed', 'above_cap') or (previous_at and at <= previous_at):
+    if stage in ('confirmed', 'episode_reviewed', 'above_cap') or (previous_at and at <= previous_at):
         return state
     if stage == 'pullback_lost' and not bank_breakout:
         return state
@@ -297,7 +297,7 @@ def advance(state, condition, at, buy):
 def pending_events(conn, model, now):
     """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, with_active_routes
+    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, reviewed_breakout, with_active_routes
     from .jd_live_readonly import accounts
 
     def validated(event):
@@ -334,6 +334,8 @@ def pending_events(conn, model, now):
                 return None
             if confirmation:
                 routes = active_routes(conn, current[0], data.get('routes', []), now)
+                routes = [r for r in routes if not r.get('bank_breakout')
+                          or not reviewed_breakout(conn, model, current[0], r['threshold_cny'], now)]
                 return with_active_routes(event, routes) if routes else None
         return event
 
@@ -356,6 +358,7 @@ def pending_events(conn, model, now):
 def request(store, account, advice, now, point):
     from .ai_events import read, write
     from .controls import active, control
+    from .jd_live_buy_guard import reviewed_breakout
     from .jd_live_conditions import read_watch
     from .jd_live_readonly import PRODUCTS
 
@@ -404,7 +407,7 @@ def request(store, account, advice, now, point):
             step = advance(previous, condition, at, buy)
             review = condition.get('buy_review')
             last = stamp(previous.get('last_at'))
-            if previous.get('stage') == 'confirmed' and last and at > last:
+            if previous.get('stage') in ('confirmed', 'episode_reviewed') and last and at > last:
                 if at - last > MAX_GAP:
                     step = advance({}, condition, at, buy)
                 elif condition.get('bank_breakout') and buy < condition['price_cny']:
@@ -418,8 +421,12 @@ def request(store, account, advice, now, point):
                         step['stage'] = 'pullback_lost'
                 else:
                     step = {**previous, 'last_at': utc_text(at), 'last_price_cny': buy}
-            updated[fingerprint] = step
             if step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
+                if condition.get('bank_breakout') and (receipt := reviewed_breakout(
+                        conn, model, account, condition['price_cny'], observed)):
+                    updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
+                                            'confirmed_at': receipt['confirmed_at'], 'event_id': receipt['event_id']}
+                    continue
                 confirmed.append({'condition_key': fingerprint, 'condition': condition['condition'],
                                   'threshold_cny': condition['price_cny'], 'touched_at': step['touched_at'],
                                   'hold_since': step['hold_since'], 'confirmed_at': step['confirmed_at'],
@@ -427,6 +434,7 @@ def request(store, account, advice, now, point):
                                   **({'confirmation_mode': step['confirmation_mode']}
                                      if step.get('confirmation_mode') else {}),
                                   **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})})
+            updated[fingerprint] = step
         if updated == current['routes'] and not current.get('invalidated_at'):
             return
         current['routes'] = updated

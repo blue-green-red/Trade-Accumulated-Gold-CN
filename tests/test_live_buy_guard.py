@@ -7,12 +7,13 @@ from unittest.mock import Mock, patch
 
 from monitor.__main__ import Monitor
 from monitor.ai import AIAnalyst, ClaudeCodeResult
-from monitor.ai_events import enqueue, read, write
+from monitor.ai_events import acknowledge, enqueue, read, write
 from monitor.config import Settings
 from monitor.jd_live_advice import notification_events
-from monitor.jd_live_buy_guard import block_entries, review_failures, retire_failed_events
+from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import pending_events, record
+from monitor.jd_live_buy_watch import pending_events, record, request
+from monitor.jd_live_conditions import condition_key, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.store import Store
 from test_ai_event_timing import result
@@ -114,6 +115,57 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual([e['id'] for e in queued], [key])
         self.assertEqual([r['threshold_cny'] for r in queued[0]['data']['routes']], [803])
         self.assertEqual(read(self.conn, 'codex')['pending'], queued)
+
+    def test_unchanged_breakout_is_deduplicated_across_advice_until_it_fails(self):
+        rule = {'retest_ceiling_cny': 806, 'hold_minutes': 3}
+        condition = {'condition': 'at_or_above', 'price_cny': 805, 'quote_side': 'buy', 'bank_breakout': rule}
+        context, key = self.prepare_signal([self.route(bank_breakout=rule)])
+        revision = context['live_readonly_accounts']['accounts']['zheshang']['revision']
+        now = START + timedelta(minutes=1)
+        expires = START + timedelta(minutes=16)
+        with self.conn:
+            remember_reviewed_breakouts(self.conn, 'codex', context, [key], 0)
+            acknowledge(self.conn, 'codex', [key])
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(2,?,?,?,?,?,?,?)',
+                ('zheshang', 'codex', 2, now.isoformat(), expires.isoformat(), revision, '{}'))
+        advice = {'id': 2, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                  'created_at': now.isoformat(), 'expires_at': expires.isoformat(), 'snapshot_revision': revision,
+                  'review_conditions': [condition]}
+
+        def observe(prices):
+            for minute, price in prices:
+                at = START + timedelta(minutes=minute)
+                self.update_quote(minute, price)
+                account = accounts(self.conn, at, include_advice=False, selected_bank='zheshang')[0]
+                request(self.store, account, advice, at, (at, at, price, price))
+            return read(self.conn, 'codex')['pending']
+
+        self.assertEqual(observe([(1, 806.1), (2, 806.2), (3, 806.3), (4, 806.4)]), [])
+        state = read_watch(self.conn, 'live-buy-watch:codex:zheshang')['routes'][condition_key(condition)]
+        self.assertEqual(state['stage'], 'episode_reviewed')
+        self.assertEqual(state['confirmed_at'], START.isoformat())
+        self.assertEqual(state['event_id'], key)
+
+        queued = observe([(5, 804.9), (6, 806.01), (7, 806.05), (8, 806.1), (9, 806.5)])
+        self.assertEqual([event['id'] for event in queued], ['live-buy-confirmed:codex:zheshang:2'])
+        self.assertEqual(queued[0]['data']['routes'][0]['confirmation_mode'], 'continuation')
+
+    def test_queue_keeps_the_independent_entry_when_the_breakout_was_reviewed(self):
+        rule = {'retest_ceiling_cny': 806, 'hold_minutes': 3}
+        context, previous = self.prepare_signal([self.route(805, bank_breakout=rule)])
+        with self.conn:
+            remember_reviewed_breakouts(self.conn, 'codex', context, [previous], 0)
+            acknowledge(self.conn, 'codex', [previous])
+        newer = 'live-buy-confirmed:codex:zheshang:next-plan'
+        at = START + timedelta(minutes=1)
+        self.update_quote(1, 806.1)
+        enqueue(self.conn, 'codex', '同批两条路径', 0, newer, {'bank': 'zheshang', 'advice_id': 1, 'routes': [
+            self.route(805, bank_breakout=rule, confirmed_at=at.isoformat()),
+            self.route(800, buy_review={'recovery_price_cny': 803, 'max_buy_price_cny': 807},
+                       confirmed_at=at.isoformat())]})
+        kept = pending_events(self.conn, 'codex', at)
+        self.assertEqual([e['id'] for e in kept], [newer])
+        self.assertEqual([r['threshold_cny'] for r in kept[0]['data']['routes']], [800])
 
     def test_signal_that_fails_during_preflight_consumes_no_model_run(self):
         _, key = self.prepare_signal([self.route()])

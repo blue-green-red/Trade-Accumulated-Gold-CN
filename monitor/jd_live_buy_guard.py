@@ -9,6 +9,44 @@ from .jd_live_conditions import stamp
 ENTRY_EVENT_PREFIX = 'live-buy-confirmed:'
 
 
+def reviewed_breakout(conn, model, account, threshold, now):
+    """Return the previously reviewed breakout while its quote sequence still holds."""
+    from .controls import control
+    from .price_guard import read
+    receipt = read(conn, f"live-breakout-reviewed:{model}:{account['bank']}")
+    if (receipt.get('threshold_cny') != threshold or receipt.get('revision') != account.get('revision')
+            or receipt.get('generation') != control(conn, model)['generation']):
+        return None
+    return receipt if active_routes(conn, account, [receipt], now) else None
+
+
+def remember_reviewed_breakouts(conn, model, context, event_ids, generation):
+    """Record the reviewed market move independently of the other routes in its plan."""
+    from .price_guard import read, save
+    ids = set(event_ids)
+    inputs = (context.get('live_readonly_accounts') or {}).get('accounts', {})
+    for event in context.get('trigger_events', []):
+        if event['id'] not in ids or not event['id'].startswith(ENTRY_EVENT_PREFIX):
+            continue
+        data = event['data']
+        bank = data['bank']
+        revision = (inputs.get(bank) or {}).get('revision')
+        if not revision:
+            continue
+        key = f'live-breakout-reviewed:{model}:{bank}'
+        previous = read(conn, key)
+        for route in data.get('routes', []):
+            if not route.get('bank_breakout') or not (confirmed := stamp(route.get('confirmed_at'))):
+                continue
+            old = stamp(previous.get('confirmed_at'))
+            if (old and old >= confirmed and previous.get('generation') == generation
+                    and previous.get('revision') == revision):
+                continue
+            previous = {'threshold_cny': route['threshold_cny'], 'confirmed_at': route['confirmed_at'],
+                        'revision': revision, 'generation': generation, 'event_id': event['id']}
+            save(conn, key, previous)
+
+
 def active_routes(conn, account, routes, now):
     point = sample(account, now)
     anchored = [(route, anchor) for route in routes if (anchor := stamp(route.get('confirmed_at')))]
