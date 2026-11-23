@@ -107,9 +107,12 @@ const conditionHeading = (c) => {
   if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后观察`;
   const floor = c.buy_review?.zone?.floor_cny;
   if (floor != null) {
+    const label =
+      { deep: "深回调区间", shallow: "浅回调区间" }[c.pullback_depth] ||
+      "回调区间";
     return c.condition === "at_or_above"
       ? `突破 ${num(c.price_cny)} 元/克后等回踩`
-      : `浅回调区间 ${num(floor)}–${num(c.price_cny)} 元/克`;
+      : `${label} ${num(floor)}–${num(c.price_cny)} 元/克`;
   }
   return `${props.account.name}金价 ${symbol[c.condition]} ${num(c.price_cny)} 元/克`;
 };

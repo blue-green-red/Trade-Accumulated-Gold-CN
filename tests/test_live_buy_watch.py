@@ -412,13 +412,15 @@ class BuyAuditTests(unittest.TestCase):
         value = {'input_quote_at': quote_at, 'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
                  'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
                  'review_conditions': [zoned_route()]}
-        archived = {'status': 'available', 'as_of': quote_at, 'buy_price_windows_15m': [{'low': 805}]}
+        archived = {'status': 'available', 'as_of': quote_at, 'buy_price_windows_15m': [{'low': 805, 'high': 810}]}
         points = [point(m, p) for m, p in ((1, 804.9), (2, 808.1), (4, 808.2), (6, 808.2), (7, 808.2))]
 
         row, = independent_branch_replay(value, START, end, points, now, archived_quotes=archived)
+        self.assertEqual(row['branch'], 'deep_pullback')
         self.assertEqual(row['confirmation']['status'], 'no_confirmation')
         shadow = row['sampled_low_sensitivity']
         self.assertEqual(shadow['status'], 'replayed')
+        self.assertEqual(shadow['replay']['branch'], 'shallow_pullback')
         self.assertEqual(shadow['candidate_max_buy_cny'], 809)
         self.assertEqual(shadow['replay']['confirmation']['buy_cny_per_gram'], 808.2)
         self.assertEqual(datetime.fromisoformat(shadow['replay']['confirmation']['quoted_at']), point(4, 808.2)[0])
@@ -438,6 +440,7 @@ class BuyAuditTests(unittest.TestCase):
         self.assertEqual(row['sampled_low_sensitivity']['status'], 'shifted_zone_incompatible_with_original_terms')
         row, = independent_branch_replay(value, START, end, points, now,
                                         archived_quotes={**archived, 'as_of': now.isoformat()})
+        self.assertEqual(row['branch'], 'zoned_pullback')
         self.assertEqual(row['sampled_low_sensitivity']['status'], 'archived_bank_quotes_unavailable')
 
     def test_replay_distinguishes_the_stages_before_a_shallow_pullback_confirms(self):
@@ -470,7 +473,12 @@ class BuyAuditTests(unittest.TestCase):
         now = START + timedelta(days=2)
         original, _ = evaluate(value, START, end, samples, now)
         self.assertEqual(original['confirmation_branch'], 'breakout_continuation')
-        cases = {c['branch']: c for c in independent_branch_replay(value, START, end, samples, now)}
+        quote_at = (START - timedelta(minutes=1)).isoformat()
+        value['input_quote_at'] = quote_at
+        bank_quotes = {'status': 'available', 'as_of': quote_at,
+                       'buy_price_windows_15m': [{'low': 798, 'high': 805}]}
+        cases = {c['branch']: c for c in independent_branch_replay(value, START, end, samples, now,
+                                                                  archived_quotes=bank_quotes)}
         for branch, minute, price in (('breakout_continuation', 3, 806.5), ('breakout_retest', 5, 805.9),
                                        ('shallow_pullback', 9, 804)):
             case = cases[branch]
@@ -536,9 +544,19 @@ class BuyAuditTests(unittest.TestCase):
                         two.isoformat(), (two + timedelta(minutes=15)).isoformat(), 'v1',
                         json.dumps({'action': action, 'input_sell_fee_rate': .005})))
                     context = {'event_coverage': {'codex': [event_id]}, 'trigger_events': [
-                        {'id': event_id, 'data': {'bank': 'zheshang', 'routes': paths}}]}
+                        {'id': event_id, 'data': {'bank': 'zheshang', 'advice_id': 3, 'routes': paths}}]}
                     store.conn.execute('INSERT INTO state VALUES(?,?,?)',
                         (f'ai_model_input:{run}:codex', json.dumps(context), START.isoformat()))
+                original = (START - timedelta(minutes=1)).isoformat()
+                store.conn.execute('INSERT INTO ai_views(ts,model,trigger,view_json,analyst,run_id) VALUES(?,?,?,?,?,?)',
+                                   (original, 'codex', 'test', '{}', 'codex', 'origin'))
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (3, 'zheshang', 'codex', 3,
+                    original, two.isoformat(), 'v1', json.dumps({'input_quote_at': original})))
+                evidence = {'status': 'available', 'as_of': original,
+                            'buy_price_windows_15m': [{'low': 804, 'high': 807}]}
+                store.conn.execute('INSERT INTO state VALUES(?,?,?)',
+                    ('ai_model_input:origin:codex', json.dumps({'live_readonly_accounts': {'accounts': {
+                        'zheshang': {'recent_bank_quotes': evidence}}}}), original))
             record(store.conn, 'zheshang', point(1, 830))
             record(store.conn, 'minsheng', point(2, 818))
             record(store.conn, 'zheshang', point(3, 807))
@@ -548,7 +566,7 @@ class BuyAuditTests(unittest.TestCase):
             result = observed_reviews(store.conn, 'zheshang', 'codex', 4, three + timedelta(seconds=20))
             self.assertEqual(result['examined_runs'], 2)
             self.assertEqual(result['by_branch']['breakout_continuation'], {'no_buy_suggested': 1, 'not_covered': 1})
-            self.assertEqual(result['by_branch']['shallow_pullback'], {'no_buy_suggested': 1, 'not_covered': 1})
+            self.assertEqual(result['by_branch']['deep_pullback'], {'no_buy_suggested': 1, 'not_covered': 1})
             newer, older = result['cases']
             self.assertEqual((newer['advice_action'], newer['outcome']), ('buy', 'not_covered'))
             self.assertEqual(older['outcome'], 'no_buy_suggested')

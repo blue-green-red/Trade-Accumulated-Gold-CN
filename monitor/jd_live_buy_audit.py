@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import MAX_GAP, advance, eligible, utc_text, watch_deadline
-from .jd_live_conditions import stamp
+from .jd_live_conditions import archived_bank_quotes, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
 from .participation_audit import horizon_at, readonly
 from .trade_costs import bank_review_payoff, number
@@ -203,6 +203,7 @@ def shallow_level_sensitivity(value, condition, archived_quotes, published, expi
                         'max_buy_price_cny': round(review['max_buy_price_cny'] + shift, 2),
                         'zone': {**zone, 'floor_cny': round(zone['floor_cny'] + shift, 2)}}
     candidate = {**condition, 'price_cny': sampled_low, 'buy_review': candidate_review}
+    candidate['pullback_depth'] = pullback_depth(candidate, archived_quotes, value.get('input_quote_at'), published)
     result = {'sampled_low_cny': sampled_low, 'trigger_shift_cny_per_gram': shift,
               'candidate_max_buy_cny': candidate_review['max_buy_price_cny']}
     if not eligible(candidate, number(value.get('input_minimum_buy_grams'))):
@@ -225,10 +226,13 @@ def independent_branch_replay(value, published, expires, quotes, now, *, archive
     for condition in value.get('review_conditions', []):
         if not eligible(condition, minimum):
             continue
+        if archived_quotes and 'pullback_depth' not in condition and (depth := pullback_depth(
+                condition, archived_quotes, value.get('input_quote_at'), published)):
+            condition = {**condition, 'pullback_depth': depth}
         modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
         for mode in modes:
             result = replay_one_branch(value, condition, mode, published, expires, quotes, now)
-            if result['branch'] == 'shallow_pullback' and archived_quotes is not None:
+            if zoned_pullback(condition) and archived_quotes is not None:
                 result['sampled_low_sensitivity'] = shallow_level_sensitivity(value, condition, archived_quotes,
                                                                              published, expires, quotes, now)
             cases.append(result)
@@ -243,7 +247,10 @@ def review_branch(route):
     if route.get('buy_review'):
         if route.get('condition') == 'at_or_above':
             return 'breakout_entry_retest'
-        return 'shallow_pullback' if route['buy_review'].get('zone') else 'pullback_recovery'
+        if not zoned_pullback(route):
+            return 'pullback_recovery'
+        depth = route.get('pullback_depth')
+        return f'{depth}_pullback' if depth in ('shallow', 'deep') else 'zoned_pullback'
     return 'unclassified'
 
 
@@ -384,9 +391,19 @@ def observed_reviews(conn, bank, model, limit, now):
         for e in events:
             outcome = advice_outcome(status, e['id'], covered_ids, value)
             paths = []
-            for route in e['data'].get('routes', []):
-                branch = review_branch(route)
+            routes = e['data'].get('routes', [])
+            origin = None
+            if any(map(zoned_pullback, routes)):
+                origin = conn.execute("SELECT view_id,created_at,json_extract(advice_json,'$.input_quote_at') "
+                                      "FROM jd_live_advice WHERE id=? AND bank=? AND analyst=?",
+                                      (e['data'].get('advice_id'), bank, model)).fetchone()
+            evidence = archived_bank_quotes(conn, bank, model, origin[0]) if origin else {}
+            for route in routes:
                 confirmed = stamp(route.get('confirmed_at'))
+                if evidence and confirmed and (published_at := stamp(origin[1])) and published_at <= confirmed:
+                    if depth := pullback_depth(route, evidence, origin[2], published_at):
+                        route = {**route, 'pullback_depth': depth}
+                branch = review_branch(route)
                 price = number(route.get('price_cny'))
                 paths.append({'branch': branch, 'threshold_cny': route.get('threshold_cny'),
                               'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
@@ -434,12 +451,11 @@ def report(conn, bank, model, limit, now):
             if replacement:
                 watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
         archived_quotes = {}
-        if has_history and any(review_branch(c)=='shallow_pullback' for c in value.get('review_conditions', [])):
-            entry = conn.execute('SELECT json_extract(s.value, ?) FROM ai_views v JOIN state s '
-                                 "ON s.key='ai_model_input:'||v.run_id||':'||v.analyst WHERE v.rowid=? AND v.analyst=?",
-                                 (f'$.live_readonly_accounts.accounts.{bank}.recent_bank_quotes', view_id, model)).fetchone()
-            if entry and entry[0]:
-                archived_quotes = json.loads(entry[0])
+        if has_history and any(map(zoned_pullback, value.get('review_conditions', []))):
+            archived_quotes = archived_bank_quotes(conn, bank, model, view_id)
+            for condition in value['review_conditions']:
+                if depth := pullback_depth(condition, archived_quotes, value.get('input_quote_at'), published):
+                    condition['pullback_depth'] = depth
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,

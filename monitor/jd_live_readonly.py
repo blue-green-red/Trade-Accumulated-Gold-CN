@@ -236,7 +236,7 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
             seen={}
             pinned={i for o in row['order_history'] for i in o.get('advice_links',{}).values()}
             placeholders=','.join('?' for _ in pinned) or 'NULL'
-            query=f'SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND (id IN (SELECT id FROM jd_live_advice WHERE bank=? ORDER BY id DESC LIMIT 20) OR id IN ({placeholders})) ORDER BY id DESC'
+            query=f'SELECT id,analyst,created_at,expires_at,snapshot_revision,advice_json,view_id FROM jd_live_advice WHERE bank=? AND (id IN (SELECT id FROM jd_live_advice WHERE bank=? ORDER BY id DESC LIMIT 20) OR id IN ({placeholders})) ORDER BY id DESC'
             for r in conn.execute(query,(bank,bank,*pinned)):
                 if not active(conn,r[1]):continue
                 changed=control(conn,r[1]).get('changed_at')
@@ -265,9 +265,15 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                     from .jd_live_proposals import current_order_state
                     current_entry_state(conn,row,entry,now)
                     current_order_state(entry,row,now)
-                from .jd_live_conditions import condition_state,management_state
+                from .jd_live_conditions import (archived_bank_quotes, condition_state, management_state, pullback_depth,
+                                                  stamp, zoned_pullback)
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
+                evidence = (archived_bank_quotes(conn, bank, r[1], r[6])
+                            if 'ai_views' in tables and any(map(zoned_pullback, entry.get('review_conditions', [])))
+                            else {})
                 for condition in entry.get('review_conditions',[]):
+                    if evidence and (depth := pullback_depth(condition, evidence, entry.get('input_quote_at'), stamp(r[2]))):
+                        condition['pullback_depth'] = depth
                     condition['monitoring']=condition_state(conn,row,entry,condition,now,latest=not seen.get(r[1]))
                 target.append(entry)
                 seen[r[1]]=seen.get(r[1],0)+1

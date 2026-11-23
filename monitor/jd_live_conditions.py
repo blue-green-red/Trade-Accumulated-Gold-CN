@@ -12,6 +12,36 @@ def stamp(value):
     except (ValueError,TypeError):return None
 
 
+def zoned_pullback(condition):
+    return condition.get('condition') == 'at_or_below' and bool((condition.get('buy_review') or {}).get('zone'))
+
+
+def archived_bank_quotes(conn, bank, model, view_id):
+    row = conn.execute('SELECT json_extract(s.value, ?) FROM ai_views v JOIN state s '
+                       "ON s.key='ai_model_input:'||v.run_id||':'||v.analyst WHERE v.rowid=? AND v.analyst=?",
+                       (f'$.live_readonly_accounts.accounts.{bank}.recent_bank_quotes', view_id, model)).fetchone()
+    return json.loads(row[0]) if row and row[0] else {}
+
+
+def pullback_depth(condition, evidence, input_quote_at, published):
+    """Classify a zone using only the bank samples available when it was proposed."""
+    from .trade_costs import number
+
+    at = stamp(evidence.get('as_of'))
+    trigger = number(condition.get('threshold_cny', condition.get('price_cny')))
+    if (not zoned_pullback(condition) or not trigger or evidence.get('status') != 'available'
+            or at is None or at != stamp(input_quote_at) or published is None or at > published):
+        return None
+    windows = evidence.get('buy_price_windows_15m', [])
+    lows = [v for w in windows if (v := number(w.get('low')))]
+    highs = [v for w in windows if (v := number(w.get('high')))]
+    if lows and trigger < min(lows):
+        return 'deep'
+    if lows and highs and min(lows) <= trigger <= max(highs):
+        return 'shallow'
+    return None
+
+
 def validate_structure(value,source,now,minimum_buy_grams=None):
     warnings=[]
     part=source.get('pending_orders') or {}
