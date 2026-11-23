@@ -16,10 +16,12 @@ def write(conn, model, state):
                  ("ai_events:" + model, json.dumps(state, ensure_ascii=False), stamp))
 
 
-def enqueue(conn, model, reason, gap, event_id=None, payload=None):
+def enqueue(conn, model, reason, gap, event_id=None, payload=None, *, still_current=None):
     event_id = event_id or str(uuid.uuid4())
     with conn:
         conn.execute("BEGIN IMMEDIATE")
+        if still_current is not None and not still_current(conn):
+            return False
         state = read(conn, model)
         if event_id in state["covered"] or any(e["id"] == event_id for e in state["pending"]):
             return False

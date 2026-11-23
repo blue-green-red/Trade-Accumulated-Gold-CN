@@ -371,12 +371,10 @@ def buy_observation_latch_reason(conn, account, advice, condition, watch, now):
 
 def monitor_prices(store,account,advice,now):
     from .ai_events import read,write
-    from .controls import active,control
     from .jd_live_buy_guard import plain_buy_observation
     from .jd_live_buy_watch import PRICE_SUPPRESSION_KEY, append_price_review_records
     from .jd_live_path import observed_exit_touch
     from .jd_live_readonly import PRODUCTS, review_context_current
-    model = advice['analyst']
     for condition in advice.get('review_conditions',[]):
         if condition.get('buy_review') or condition.get('bank_breakout'):continue
         state=condition_state(store.conn,account,advice,condition,now)
@@ -387,8 +385,6 @@ def monitor_prices(store,account,advice,now):
         # The collector and monitor can observe the same tick. Commit event + latch atomically.
         with store.conn:
             store.conn.execute('BEGIN IMMEDIATE')
-            switch=control(store.conn,model)
-            if not active(store.conn,model) or (switch.get('changed_at') and advice['created_at']<=switch['changed_at']):continue
             if not review_context_current(store.conn, account, advice):
                 return
             key=watch_key(store.conn,advice['analyst'],account['bank'],condition);watch=read_watch(store.conn,key)

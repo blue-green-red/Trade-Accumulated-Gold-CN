@@ -336,7 +336,7 @@ class Monitor:
                         if not manual:return name,None
                     model_context = deepcopy(context)
                     submitted = kept = pending[name]
-                    recheck = {e['id'] for e in submitted if e['id'].startswith(ENTRY_EVENT_PREFIX)
+                    recheck = {e['id'] for e in submitted if e['id'].startswith((ENTRY_EVENT_PREFIX, 'live-move:'))
                                or e['id'].startswith('live-price:') and e['data'].get('quote_side') == 'buy'
                                and not e['data'].get('order_key')}
                     if recheck:
@@ -352,7 +352,7 @@ class Monitor:
                             elif event_id in current:
                                 kept.append(current[event_id])
                         if name in automatic and not (trigger := self.analysts[name].due(store=store,pending=kept)):
-                            log.info("%s 派发前买入复评信号已失效，取消自动分析",name)
+                            log.info("%s 派发前价格复评信号已失效，取消自动分析",name)
                             return name,None
                     model_context['event_coverage'] = {name: [e['id'] for e in kept]}
                     model_context['trigger_events'] = [{k: e[k] for k in ('id', 'reason', 'observed_at', 'data')} for e in kept]

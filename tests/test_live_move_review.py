@@ -12,8 +12,8 @@ from monitor.store import Store
 from monitor.jd_live_readonly import ensure_schema,parse_account,record_success,model_input,accounts
 from monitor.jd_live_advice import save,PROMPT,notification_events
 from monitor.jd_live_feedback import input_quote,strategy_review
-from monitor.jd_live_review import request_reviews
-from monitor.ai_events import read,acknowledge
+from monitor.jd_live_review import request_bank_move,request_reviews
+from monitor.ai_events import read,acknowledge,enqueue
 from test_jd_live import payload
 
 NOW=datetime(2026,11,3,6,tzinfo=timezone.utc)
@@ -85,9 +85,51 @@ class BankMoveReviewTests(unittest.TestCase):
         self.price(value=842,seconds=3);self.review(3);self.assertEqual(len(self.moves()),1)
         self.assertEqual(self.moves()[0]['data']['previous_quote_cny'],846.6)
 
+    def test_cached_bank_move_cannot_enqueue_after_new_advice_or_account_revision(self):
+        old=self.saved()
+        self.price(value=846.6)
+        at=NOW+timedelta(seconds=1)
+        account=accounts(self.s.conn,at,include_advice=False,selected_bank='zheshang')[0]
+        current=self.saved(view=2,now=at)
+        request_bank_move(self.s,account,old,.4,at)
+        self.assertEqual(self.moves(),[])
+
+        at=NOW+timedelta(seconds=2)
+        self.price(value=842.,seconds=2)
+        account=accounts(self.s.conn,at,include_advice=False,selected_bank='zheshang')[0]
+        self.price(value=842.,seconds=2,cash_cny=101.)
+        request_bank_move(self.s,account,current,.4,at)
+        self.assertEqual(self.moves(),[])
+        self.review(2)
+        self.assertTrue(any(e['id'].startswith('live-account:zheshang:') for e in read(self.s.conn,'codex')['pending']))
+
+    def test_pending_bank_move_survives_a_price_reversal_until_new_advice_covers_the_bank(self):
+        from monitor.jd_live_buy_watch import pending_events
+        self.saved()
+        self.saved(bank='minsheng')
+        self.price(value=846.6);self.review()
+        move,=self.moves()
+        enqueue(self.s.conn,'codex','同期宏观事件',0,'macro:concurrent')
+        self.price(value=850.,seconds=2)
+        at=NOW+timedelta(seconds=2)
+        self.assertIn(move,pending_events(self.s.conn,'codex',at))
+        self.saved(view=2,now=at)
+        self.assertEqual([e['id'] for e in pending_events(self.s.conn,'codex',at)],['macro:concurrent'])
+        self.assertEqual(self.moves(),[])
+        self.price(value=853.4,seconds=3);self.review(3)
+        self.assertEqual(self.moves()[0]['data']['previous_quote_at'],at.isoformat())
+
+    def test_pending_bank_move_from_a_previous_model_generation_is_removed(self):
+        from monitor.jd_live_buy_watch import pending_events
+        self.saved()
+        self.price(value=846.6);self.review()
+        self.assertEqual(len(self.moves()),1)
+        at=NOW+timedelta(seconds=1)
+        self.s.set_state('model_control:codex',{'enabled':True,'generation':2,'changed_at':at.isoformat()})
+        self.assertFalse(any(e['id'].startswith('live-move:') for e in pending_events(self.s.conn,'codex',at)))
+
     def test_invalid_stale_and_regressive_quotes_cannot_trigger(self):
         advice=self.saved()
-        from monitor.jd_live_review import request_bank_move
         for value in (None,False,float('nan'),float('inf'),-1):
             with self.subTest(value=value):
                 account={'bank':'zheshang','connected':True,'quote':{'status':'fresh','sell_price_cny':value,'quoted_at':NOW.isoformat()}}

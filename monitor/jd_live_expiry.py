@@ -23,10 +23,8 @@ def request_expiry_review(store,account,advice,now):
     if advice.get('snapshot_revision')!=account['revision'] or advice.get('schema_version',1)<2:return
     with conn:
         conn.execute('BEGIN IMMEDIATE')
-        switch=control(conn,model)
-        if not switch['enabled']:return
-        if switch.get('changed_at') and advice['created_at']<=switch['changed_at']:return
         if not review_context_current(conn,account,advice):return
+        switch=control(conn,model)
         from .jd_live_buy_watch import observation_only
         observation=advice.get('buy_watch')
         if observation and observation_only(advice):

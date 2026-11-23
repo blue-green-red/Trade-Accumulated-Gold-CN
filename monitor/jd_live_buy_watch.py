@@ -671,7 +671,7 @@ def pending_events(conn, model, now):
     from .ai_events import read, write
     from .jd_live_buy_guard import (ENTRY_EVENT_PREFIX, active_routes, plain_buy_levels, plain_buy_observation,
                                    reviewed_breakout, reviewed_price_observation, stored_price_condition, with_active_routes)
-    from .jd_live_readonly import accounts
+    from .jd_live_readonly import accounts, review_context_current
 
     def validated(event, discarded):
         event_id, data = event['id'], event.get('data') or {}
@@ -687,6 +687,9 @@ def pending_events(conn, model, now):
             return event if any(advice['id'] == data['advice_id'] and advice['analyst'] == model
                                 and advice.get('retest_reprice_needed') for account in current
                                 for advice in account['advice']) else None
+        if event_id.startswith('live-move:') and data.get('bank') and data.get('advice_id'):
+            return event if review_context_current(conn, {'bank': data['bank']},
+                                                    {'id': data['advice_id'], 'analyst': model}) else None
         if event_id.startswith('live-price:'):
             if data.get('buy_review'):
                 return None

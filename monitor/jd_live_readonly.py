@@ -110,11 +110,14 @@ def declared_cash_context(snapshot, declared_at, anchor, invalidated_at):
 
 
 def review_context_current(conn, account, advice):
-    """Compare the latest advice and verified account revision under the caller's write lock."""
+    """Check the latest advice, its model generation and the verified bank revision."""
+    from .controls import control
+    from .jd_live_conditions import stamp
+
     bank = account['bank']
     if bank not in enabled_banks(conn):
         return False
-    row = conn.execute('''SELECT a.id,a.snapshot_revision,s.revision,
+    row = conn.execute('''SELECT a.id,a.snapshot_revision,s.revision,a.created_at,
         CASE WHEN d.bank IS NOT NULL THEN s.data_json END,d.declared_at,d.anchor,d.invalidated_at
         FROM jd_live_advice a JOIN jd_live_snapshots s ON s.bank=a.bank
         JOIN jd_live_readonly r ON r.bank=a.bank AND r.public_status='fresh'
@@ -122,12 +125,16 @@ def review_context_current(conn, account, advice):
         WHERE a.bank=? AND a.analyst=? ORDER BY a.id DESC LIMIT 1''', (bank, advice['analyst'])).fetchone()
     if not row or row[0] != advice['id']:
         return False
+    switch = control(conn, advice['analyst'])
+    changed = stamp(switch.get('changed_at'))
+    if not switch['enabled'] or changed and stamp(row[3]) <= changed:
+        return False
     revision = row[2]
-    if row[3] is not None:
-        snapshot = {**json.loads(row[3]), 'revision': revision}
+    if row[4] is not None:
+        snapshot = {**json.loads(row[4]), 'revision': revision}
         if snapshot.get('cash_source') != 'jd_electronic_account_api' or snapshot.get('cash_cny') is None:
-            _, revision = declared_cash_context(snapshot, *row[4:])
-    return row[1] == revision == account.get('revision')
+            _, revision = declared_cash_context(snapshot, *row[5:])
+    return row[1] == revision == account.get('revision', revision)
 
 
 def declare_full_position(conn,bank,at=None):

@@ -83,6 +83,7 @@ def request_bank_move(store,account,advice,threshold,now,interval=0):
     """One event per bank/model's last observed input; the existing worker coalesces all triggers."""
     from .jd_live_feedback import input_quote,price
     from .jd_live_conditions import stamp
+    from .jd_live_readonly import review_context_current
     quote=account.get('quote') or {}
     current=price(quote.get('sell_price_cny'))
     if not account.get('connected') or quote.get('status')!='fresh' or current is None:return
@@ -93,9 +94,10 @@ def request_bank_move(store,account,advice,threshold,now,interval=0):
     change=(current/anchor['price_cny']-1)*100
     if abs(change)+1e-9<threshold:return
     model=advice['analyst'];bank=account['bank']
+
     enqueue(store.conn,model,f'真实账户人民币金价变化{change:+.2f}%：{PRODUCTS[bank][1]}',interval,
             event_id=f'live-move:{model}:{bank}:{advice["id"]}',
             payload={'source':'银行报价复查','bank':bank,'advice_id':advice['id'],
                      'previous_quote_cny':anchor['price_cny'],'previous_quote_at':anchor['quoted_at'],
                      'current_quote_cny':current,'current_quote_at':quote['quoted_at'],
-                     'change_pct':round(change,3)})
+                     'change_pct':round(change,3)},still_current=lambda conn: review_context_current(conn,account,advice))
