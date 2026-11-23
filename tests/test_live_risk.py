@@ -5,7 +5,7 @@ import unittest
 import os
 from unittest.mock import patch
 
-from monitor.jd_live_risk import account_risk,effect,annotate,buy_capacity_reference,buy_sizing,validate_downside
+from monitor.jd_live_risk import account_risk,effect,annotate,buy_sizing,validate_downside
 from monitor.jd_live_proposals import proposal_signature,format_proposals
 from monitor.jd_live_semantics import notification_parts
 from monitor.public_ai import privacy_ok
@@ -40,18 +40,6 @@ def scenario(price=840,role='stress_test',action='hold'):
 
 
 class AccountRiskTests(unittest.TestCase):
-    def test_position_capacity_accounts_for_uncleared_buy_orders_and_exit_risk(self):
-        s = {**source(), 'cash_cny': 90_000, 'total_grams': 10,
-             'quote': {'status': 'fresh', 'sell_price_cny': 1000},
-             'account_risk': {'risk_budget_cny': 2500}}
-        pending = {'grams': 5, 'cost_cny': 5000}
-        current = buy_capacity_reference(s, 1000, 85_000, pending)
-        self.assertEqual(current['grams_per_position_point'], 1.)
-        self.assertEqual(current['cash_limited_position_after_pct'], 95.)
-        limited = buy_capacity_reference(s, 1000, 85_000, pending, exit_price=900)
-        self.assertEqual(limited, {'grams': 9.51, 'position_after_pct': 19.51})
-        self.assertEqual(buy_capacity_reference(s, 1000, 85_000, None, exit_price=900), {})
-
     def test_known_position_net_assets_and_reference_budget(self):
         s=source();before=deepcopy(s);position,risk=account_risk(s,{'trade_risk_pct':4})
         self.assertEqual(position,20.)

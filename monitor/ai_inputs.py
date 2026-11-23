@@ -43,7 +43,6 @@ def prepare_bank_entry_context(out, conn=None):
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, plain_buy_observation, stored_price_condition
     from .jd_live_buy_watch import breakout_retest_price_status
     from .jd_live_conditions import price_met, stamp
-    from .jd_live_risk import buy_capacity_reference
     from .trade_costs import bank_review_unit_payoff, cost_reference, number
 
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
@@ -116,11 +115,6 @@ def prepare_bank_entry_context(out, conn=None):
                                                current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
                 payoff = {key: round(value, 4 if key.endswith('_per_gram') else 2)
                           for key, value in unit.items()} if unit is not None else None
-                capacity = account.get('new_buy_capacity_at_input') or {}
-                if payoff is not None and (reference := buy_capacity_reference(
-                        account, buy, number(capacity.get('cash_after_buy_orders_cny')),
-                        capacity.get('pending_buy_exposure'), exit_price=number(zone.get('risk_exit_cny')))):
-                    payoff['cash_and_exit_risk_reference'] = reference
             if payoff is not None:
                 account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
 

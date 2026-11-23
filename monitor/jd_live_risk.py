@@ -84,44 +84,6 @@ def annotate(value,source):
             order['account_effects']['stop_loss']=effect(source,order.get('loss_price_cny'),side,order['grams'])
 
 
-def uncommitted_risk(budget, held_loss, pending_loss=0.):
-    return max(0., budget - max(0., held_loss) - max(0., pending_loss))
-
-
-def buy_capacity_reference(source, entry, free_cash, pending, *, exit_price=None):
-    """Map account percentages to buy quantities, optionally at a common hypothetical exit."""
-    if not entry or free_cash is None:
-        return {}
-    cash_cap = floor(free_cash * 100 / entry) / 100
-    if exit_price is None:
-        result = {'cash_after_buy_orders_cny': free_cash, 'cash_limited_grams': cash_cap,
-                  'pending_buy_exposure': pending}
-    else:
-        result = {}
-    cash, held = number(source.get('cash_cny')), number(source.get('total_grams'))
-    if cash is None or held is None:
-        return result
-    gross = cash + held * entry
-    if not gross:
-        return result
-    position = lambda grams: min(100., (held + grams) * entry / gross * 100)
-    if exit_price is None:
-        result.update(grams_per_position_point=round(gross / entry / 100, 4),
-                      cash_limited_position_after_pct=round(position(cash_cap), 4))
-        return result
-    fee = number(source.get('sell_fee_rate'))
-    sell = quote_price(source)
-    budget = number((source.get('account_risk') or {}).get('risk_budget_cny'))
-    if not (0 < exit_price < entry) or not sell or fee is None or fee >= 1 or budget is None or pending is None:
-        return result
-    net_exit = exit_price * (1 - fee)
-    held_loss = held * (sell - exit_price) * (1 - fee)
-    pending_loss = pending['cost_cny'] - pending['grams'] * net_exit
-    risk_cap = floor(uncommitted_risk(budget, held_loss, pending_loss) / (entry - net_exit) * 100) / 100
-    size = min(cash_cap, risk_cap)
-    return {'grams': size, 'position_after_pct': round(position(size), 4)}
-
-
 def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, committed=None):
     """Recalculate a proposed batch at its entry price using the saved bank inputs."""
     state = advice.get('input_state') or {}
@@ -182,7 +144,7 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
         return data
     held_loss = holding * (current_sell - exit_price) * (1 - fee)
     if budget is not None:
-        remaining_risk = uncommitted_risk(budget, held_loss)
+        remaining_risk = max(0., budget - max(0., held_loss))
         data['risk_cap_grams'] = floor(remaining_risk / added_loss * 100) / 100
         if target_grams:
             data['target_fits_risk'] = target_grams * added_loss <= remaining_risk + 1e-8
@@ -193,7 +155,7 @@ def buy_size_metrics(advice, entry, grams, *, target=None, exit_price=None, comm
     if combined is not None:
         other_loss = other_cost - other_grams * net_at_exit
         if budget is not None:
-            risk_left = uncommitted_risk(budget, held_loss, other_loss)
+            risk_left = max(0., budget - max(0., held_loss) - max(0., other_loss))
             combined['risk_cap_grams'] = floor(risk_left / added_loss * 100) / 100
         if combined.get('cash_covers_all'):
             delta = -(held_loss + other_loss + sized * added_loss)
