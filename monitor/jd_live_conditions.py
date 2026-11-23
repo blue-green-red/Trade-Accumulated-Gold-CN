@@ -162,7 +162,11 @@ def condition_state(conn,account,advice,condition,now,latest=True):
     if (path_role=='stress_test' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary
             and not condition.get('order_key') and not condition.get('buy_review')):
         result['status']='review_required';return result
-    boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
+    from .jd_live_path import verified_exit_condition
+    boundary_review=advice.get('lifecycle_status')=='current' and (
+        verified_exit_condition(condition, advice.get('position_path') or {})
+        or advice.get('_path_pause') and condition['condition']=='at_or_below'
+        and condition['price_cny']==path_boundary and not condition.get('order_key'))
     from .jd_live_buy_watch import (active_window, candidate_deadline, eligible, extended, pending_plan_review,
                                     watch_deadline, watch_id, watch_progress, watch_route_key, watch_routes)
     independent=latest and advice.get('buy_watch') and extended(condition)
@@ -301,6 +305,7 @@ def monitor_prices(store,account,advice,now):
     from .ai_events import read,write
     from .controls import active,control
     from .jd_live_buy_guard import plain_buy_observation
+    from .jd_live_path import observed_exit_touch
     from .jd_live_readonly import PRODUCTS
     for condition in advice.get('review_conditions',[]):
         if condition.get('buy_review') or condition.get('bank_breakout'):continue
@@ -319,15 +324,24 @@ def monitor_prices(store,account,advice,now):
             latched = watch.get('latched')
             if met and plain_buy_observation(condition):
                 latched = buy_observation_latched(store.conn, account, advice, condition, watch, now)
-            if met and not latched:
+            trigger_price, trigger_at = price, quote['quoted_at']
+            recovered = None
+            if not met and not latched:
+                recovered = observed_exit_touch(store.conn, account, advice, condition, watch, now)
+                if recovered:
+                    at, trigger_price = recovered
+                    trigger_at = at.isoformat()
+            if (met or recovered) and not latched:
                 event_id=f'live-price:{advice["analyst"]}:{account["bank"]}:{advice["id"]}:{condition_key(condition)}'
-                reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
+                reason=f'真实账户价格复评：{PRODUCTS[account["bank"]][1]}{ "卖出" if condition["quote_side"]=="sell" else "买入"}报价{trigger_price:g}元/克，达到{ "≥" if condition["condition"]=="at_or_above" else "≤"}{condition["price_cny"]:g}'
+                if recovered:
+                    reason += f'，随后回升至{price:g}元/克'
                 events=read(store.conn,advice['analyst'])
                 if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
                     events['pending'].append({'id':event_id,'reason':reason,'min_gap_minutes':0,'observed_at':now.isoformat(),
                         'data':{'bank':account['bank'],'advice_id':advice['id'],'condition_key':condition_key(condition),
-                                'quote_side':condition['quote_side'],'price_cny':price,'threshold_cny':condition['price_cny'],
-                                'quoted_at':quote['quoted_at'],'order_key':condition.get('order_key'),'reason':condition['reason']}})
+                                'quote_side':condition['quote_side'],'price_cny':trigger_price,'threshold_cny':condition['price_cny'],
+                                'quoted_at':trigger_at,'order_key':condition.get('order_key'),'reason':condition['reason']}})
                     write(store.conn,advice['analyst'],events)
                     watch.update(triggered_at=now.isoformat(),event_id=event_id,advice_id=advice['id'])
             watch.update(latched=met,last_quote_at=quote['quoted_at'],last_price_cny=price)

@@ -219,8 +219,9 @@ class BankMoveReviewTests(unittest.TestCase):
     def test_prompt_uses_bank_quotes_to_evaluate_both_routes_without_forcing_trade(self):
         from monitor.trade_costs import PROMPT as COMPARISON_PROMPT
         self.assertEqual(PROMPT.count('previous_advice.strategy_review'),1)
-        self.assertIn('分开评估首笔（含本户最小克数）与后续追加',PROMPT)
-        self.assertIn('追加须用最新报价、仓位和独立依据',PROMPT)
+        self.assertIn('minimum_buy_grams是单笔下限',PROMPT)
+        self.assertIn('首笔比较不买、起购量和有依据的较大规模',PROMPT)
+        self.assertIn('追加用新报价、仓位和独立依据',PROMPT)
         self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
         self.assertIn('用recent_bank_quotes的本行高低与波动定回调区及突破价',PROMPT)

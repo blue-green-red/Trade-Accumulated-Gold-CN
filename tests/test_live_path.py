@@ -189,6 +189,38 @@ class LivePathTests(unittest.TestCase):
         self.assertTrue(paused['suggested_orders'][0]['checks'])
         self.assertEqual(self.f.s.conn.execute('SELECT COUNT(*) FROM jd_live_orders').fetchone()[0],0)
 
+    def test_protection_recovers_the_intermediate_sell_touch_before_rebound(self):
+        from monitor.jd_live_buy_watch import record
+        from monitor.jd_live_path import queued_exit_protection
+
+        self.f.s.set_state('ai_status:codex', {'available': True})
+        self.saved(action='buy', grams=5, price_cny=850)
+        conn = self.f.s.conn
+        old = fixtures.NOW - timedelta(seconds=1)
+        touch = fixtures.NOW + timedelta(seconds=1)
+        record(conn, 'zheshang', (old, old, 825, 817))
+        record(conn, 'minsheng', (touch, touch, 825, 818))
+
+        def update(now):
+            self.f.data['quote'].update(buy_price_cny=830, sell_price_cny=829, quoted_at=now.isoformat())
+            self.f.snapshot()
+            with patch('monitor.trading_hours.trading_session', return_value={'is_open': True}):
+                request_reviews(self.f.s, now)
+                request_reviews(self.f.s, now)
+            return [event for event in read(conn, 'codex')['pending'] if event['id'].startswith('live-price:')]
+
+        self.assertEqual(update(fixtures.NOW + timedelta(milliseconds=500)), [])
+        record(conn, 'zheshang', (touch, touch, 825, 819))
+        now = fixtures.NOW + timedelta(seconds=2)
+        event, = update(now)
+        self.assertEqual(event['data']['quoted_at'], touch.isoformat())
+        self.assertEqual(event['data']['price_cny'], 819)
+        self.assertIn('随后回升至829', event['reason'])
+        self.assertTrue(queued_exit_protection(conn, 'codex', [event['id']], now))
+        advice = accounts(conn, now)[0]['advice'][0]
+        self.assertEqual(advice['position_path']['state'], 'boundary_reached')
+        self.assertEqual(advice['action_status'], 'review_required')
+
     def test_boundary_pauses_an_existing_buy_but_still_queues_review_and_keeps_the_archive_unchanged(self):
         from monitor.jd_live_review import request_reviews
         from monitor.ai_events import read

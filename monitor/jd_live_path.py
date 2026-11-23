@@ -1,5 +1,6 @@
 """Link staged entries to exit boundaries; advisory checks never change bank orders."""
 import json
+from datetime import timedelta
 from typing import Literal,Optional
 from pydantic import BaseModel,Field
 from .trade_costs import number
@@ -13,6 +14,30 @@ def exit_observation(condition, boundary):
     return (boundary is not None and condition.get('condition') == 'at_or_below'
             and condition.get('price_cny') == boundary and not condition.get('order_key')
             and not condition.get('buy_review') and not condition.get('checks'))
+
+
+def verified_exit_condition(condition, path):
+    return (path.get('boundary_role') in EXIT_ROLES and not path.get('checks')
+            and (number(path.get('input_grams')) or 0) > 0 and condition.get('quote_side') == 'sell'
+            and exit_observation(condition, number(path.get('boundary_price_cny'))))
+
+
+def observed_exit_touch(conn, account, advice, condition, watch, now):
+    """Find a sampled sell-side protection touch that recovered before this check."""
+    from .jd_live_buy_watch import quote_tape, sample
+
+    path = advice.get('position_path') or {}
+    boundary = number(path.get('boundary_price_cny'))
+    if not verified_exit_condition(condition, path):
+        return None
+    point = sample(account, now)
+    start = stamp(advice.get('created_at'))
+    if not point or not start or point[0] < start:
+        return None
+    before_start = start - timedelta(microseconds=1)
+    after = max(stamp(watch.get('last_quote_at')) or before_start, before_start)
+    return next(((at, sell) for at, _, sell in quote_tape(conn, account['bank'], after, point)
+                 if sell <= boundary), None)
 
 
 def queued_exit_protection(conn, model, event_ids, now):
@@ -42,10 +67,9 @@ def queued_exit_protection(conn, model, event_ids, now):
         advice = json.loads(latest[2])
         path = advice.get('position_path') or {}
         boundary = number(path.get('boundary_price_cny'))
-        if (boundary is None or price > boundary or path.get('boundary_role') not in EXIT_ROLES
-                or path.get('checks') or (number(path.get('input_grams')) or 0) <= 0):
+        if boundary is None or price > boundary:
             continue
-        if not any(exit_observation(c, boundary) and c['quote_side'] == 'sell'
+        if not any(verified_exit_condition(c, path)
                    and condition_key(c) == data.get('condition_key') for c in advice.get('review_conditions', [])):
             continue
         account = next(iter(accounts(conn, now, include_advice=False, selected_bank=bank)), {})
