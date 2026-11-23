@@ -12,7 +12,7 @@ class AdviceReassessment(BaseModel):
     change_summary:str=Field(min_length=1,max_length=120,description='相对上一轮的新增事实；无实质变化直说，不重复余额')
     thesis_status:Literal['new','valid','weakened','invalidated']
     thesis:str=Field(min_length=1,max_length=180,description='当前交易假设、支持证据与推翻条件')
-    price_basis:str=Field(min_length=1,max_length=1200,description='约200字，完整句收尾；说明目标、退出、期限与敏感性。单次触价只记触及；远端价升级为目标须有新增延续证据，否则仅作强反弹情景，并继续检验较弱反弹。')
+    price_basis:str=Field(min_length=1,max_length=1200,description='约150字，写目标、退出、期限及敏感性，完整句收尾。单次触价只记触及。远端价升级须新增延续证据，否则仅作强反弹情景。继续检验较弱反弹。')
 
 class ReplacementOrder(BaseModel):
     grams:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
@@ -63,8 +63,8 @@ class LiveAdvice(BaseModel):
     price_cny:Optional[float]=Field(default=None,gt=0,allow_inf_nan=False)
     entry_trigger_key:Optional[str]=Field(default=None,min_length=1,max_length=64,description='加仓依赖的 trigger_events.routes.condition_key，未引用填 null')
     valid_for_minutes:int=Field(default=240,ge=15,le=1440)
-    reason:str=Field(max_length=1600,description='当前规模与同幅涨跌金额取舍、等待的具体反证；含持有/减仓及不挂单依据，不重复reassessment')
-    risk_note:str=Field(max_length=800)
+    reason:str=Field(max_length=1600,description='约300–400字。用同一情景比较维持、小幅和较大调整的扣费得失，给等待、减仓或不挂单的依据。省去已列余额、委托参数和价位推导。')
+    risk_note:str=Field(max_length=800,description='一句说明会改变本轮建议的风险')
     reassessment:Optional[AdviceReassessment]=None
     position_path:Optional[PositionPath]=Field(default=None,description='新分析填写建仓与退出的关联；无有效账户时null，复用下跌情景，不重复算式')
     downside_scenarios:list[DownsideScenario]=Field(default_factory=list,max_length=2,description='独立比较候选下跌价的加仓/持有/退出；无可支持价位填[]并在reason说明，禁止凑单')
