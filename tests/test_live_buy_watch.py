@@ -7,7 +7,8 @@ from tempfile import TemporaryDirectory
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, first_observed_quote, first_review_quote,
                                        followup_quote, independent_branch_replay,
-                                       observed_review_horizons, observed_reviews, report, retest_price_evidence)
+                                       observed_review_horizons, observed_reviews, plain_buy_quote_observations,
+                                       report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -549,6 +550,35 @@ class BuyAuditTests(unittest.TestCase):
                              ['threshold_sampled','quote_coverage_incomplete'])
             self.assertEqual(datetime.fromisoformat(latest['plain_buy_quote_observations'][0]['first_threshold_sample_at']),
                              point(4.5,799)[0])
+
+    def test_plain_buy_observation_distinguishes_exact_review_other_input_and_already_met(self):
+        condition = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 800}
+        input_at = START - timedelta(minutes=1)
+        value = {'review_conditions': [condition], 'input_quote_at': input_at.isoformat(),
+                 'input_quote_status': 'fresh', 'input_buy_quote_cny': 799.7}
+        end = START + timedelta(minutes=5)
+        touched = point(1,799)
+        archived = START + timedelta(minutes=2)
+
+        def status(points, reviews=None, inputs=()):
+            row, = plain_buy_quote_observations(1,value,START,end,points,end,reviews or {},inputs)
+            return row
+
+        self.assertEqual(status([touched])['review_archive_status'], 'threshold_already_met_at_input')
+        before_model = (1, START+timedelta(seconds=30), START+timedelta(seconds=25), 799)
+        after_cutoff = (2, end, point(4,799)[0], 799)
+        fresh = (3, archived, touched[0], 799.5)
+        reversed_before_analysis = (4, archived, touched[0], 801)
+        quotes = [point(0.5,801), touched]
+        unmatched = status(quotes,inputs=[before_model,after_cutoff,reversed_before_analysis])
+        self.assertEqual(unmatched['review_archive_status'], 'no_matching_archived_review')
+        other = status(quotes,inputs=[before_model,after_cutoff,fresh,reversed_before_analysis])
+        self.assertEqual(other['review_archive_status'], 'price_seen_in_other_analysis')
+        self.assertEqual(other['other_review_attempt_ids'], [3])
+        matched = {'attempt_id': 5, 'observed_touch_at': touched[0].isoformat(), 'outcome': 'no_buy_suggested'}
+        review = status(quotes,reviews={(1, condition_key(condition)): [matched]},inputs=[fresh])
+        self.assertEqual(review['review_archive_status'], 'review_archived')
+        self.assertEqual(review['review_attempts'], [matched])
 
     def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
         with TemporaryDirectory() as tmp:

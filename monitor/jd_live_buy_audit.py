@@ -614,7 +614,7 @@ def retest_price_evidence(route, confirmed, quote_path):
     return data
 
 
-def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
+def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS, bank_inputs=None):
     """Actual review events and outcomes, with a separately labeled quote comparison."""
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name IN ('ai_runs','ai_views')")}
     if tables != {'ai_runs', 'ai_views'}:
@@ -637,7 +637,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
     episodes = {}
     archive = archived_quote_samples(conn, bank, model, now)
     for attempt, run_id, status, start, finish, covered, advice_id, published, raw, events, sent, valid, source, archived_at in rows:
-        if not events or not (archived_at:=stamp(archived_at)) or archived_at>now:
+        if not (archived_at:=stamp(archived_at)) or archived_at>now:
             continue
         finished=stamp(finish)
         if finished and finished>now:
@@ -647,6 +647,13 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
         sent_ids = set(json.loads(sent).get(model, [])) if sent is not None else None
         value = json.loads(raw) if raw else {}
         account = json.loads(source) if source else {}
+        if bank_inputs is not None and status == 'completed' and advice_id and account.get('status') == 'fresh':
+            quote = account.get('quote') or {}
+            if (quote.get('status') == 'fresh' and (at := stamp(quote.get('quoted_at'))) and at <= archived_at
+                    and (buy := number(quote.get('buy_price_cny')))):
+                bank_inputs.append((attempt, archived_at, at, buy))
+        if not events:
+            continue
         fee = number(account.get('sell_fee_rate', value.get('input_sell_fee_rate')))
         cash = number((account.get('new_buy_capacity_at_input') or {}).get(
             'cash_after_buy_orders_cny', value.get('input_participation_cash_cny')))
@@ -714,6 +721,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                 path = {
                     'branch': branch, 'outcome': path_outcome, 'threshold_cny': route.get('threshold_cny'),
                     **({'trigger_kind': route['trigger_kind']} if route.get('trigger_kind') else {}),
+                    **({'condition_key': key[0]} if key[0] else {}),
                     **retest_price_evidence(route, confirmed, quote_path),
                     'confirmed_at': route.get('confirmed_at'), 'confirmed_buy_cny': price,
                     'confirmation_observed_at': utc_text(observed_at) if observed_at else None,
@@ -743,6 +751,7 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
                     summary[branch][path_outcome] += 1
                     counted.add((branch, path_outcome))
             cases.append({'run_id': run_id, 'attempt_id': attempt, 'event_id': e['id'], 'started_at': start, 'completed_at': finish,
+                          'origin_advice_id': e['data'].get('advice_id'),
                           'analysis_seconds': elapsed_seconds(started, finished),
                           'advice_id': advice_id, 'advice_action': value.get('action'), 'outcome': outcome,
                           'advice_buy_grams': number(value.get('grams')) if value.get('action') == 'buy' else None,
@@ -755,12 +764,41 @@ def observed_reviews(conn, bank, model, limit, now, *, grams=GRAMS):
             'timing_comparison': compare_review_timings((path for _, path in episodes.values()), grams)}
 
 
-def plain_buy_quote_observations(value, published, expires, quotes, now):
+def plain_buy_review_index(cases):
+    result = defaultdict(list)
+    for case in cases:
+        for path in case['paths']:
+            if path.get('trigger_kind') == 'price_touch' and path['branch'] != 'renewed_pullback' and path.get('condition_key'):
+                result[(case['origin_advice_id'], path['condition_key'])].append({
+                    'attempt_id': case['attempt_id'], 'observed_touch_at': path['confirmed_at'], 'outcome': path['outcome']})
+    return result
+
+
+def latched_at_model_input(condition, value, points, published):
+    input_at = stamp(value.get('input_quote_at'))
+    buy = number(value.get('input_buy_quote_cny'))
+    if value.get('input_quote_status') != 'fresh' or not input_at or not buy or not price_met(condition, buy):
+        return False
+    left_side = False
+    for quoted, _, buy, _ in points:
+        if quoted <= input_at:
+            continue
+        if not price_met(condition, buy):
+            left_side = True
+        elif left_side and quoted >= published:
+            return False
+    return True
+
+
+def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs):
     """Show whether each ordinary price level was reached on available quotes."""
     conditions = [item for item in value.get('review_conditions', []) if plain_buy_observation(item)]
     if not conditions or expires <= published:
         return []
-    points = list(observable_quotes(p for p in quotes if published <= p[0] <= p[1] < expires and p[1] <= now))
+    input_at = stamp(value.get('input_quote_at')) if value.get('input_quote_status') == 'fresh' else None
+    earliest = min(input_at, published) if input_at else published
+    tape = list(observable_quotes(p for p in quotes if earliest <= p[0] <= p[1] < expires and p[1] <= now))
+    points = [p for p in tape if p[0] >= published]
     complete = now >= expires and bool(points) and complete_sampling(published, expires, points)
     available = []
     for condition in conditions:
@@ -773,6 +811,7 @@ def plain_buy_quote_observations(value, published, expires, quotes, now):
             closest = (min if direction == 'at_or_below' else max)(p[2] for p in points)
             gap = threshold - closest if direction == 'at_or_above' else closest - threshold
             row.update(extreme_buy_cny=closest, distance_to_threshold_cny_per_gram=round(max(0., gap), 2))
+        first = None
         if gap is not None and gap <= 0:
             status = 'threshold_sampled'
             first = next(p for p in points if price_met(condition, p[2]))
@@ -781,6 +820,18 @@ def plain_buy_quote_observations(value, published, expires, quotes, now):
             status = 'pending'
         else:
             status = 'threshold_not_sampled' if complete else 'quote_coverage_incomplete'
+        attempts = [attempt for attempt in reviews.get((advice_id, condition_key(condition)), [])
+                    if (touch := stamp(attempt['observed_touch_at'])) and published <= touch < expires]
+        if attempts:
+            row.update(review_archive_status='review_archived', review_attempts=attempts)
+        elif first:
+            other_reviews = [attempt for attempt, archived, quoted, buy in bank_inputs
+                             if first[0] <= quoted <= archived and first[1] <= archived < expires and price_met(condition, buy)]
+            if other_reviews:
+                row.update(review_archive_status='price_seen_in_other_analysis', other_review_attempt_ids=other_reviews)
+            else:
+                row['review_archive_status'] = ('threshold_already_met_at_input' if latched_at_model_input(
+                    condition, value, tape, published) else 'no_matching_archived_review')
         available.append({**row, 'status': status})
     return available
 
@@ -796,11 +847,16 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                if (published := stamp(created)) and (end := stamp(expires)) and published <= now]
     windows = pullback_observation_windows(reversed(history))
     next_publications = {older[0]: newer[1] for newer, older in zip(history, history[1:])}
+    bank_inputs = []
+    observed = observed_reviews(conn, bank, model, limit, now, grams=grams, bank_inputs=bank_inputs)
+    plain_reviews = plain_buy_review_index(observed['cases'])
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, published, end, value, view_id in history[:limit]:
+        input_at = stamp(value.get('input_quote_at')) if value.get('input_quote_status') == 'fresh' else None
+        earliest = min(input_at, published) if input_at else published
         rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
                             'WHERE bank=? AND quoted_at>=? AND observed_at>=quoted_at AND observed_at<=? ORDER BY quoted_at',
-                            (bank, utc_text(published), utc_text(now))).fetchall()
+                            (bank, utc_text(earliest), utc_text(now))).fetchall()
         points = [(stamp(q), stamp(o), buy, sell) for q, o, buy, sell in rows]
         watch = value.get('buy_watch')
         if watch:
@@ -819,12 +875,13 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
                       'plain_buy_quote_observations': plain_buy_quote_observations(
-                          value, published, min(end, next_publications.get(advice_id, end)), points, now),
+                          advice_id, value, published, min(end, next_publications.get(advice_id, end)), points, now,
+                          plain_reviews, bank_inputs),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': grams, 'cases': cases,
-            'observed_reviews': observed_reviews(conn, bank, model, limit, now, grams=grams)}
+            'observed_reviews': observed}
 
 
 def main():
