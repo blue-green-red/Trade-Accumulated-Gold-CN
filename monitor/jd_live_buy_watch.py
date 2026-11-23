@@ -482,7 +482,8 @@ def carry_breakout_observations(conn, model, view_id, now):
 def pending_events(conn, model, now):
     """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
-    from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, active_routes, reviewed_breakout, with_active_routes
+    from .jd_live_buy_guard import (ENTRY_EVENT_PREFIX, active_routes, plain_buy_observation,
+                                   reviewed_breakout, reviewed_price_observation, stored_price_condition, with_active_routes)
     from .jd_live_readonly import accounts
 
     def validated(event):
@@ -491,11 +492,14 @@ def pending_events(conn, model, now):
             if data.get('buy_review'):
                 return None
             if data.get('advice_id') and data.get('condition_key'):
-                row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
-                if row and any((c.get('bank_breakout') or c.get('buy_review')) and
-                               condition_key(c) == data['condition_key']
-                               for c in json.loads(row[0]).get('review_conditions', [])):
+                condition, revision = stored_price_condition(conn, model, data)
+                if condition and (condition.get('bank_breakout') or condition.get('buy_review')):
                     return None
+                if condition and plain_buy_observation(condition):
+                    current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
+                    if current and current[0].get('revision') == revision and reviewed_price_observation(
+                            conn, model, current[0], condition['condition'], now):
+                        return None
         if event_id.startswith('live-expired:') and data.get('advice_id'):
             row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
             old = json.loads(row[0]) if row else {}

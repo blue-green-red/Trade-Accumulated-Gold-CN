@@ -488,10 +488,11 @@ class AIAnalyst:
             pending_entry_ids = set()
             if context.get("live_readonly_accounts"):
                 from .jd_live_buy_guard import (
-                    entry_events, remember_reviewed_breakouts, remember_reviewed_confirmations,
+                    entry_events, remember_reviewed_breakouts, remember_reviewed_confirmations, remember_reviewed_price_observations,
                     remove_submitted_confirmations,
                 )
                 remember_reviewed_breakouts(store.conn,self.analyst,entry_context,covered_ids,self._generation)
+                remember_reviewed_price_observations(store.conn,self.analyst,entry_context,covered_ids,self._generation)
                 submitted = list(entry_events(entry_context, covered_ids))
                 remember_reviewed_confirmations(store.conn, self.analyst, submitted)
                 pending_entry_ids = remove_submitted_confirmations(store.conn, self.analyst, submitted)

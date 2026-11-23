@@ -1,12 +1,62 @@
 """Verify real-bank entry triggers against quotes received while the model ran."""
 from collections import defaultdict
 from datetime import datetime
+import json
 
 from .jd_live_buy_watch import MAX_GAP, quote_tape, sample
 from .jd_live_conditions import stamp
 
 
 ENTRY_EVENT_PREFIX = 'live-buy-confirmed:'
+
+
+def stored_price_condition(conn, model, data):
+    from .jd_live_conditions import condition_key
+
+    row = conn.execute('SELECT advice_json,snapshot_revision FROM jd_live_advice WHERE id=? AND analyst=? AND bank=?',
+                       (data.get('advice_id'), model, data.get('bank'))).fetchone()
+    if not row:
+        return None, None
+    condition = next((c for c in json.loads(row[0]).get('review_conditions', [])
+                      if condition_key(c) == data.get('condition_key')), None)
+    return condition, row[1]
+
+
+def plain_buy_observation(condition):
+    return (condition.get('quote_side') == 'buy' and not condition.get('order_key')
+            and not condition.get('buy_review') and not condition.get('bank_breakout') and not condition.get('checks'))
+
+
+def reviewed_price_observation(conn, model, account, direction, now):
+    from .controls import control
+    from .price_guard import read
+
+    receipt = read(conn, f'live-price-reviewed:{model}:{account["bank"]}:{direction}')
+    return (receipt.get('revision') == account.get('revision')
+            and receipt.get('generation') == control(conn, model)['generation']
+            and bool(active_routes(conn, account, [receipt], now)))
+
+
+def remember_reviewed_price_observations(conn, model, context, event_ids, generation):
+    from .price_guard import read, save
+
+    covered = set(event_ids)
+    for event in context.get('trigger_events', []):
+        if event['id'] not in covered or not event['id'].startswith('live-price:'):
+            continue
+        data = event.get('data') or {}
+        if data.get('quote_side') != 'buy' or data.get('order_key') or not (at := stamp(data.get('quoted_at'))):
+            continue
+        condition, revision = stored_price_condition(conn, model, data)
+        if not condition or not plain_buy_observation(condition):
+            continue
+        direction = condition['condition']
+        key = f'live-price-reviewed:{model}:{data["bank"]}:{direction}'
+        previous = read(conn, key)
+        if previous.get('generation') == generation and (last := stamp(previous.get('confirmed_at'))) and at <= last:
+            continue
+        save(conn, key, {'generation': generation, 'revision': revision, 'condition': direction,
+                         'confirmed_at': data['quoted_at'], 'threshold_cny': condition['price_cny']})
 
 
 def reviewed_breakout(conn, model, account, threshold, now):
@@ -102,8 +152,7 @@ def review_failures(conn, context, event_ids, now):
 def route_valid(route, anchor: datetime, quotes, latest_at):
     if latest_at < anchor:
         return False
-    low = route['threshold_cny']
-    high = None
+    low, high = (None, route['threshold_cny']) if route.get('condition') == 'at_or_below' else (route['threshold_cny'], None)
     boundary = route.get('position_boundary_cny')
     if setup := route.get('buy_review'):
         low, high = setup['recovery_price_cny'], setup['max_buy_price_cny']
@@ -111,7 +160,7 @@ def route_valid(route, anchor: datetime, quotes, latest_at):
     for at, buy, sell in quotes:
         if at < anchor:
             continue
-        if (at - previous > MAX_GAP or buy < low or (high is not None and buy > high)
+        if (at - previous > MAX_GAP or (low is not None and buy < low) or (high is not None and buy > high)
                 or (boundary is not None and sell <= boundary)):
             return False
         previous = at

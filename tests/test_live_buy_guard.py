@@ -12,7 +12,8 @@ from monitor.ai_events import acknowledge, enqueue, read, write
 from monitor.ai_inputs import compact_context
 from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
-from monitor.jd_live_buy_guard import block_entries, remember_reviewed_breakouts, review_failures, retire_failed_events
+from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakouts, remember_reviewed_price_observations,
+                                       review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
 from monitor.jd_live_buy_watch import carry_breakout_observations, pending_events, record, request, set_watch
 from monitor.jd_live_conditions import condition_key, read_watch
@@ -134,6 +135,40 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(pending['id'], key)
         self.assertEqual([r['condition_key'] for r in pending['data']['routes']], [breakout['condition_key']])
         self.assertIn('zheshang', review_failures(self.conn, context, [key], short_end))
+
+    def test_plain_buy_observations_do_not_repeat_on_the_same_price_move(self):
+        def queue(advice_id, minute, quote, threshold, *, quote_side='buy', direction='at_or_above'):
+            at = START + timedelta(minutes=minute)
+            self.update_quote(minute, quote)
+            revision = accounts(self.conn, at, include_advice=False)[0]['revision']
+            condition = {'condition': direction, 'quote_side': quote_side, 'price_cny': threshold}
+            origin = {'review_conditions': [condition]}
+            with self.conn:
+                self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                    (advice_id, 'zheshang', 'codex', advice_id, at.isoformat(),
+                     (at + timedelta(minutes=15)).isoformat(), revision, json.dumps(origin)))
+            key = condition_key(condition)
+            event_id = f'live-price:codex:zheshang:{advice_id}:{key}'
+            enqueue(self.conn, 'codex', 'test', 0, event_id, {'bank': 'zheshang', 'advice_id': advice_id,
+                'condition_key': key, 'quote_side': quote_side, 'quoted_at': at.isoformat()})
+            return event_id
+
+        first = queue(1, 0, 806, 805)
+        now = START + timedelta(minutes=1)
+        second = queue(2, 1, 806.2, 806.1)
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', now)], [first, second])
+        with self.conn:
+            context = {'trigger_events': read(self.conn, 'codex')['pending']}
+            remember_reviewed_price_observations(self.conn, 'codex', context, [first], 0)
+            acknowledge(self.conn, 'codex', [first])
+        self.assertEqual(pending_events(self.conn, 'codex', now), [])
+
+        sell = queue(3, 2, 806.3, 806, quote_side='sell')
+        down = queue(4, 2, 806.3, 807, direction='at_or_below')
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=2))], [sell, down])
+        self.update_quote(3, 804.9)
+        recross = queue(5, 4, 806.5, 806.4)
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=4))], [sell, down, recross])
 
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)

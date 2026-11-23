@@ -195,7 +195,7 @@ def condition_state(conn,account,advice,condition,now,latest=True):
                 'triggered_at':stage.get('confirmed_at'),'last_quote_at':stage.get('last_at'),
                 'last_price_cny':stage.get('last_price_cny'),'event_id':event_id if stage.get('confirmed_at') else None}
     if watch.get('event_id') and any(e['id']==watch['event_id'] for e in pending):result['status']='queued'
-    elif watch.get('advice_id')==advice['id']:result['status']='reviewed'
+    elif watch.get('advice_id')==advice['id'] and watch.get('event_id') in events['covered']:result['status']='reviewed'
     elif watch.get('latched'):result['status']='latched'
     else:result['status']='monitoring'
     return result
