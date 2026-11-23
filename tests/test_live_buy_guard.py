@@ -189,6 +189,46 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=1))], [event_id])
         self.assertFalse(pending_events(self.conn, 'codex', START + timedelta(minutes=6)))
 
+    def test_two_explicit_thresholds_in_one_direction_are_reviewed_independently(self):
+        shallow={'condition':'at_or_above','quote_side':'buy','price_cny':805}
+        high={**shallow,'price_cny':807}
+
+        def save_advice(advice_id, minute):
+            at=START+timedelta(minutes=minute)
+            revision=accounts(self.conn,at,include_advice=False)[0]['revision']
+            with self.conn:
+                self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                    (advice_id,'zheshang','codex',advice_id,at.isoformat(),(at+timedelta(minutes=15)).isoformat(),
+                     revision,json.dumps({'review_conditions':[shallow,high]})))
+
+        def queue(advice_id, minute, condition, price):
+            self.update_quote(minute,price)
+            key=condition_key(condition)
+            event_id=f'live-price:codex:zheshang:{advice_id}:{key}'
+            enqueue(self.conn,'codex','分层买价复评',0,event_id,{'bank':'zheshang','advice_id':advice_id,
+                'condition_key':key,'quote_side':'buy','price_cny':price,
+                'quoted_at':(START+timedelta(minutes=minute)).isoformat()})
+            return event_id
+
+        self.update_quote(0,806)
+        save_advice(1,0)
+        first=queue(1,0,shallow,806)
+        events=pending_events(self.conn,'codex',START)
+        with self.conn:
+            remember_reviewed_price_observations(self.conn,'codex',{'trigger_events':events},[first],0)
+            acknowledge(self.conn,'codex',[first])
+        higher=queue(1,1,high,807.5)
+        events=pending_events(self.conn,'codex',START+timedelta(minutes=1))
+        self.assertEqual([e['id'] for e in events],[higher])
+        with self.conn:
+            remember_reviewed_price_observations(self.conn,'codex',{'trigger_events':events},[higher],0)
+            acknowledge(self.conn,'codex',[higher])
+
+        save_advice(2,1)
+        queue(2,2,shallow,807.6)
+        queue(2,2,high,807.6)
+        self.assertEqual(pending_events(self.conn,'codex',START+timedelta(minutes=2)),[])
+
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)
         context, key = self.context([self.route()])

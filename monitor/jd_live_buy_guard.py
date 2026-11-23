@@ -29,14 +29,27 @@ def plain_buy_observation(condition):
             and not condition.get('buy_review') and not condition.get('bank_breakout') and not condition.get('checks'))
 
 
-def reviewed_price_observation(conn, model, account, direction, now):
+def plain_buy_levels(conditions, direction):
+    from .jd_live_conditions import condition_key
+
+    return {condition_key(c):c['price_cny'] for c in conditions
+            if c.get('condition')==direction and plain_buy_observation(c)}
+
+
+def reviewed_price_observation(conn, model, account, condition, now, *, independent=False):
     from .controls import control
+    from .jd_live_conditions import condition_key
     from .price_guard import read
 
+    direction=condition['condition']
     receipt = read(conn, f'live-price-reviewed:{model}:{account["bank"]}:{direction}')
-    return (receipt.get('revision') == account.get('revision')
-            and receipt.get('generation') == control(conn, model)['generation']
-            and bool(active_routes(conn, account, [receipt], now)))
+    if (receipt.get('revision')!=account.get('revision')
+            or receipt.get('generation')!=control(conn,model)['generation']):
+        return False
+    if independent:
+        exact=receipt.get('levels',{}).get(condition_key(condition))
+        receipt=exact or (receipt if receipt.get('threshold_cny')==condition['price_cny'] else {})
+    return bool(receipt and active_routes(conn,account,[receipt],now))
 
 
 def remember_reviewed_price_observations(conn, model, context, event_ids, generation):
@@ -49,16 +62,26 @@ def remember_reviewed_price_observations(conn, model, context, event_ids, genera
         data = event.get('data') or {}
         if data.get('quote_side') != 'buy' or data.get('order_key') or not (at := stamp(data.get('quoted_at'))):
             continue
-        condition, revision, _ = stored_price_condition(conn, model, data)
+        condition, revision, origin = stored_price_condition(conn, model, data)
         if not condition or not plain_buy_observation(condition):
             continue
         direction = condition['condition']
         key = f'live-price-reviewed:{model}:{data["bank"]}:{direction}'
         previous = read(conn, key)
-        if previous.get('generation') == generation and (last := stamp(previous.get('confirmed_at'))) and at <= last:
-            continue
-        save(conn, key, {'generation': generation, 'revision': revision, 'condition': direction,
-                         'confirmed_at': data['quoted_at'], 'threshold_cny': condition['price_cny']})
+        if previous.get('generation')!=generation or previous.get('revision')!=revision:
+            previous={}
+        names=plain_buy_levels(origin['review_conditions'],direction)
+        fields=('condition','confirmed_at','threshold_cny')
+        levels={k:r for k,r in previous.get('levels',{}).items() if k in names}
+        for k,price in names.items():
+            if price==previous.get('threshold_cny'):
+                levels.setdefault(k,{f:previous[f] for f in fields})
+        receipt={'condition':direction,'confirmed_at':data['quoted_at'],'threshold_cny':condition['price_cny']}
+        fingerprint=data['condition_key']
+        if not (last:=stamp(levels.get(fingerprint,{}).get('confirmed_at'))) or at>last:
+            levels[fingerprint]=receipt
+        latest=previous if (last:=stamp(previous.get('confirmed_at'))) and at<=last else receipt
+        save(conn,key,{'generation':generation,'revision':revision,**{f:latest[f] for f in fields},'levels':levels})
 
 
 def reviewed_breakout(conn, model, account, threshold, now, mode=None):

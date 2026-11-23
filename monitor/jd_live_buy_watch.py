@@ -590,7 +590,7 @@ def carry_entry_observations(conn, model, view_id, now):
 def pending_events(conn, model, now):
     """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
-    from .jd_live_buy_guard import (ENTRY_EVENT_PREFIX, active_routes, plain_buy_observation,
+    from .jd_live_buy_guard import (ENTRY_EVENT_PREFIX, active_routes, plain_buy_levels, plain_buy_observation,
                                    reviewed_breakout, reviewed_price_observation, stored_price_condition, with_active_routes)
     from .jd_live_readonly import accounts
 
@@ -614,11 +614,11 @@ def pending_events(conn, model, now):
                         return None
                     if not renewed and now >= stamp(origin['expires_at']):
                         return None
+                    current_conditions=json.loads(latest[2]).get('review_conditions',[])
+                    levels=plain_buy_levels(current_conditions,condition['condition'])
                     if latest[0] != data['advice_id']:
-                        current_conditions = json.loads(latest[2]).get('review_conditions', [])
                         if (latest[3] != revision or now >= stamp(latest[1])
-                                or not any(plain_buy_observation(c) and condition_key(c) == data['condition_key']
-                                           for c in current_conditions)):
+                                or data['condition_key'] not in levels):
                             return None
                     quoted, observed = stamp(data.get('quoted_at')), stamp(event.get('observed_at'))
                     buy = number(data.get('price_cny'))
@@ -631,7 +631,7 @@ def pending_events(conn, model, now):
                     if renewed and (not current or not renewed_pullback_deadline(conn, current[0], origin, condition, now)):
                         return None
                     if current and current[0].get('revision') == revision and reviewed_price_observation(
-                            conn, model, current[0], condition['condition'], now):
+                            conn, model, current[0], condition, now, independent=len(levels)>1):
                         return None
         if event_id.startswith('live-expired:') and data.get('advice_id'):
             row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
