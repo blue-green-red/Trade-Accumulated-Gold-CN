@@ -39,6 +39,27 @@ def market_context(context):
                     entry.pop(key,None)
     return out
 
+
+def compact_live_history(account):
+    """Use references for duplicate snapshots while keeping differing historical facts."""
+    risk = account.get('account_risk')
+    trade = account.get('recent_trade')
+    for advice in account.get('previous_advice', []):
+        sizing = advice.get('sizing_context') or {}
+        last_trade = advice.get('last_trade_advice') or {}
+        for key in ('input_state', 'input_account_risk'):
+            original = sizing.get(key)
+            if (isinstance(original, dict) and original and 'same_as' not in original and last_trade.get(key) == original
+                    and (key != 'input_account_risk' or original != risk)):
+                last_trade[key] = {'same_as': f'本条.sizing_context.{key}'}
+        for snapshot in (sizing, last_trade):
+            if risk and snapshot.get('input_account_risk') == risk:
+                snapshot['input_account_risk'] = {'same_as': '本账户.account_risk'}
+            state = snapshot.get('input_state') or {}
+            if trade and state.get('recent_trade') == trade:
+                state['recent_trade'] = {'same_as': '本账户.recent_trade'}
+
+
 def compact_context(context):
     out=market_context(context)
     covered_news={news_key(e['data']) for e in out.get('trigger_events',[]) if isinstance(e.get('data'),dict) and e['data'].get('text') and e['data'].get('time_bj')}
@@ -57,4 +78,6 @@ def compact_context(context):
             account['recent_fills']=account['recent_fills'][:3]
             for fill in account['recent_fills']:
                 if fill.get('reason'): fill['reason']=fill_cause(fill['reason'])
+    for account in (out.get('live_readonly_accounts') or {}).get('accounts', {}).values():
+        compact_live_history(account)
     return out

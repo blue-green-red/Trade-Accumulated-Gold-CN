@@ -51,6 +51,32 @@ class SpeedTests(unittest.TestCase):
         self.assertEqual(packed['jin10_flash_recent'],[])
         self.assertEqual(len(original['trading_accounts']['accounts']['short_full']['recent_fills']),6)
 
+    def test_live_compaction_references_only_identical_account_history(self):
+        trade = {'transactionTime': '2026-11-20T02:00:00+00:00', 'orderGram': 10}
+        risk = {'gross_assets_cny': 10_000, 'risk_budget_cny': 400}
+        state = {'total_grams': 10, 'cash_cny': 2_000, 'recent_trade': trade}
+        account = {'account_risk': risk, 'recent_trade': trade, 'previous_advice': [
+            {'sizing_context': {'input_state': deepcopy(state), 'input_account_risk': risk},
+             'last_trade_advice': {'input_state': deepcopy(state), 'input_account_risk': risk}},
+            {'sizing_context': {'input_state': {**state, 'cash_cny': 1500}, 'input_account_risk': risk},
+             'last_trade_advice': {'input_state': {**state, 'recent_trade': {**trade, 'orderGram': 15}},
+                                   'input_account_risk': {**risk, 'risk_budget_cny': 300}}},
+        ]}
+        original = {'live_readonly_accounts': {'accounts': {'zheshang': account}}}
+        packed = compact_context(original)
+        result = packed['live_readonly_accounts']['accounts']['zheshang']
+        self.assertEqual((result['account_risk'], result['recent_trade']), (risk, trade))
+        latest, earlier = result['previous_advice']
+        self.assertEqual(latest['sizing_context']['input_account_risk'], {'same_as': '本账户.account_risk'})
+        self.assertEqual(latest['sizing_context']['input_state']['recent_trade'], {'same_as': '本账户.recent_trade'})
+        self.assertEqual(latest['last_trade_advice']['input_state'], {'same_as': '本条.sizing_context.input_state'})
+        self.assertEqual(latest['last_trade_advice']['input_account_risk'], {'same_as': '本账户.account_risk'})
+        self.assertEqual(earlier['sizing_context']['input_state']['cash_cny'], 1500)
+        self.assertEqual(earlier['last_trade_advice']['input_state']['recent_trade']['orderGram'], 15)
+        self.assertEqual(earlier['last_trade_advice']['input_account_risk']['risk_budget_cny'], 300)
+        self.assertEqual(account['previous_advice'][0]['sizing_context']['input_state'], state)
+        self.assertEqual(compact_context(packed), packed)
+
     def test_session_resume_uses_explicit_id_stable_paths_and_counts_cache_once(self):
         first={};self.a._run_codex(self.ctx,first)
         second={};self.a._run_codex(self.ctx,second)
