@@ -212,6 +212,7 @@ def remember_reviewed_confirmations(conn, model, submitted):
             if (confirmed_at and step.get('confirmed_at') == confirmed_at
                     and step.get('reviewed_confirmation_at') != confirmed_at):
                 step['reviewed_confirmation_at'] = confirmed_at
+                current.setdefault('reviewed_routes', {})[condition] = event['id']
                 changed = True
         if changed:
             save(conn, key, current)

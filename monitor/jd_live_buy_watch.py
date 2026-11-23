@@ -371,6 +371,12 @@ def review_event(event_id, bank, advice_id, watch, routes, now):
                      'quoted_at': latest['confirmed_at'], 'routes': routes, **({'plan_id': watch['id']} if watch else {})}}
 
 
+def pending_plan_review(events, bank, identity):
+    return next((event for event in events['pending'] if event['id'].startswith('live-buy-confirmed:')
+                 and event['data'].get('bank') == bank
+                 and event['data'].get('plan_id', event['data'].get('advice_id')) == identity), None)
+
+
 def replay_breakout(conn, account, stage, condition, boundary, now):
     point = sample(account, now)
     start = stamp(stage.get('touched_at'))
@@ -442,11 +448,9 @@ def carry_breakout_observations(conn, model, view_id, now):
             continue
         new_key = condition_key(condition)
         if stage['stage'] == 'confirmed':
-            event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{previous["id"]}'
-            index = next((i for i, event in enumerate(events['pending']) if event['id'] == event_id), None)
-            if index is None:
+            event = pending_plan_review(events, bank, previous['id'])
+            if event is None:
                 continue
-            event = events['pending'][index]
             route = next((r for r in event['data']['routes'] if r.get('bank_breakout')
                           and r['condition_key'] == previous_key and r['confirmed_at'] == stage['confirmed_at']), None)
             if not route:
@@ -457,8 +461,10 @@ def carry_breakout_observations(conn, model, view_id, now):
             if not active_routes(conn, account, [route], now):
                 continue
             updated = with_active_routes(event, [route])
-            events['pending'][index] = {**updated, 'id': f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}',
-                'data': {**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']}}
+            event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
+            event.update(id=event_id, data={**updated['data'], 'advice_id': advice_id, 'plan_id': watch['id']},
+                         reason=updated['reason'])
+            stage['event_id'] = event_id
             changed = True
         else:
             stage, confirmation_price = replay_breakout(conn, account, stage, condition, boundary, now)
@@ -472,6 +478,7 @@ def carry_breakout_observations(conn, model, view_id, now):
                     event_id = f'{ENTRY_EVENT_PREFIX}{model}:{bank}:{watch["id"]}'
                     route = confirmed_route(condition, stage, confirmation_price, boundary, new)
                     events['pending'].append(review_event(event_id, bank, advice_id, watch, [route], now))
+                    stage['event_id'] = event_id
                     changed = True
         save(conn, key, {'advice_id': advice_id, 'plan_id': watch['id'], 'generation': watch['generation'],
                          'routes': {new_key: stage}})
@@ -595,11 +602,16 @@ def request(store, account, advice, now, point):
             routes = []
         updated = {}
         confirmed = []
+        event_id = f'live-buy-confirmed:{model}:{bank}:{identity}'
+        reviewed = current.setdefault('reviewed_routes', {})
         for condition in routes:
             fingerprint = condition_key(condition)
             previous = current['routes'].get(fingerprint, {})
+            if previous.get('reviewed_confirmation_at'):
+                reviewed.setdefault(fingerprint, previous.get('event_id', event_id))
             step = advance_watch(previous, condition, at, buy)
-            if step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
+            if (step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed'
+                    and fingerprint not in reviewed):
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(
                         conn, model, account, condition['price_cny'], observed)):
                     updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
@@ -610,10 +622,11 @@ def request(store, account, advice, now, point):
         if updated == current['routes'] and not current.get('invalidated_at'):
             return
         current['routes'] = updated
-        event_id = f'live-buy-confirmed:{model}:{bank}:{identity}'
         events = read(conn, model)
-        existing = next((e for e in events['pending'] if e['id'] == event_id), None)
+        existing = pending_plan_review(events, bank, identity)
         if existing:
+            for route in confirmed:
+                updated[route['condition_key']]['event_id'] = existing['id']
             evidence = existing['data']['routes'] + confirmed
             retained = [r for r in evidence if (step := updated.get(r['condition_key'], {})).get('stage') == 'confirmed'
                         and step.get('confirmed_at') == r['confirmed_at']]
@@ -623,7 +636,11 @@ def request(store, account, advice, now, point):
             elif retained != existing['data']['routes']:
                 existing.update(with_active_routes(existing, retained))
                 write(conn, model, events)
-        elif confirmed and event_id not in events['covered']:
+        elif confirmed and (watch or event_id not in events['covered']):
+            if event_id in events['covered']:
+                event_id = f'{event_id}:{utc_text(at)}'
+            for route in confirmed:
+                updated[route['condition_key']]['event_id'] = event_id
             events['pending'].append(review_event(event_id, bank, advice['id'], watch, confirmed, now))
             write(conn, model, events)
         conn.execute('INSERT INTO state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) '

@@ -12,11 +12,11 @@ from monitor.ai_events import acknowledge, enqueue, read, write
 from monitor.ai_inputs import compact_context
 from monitor.config import Settings
 from monitor.jd_live_advice import notification_events, save
-from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakouts, remember_reviewed_price_observations,
-                                       review_failures, retire_failed_events)
+from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakouts, remember_reviewed_confirmations,
+                                       remember_reviewed_price_observations, review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
 from monitor.jd_live_buy_watch import carry_breakout_observations, pending_events, record, request, set_watch
-from monitor.jd_live_conditions import condition_key, read_watch
+from monitor.jd_live_conditions import condition_key, condition_state, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
 from monitor.notification_outbox import dispatch
@@ -249,6 +249,56 @@ class BuyGuardTests(unittest.TestCase):
             self.update_quote(minute, price)
             account = accounts(self.conn, at, include_advice=False)[0]
             request(self.store, account, advice, at, (at, at, price, price))
+
+    def test_pullback_can_trigger_after_breakout_was_reviewed_in_the_same_window(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5), (1, 806), (3, 806.5)])
+        first, = read(self.conn, 'codex')['pending']
+        self.assertEqual(first['data']['routes'][0]['confirmation_mode'], 'continuation')
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
+
+        self.observe_watch(advice, [(4, 799), (5, 803.5), (7, 804), (8, 804.1)])
+        now = START + timedelta(minutes=8)
+        second, = pending_events(self.conn, 'codex', now)
+        self.assertNotEqual(second['id'], first['id'])
+        self.assertEqual(second['data']['plan_id'], first['data']['plan_id'])
+        condition = advice['review_conditions'][0]
+        route, = second['data']['routes']
+        self.assertEqual(route['condition_key'], condition_key(condition))
+        account = accounts(self.conn, now, include_advice=False)[0]
+        state = condition_state(self.conn, account, advice, condition, now)
+        self.assertEqual((state['status'], state['event_id']), ('queued', second['id']))
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [second])
+            acknowledge(self.conn, 'codex', [second['id']])
+        state = condition_state(self.conn, account, advice, condition, now)
+        self.assertEqual((state['status'], state['event_id']), ('reviewed', second['id']))
+
+        self.observe_watch(advice, [(9, 802.8), (10, 804), (12, 804), (13, 804.1)])
+        self.assertEqual(read(self.conn, 'codex'), {'pending': [], 'covered': [first['id'], second['id']]})
+
+    def test_continuation_can_trigger_after_a_pullback_review_without_a_new_window(self):
+        self.update_quote(0, 799)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 799), (1, 803.5), (3, 804), (4, 804.1)])
+        first, = read(self.conn, 'codex')['pending']
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
+        now = START + timedelta(minutes=4)
+        account = accounts(self.conn, now, include_advice=False)[0]
+        state = condition_state(self.conn, account, advice, advice['review_conditions'][-1], now)
+        self.assertEqual(state['status'], 'monitoring')
+
+        self.observe_watch(advice, [(5, 805.5), (6, 806), (8, 806.5), (9, 806.6)])
+        second, = pending_events(self.conn, 'codex', START + timedelta(minutes=9))
+        route, = second['data']['routes']
+        self.assertEqual(route['confirmation_mode'], 'continuation')
+        self.assertNotEqual(second['id'], first['id'])
+        self.assertEqual(second['data']['plan_id'], first['data']['plan_id'])
 
     def test_pending_breakout_survives_a_change_to_an_independent_pullback(self):
         self.update_quote(0, 805.5)
