@@ -16,6 +16,7 @@ from .jd_readonly_probe import BANKS,READ_PATHS,AUTH_HOSTS,GOLD_CALLBACK_HOSTS,A
 ROOT=Path(__file__).resolve().parents[1]
 DATA=ROOT/'monitor/data/jd-remote-browser'
 RUNTIME=Path('/run/gold-jd-readonly')
+DEFAULT_TTL=1800
 
 
 def private_write(path,value):
@@ -98,7 +99,7 @@ def child_environment(display=None):
     return env
 
 
-def run(port=1455,ttl=3600,public_host=None,dashboard_auth=False):
+def run(port=1455,ttl=DEFAULT_TTL,public_host=None,dashboard_auth=False):
     if not 1024<=port<=65535 or not 60<=ttl<=3600:raise ValueError('Invalid port or lifetime')
     from .config import Settings
     from .runtime_resources import interactive_slot
@@ -107,7 +108,7 @@ def run(port=1455,ttl=3600,public_host=None,dashboard_auth=False):
         return _run(port,ttl,public_host,dashboard_auth,on_browser_ready=release_startup)
 
 
-def _run(port=1455,ttl=3600,public_host=None,dashboard_auth=False,*,on_browser_ready=None):
+def _run(port=1455,ttl=DEFAULT_TTL,public_host=None,dashboard_auth=False,*,on_browser_ready=None):
     if not 1024<=port<=65535 or not 60<=ttl<=3600:raise ValueError('Invalid port or lifetime')
     backend=1456 if public_host else port
     if public_host:ipaddress.IPv4Address(public_host)
@@ -265,7 +266,7 @@ def _run(port=1455,ttl=3600,public_host=None,dashboard_auth=False,*,on_browser_r
 
 def main():
     parser=argparse.ArgumentParser(description='Temporary ECS JD browser; SSH or authenticated HTTPS')
-    parser.add_argument('--port',type=int,default=1455);parser.add_argument('--ttl',type=int,default=3600)
+    parser.add_argument('--port',type=int,default=1455);parser.add_argument('--ttl',type=int,default=DEFAULT_TTL)
     parser.add_argument('--public-host',help='Optional public IPv4; enables authenticated HTTPS')
     parser.add_argument('--dashboard-auth',action='store_true',help='Use the configured dashboard password instead of a separate temporary password')
     args=parser.parse_args();run(args.port,args.ttl,args.public_host,args.dashboard_auth)

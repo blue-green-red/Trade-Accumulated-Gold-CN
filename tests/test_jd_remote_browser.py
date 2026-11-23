@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from monitor.jd_remote_browser import private_write,ensure_private,run,public_config,access_credentials,child_environment
+from monitor.jd_remote_browser import DEFAULT_TTL,main,private_write,ensure_private,run,public_config,access_credentials,child_environment
 from monitor.jd_readonly_probe import allowed
 
 
@@ -27,9 +27,13 @@ class JDRemoteBrowserTests(unittest.TestCase):
 
     def test_unit_lifetime_and_resources_are_bounded_without_boot_autostart(self):
         text=(Path(__file__).resolve().parents[1]/'deploy/gold-jd-readonly.service').read_text()
-        self.assertIn('RuntimeMaxSec=3600',text);self.assertIn('MemoryMax=650M',text)
+        self.assertIn(f'--ttl {DEFAULT_TTL}',text)
+        self.assertIn('RuntimeMaxSec=1860',text);self.assertIn('MemoryMax=650M',text)
         self.assertIn('KillMode=control-group',text);self.assertIn('Restart=no',text)
         self.assertNotIn('WantedBy=',text)
+        with patch('sys.argv',['jd_remote_browser']),patch('monitor.jd_remote_browser.run') as launch:
+            main()
+        launch.assert_called_once_with(1455,1800,None,False)
 
     def test_public_entry_requires_https_and_auth_without_exposing_vnc_or_cdp(self):
         text=public_config(1455,1456,'8.218.117.20')

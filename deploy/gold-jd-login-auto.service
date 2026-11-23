@@ -1,16 +1,16 @@
 [Unit]
-Description=Temporary JD login recovery viewer (automatic, 15 minutes)
+Description=Temporary JD login recovery viewer (automatic, 30 minutes)
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=/root/Trade-Accumulated-Gold-CN
-ExecStart=/usr/bin/python3 -m monitor.jd_remote_browser --port 1455 --ttl 900 --public-host 8.218.117.20 --dashboard-auth
+ExecStart=/usr/bin/python3 -m monitor.jd_remote_browser --port 1455 --ttl 1800 --public-host 8.218.117.20 --dashboard-auth
 User=root
 UMask=0077
 KillMode=control-group
 TimeoutStopSec=20
-RuntimeMaxSec=900
+RuntimeMaxSec=1860
 MemoryMax=650M
 MemorySwapMax=512M
 Restart=no

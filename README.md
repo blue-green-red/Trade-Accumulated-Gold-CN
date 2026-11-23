@@ -235,13 +235,13 @@ AI 组装共同输入前只检查已启用真实账户的持仓、现金、待�
 
 只有明确返回login_required才自动启动`gold-jd-login-auto.service`，复用原1455 HTTPS入口与看板密码，禁止真实下单。先检测入口HTTPS可用，再独立发送微信登录提醒，包含地址和有效截止时间，不发送密码、Cookie或账户金额。同一入口只提醒一次；恢复登录或入口过期后取消旧待发任务。仍未登录时到下一小时重新核对并按需开启新入口，启动失败或资源忙时稍后重试，不反复拉起浏览器。
 
-自动入口最长15分钟（900秒），已恢复同步后自动关闭本功能开启的浏览器；手动`gold-jd-readonly`仍为最长60分钟。只关闭自动服务，不关闭用户手动打开的窗口。入口存续期间模型等待，现有Cookie只读附件恢复仍可运行；结束后释放资源，不改模型开关、不释放Jellyfin或Tailscale。需要同时安装`deploy/gold-jd-login-auto.service`并执行`systemctl daemon-reload`，不启用其开机自启；小时调度由现有监控循环负责。前端通知页显示检查状态、下次检查、入口有效期和链接，微信发送记录单独标为“京东登录维护”。
+自动入口和手动入口默认开放30分钟（1800秒）。恢复同步后，自动入口会提前关闭。只关闭自动服务，不关闭用户手动打开的窗口。入口存续期间模型等待，现有Cookie只读附件恢复仍可运行；结束后释放资源，不改模型开关、不释放Jellyfin或Tailscale。需要同时安装`deploy/gold-jd-login-auto.service`并执行`systemctl daemon-reload`，不启用其开机自启；小时调度由现有监控循环负责。前端通知页显示检查状态、下次检查、入口有效期和链接，微信发送记录单独标为“京东登录维护”。
 
 监控仅在确认本地分析线程不存在时清理遗留的运行标记，将未完成普通轮次标为interrupted，保留历史记录和已排队手动请求，避免采集因旧标记永久等待；独立诊断任务不受影响。
 
 ### ECS临时远程只读浏览器（1455）
 
-部署组件为Xvfb、Chrome、x11vnc、noVNC/websockify与nginx（Ubuntu可用 `apt-get install -y xvfb x11vnc novnc websockify nginx` 安装，另需Chrome和Python Playwright）；安装服务模板后手动 `systemctl start gold-jd-readonly`。不启用开机启动，最长60分钟自动退出，650MB内存和512MB交换空间上限；主监控与模型开关不变。仅启动一个浏览器/显示会话，现有会话未停止时不会抢占端口。
+部署组件为Xvfb、Chrome、x11vnc、noVNC/websockify与nginx（Ubuntu可用 `apt-get install -y xvfb x11vnc novnc websockify nginx` 安装，另需Chrome和Python Playwright）；安装服务模板后手动 `systemctl start gold-jd-readonly`。不启用开机启动，默认30分钟自动退出，650MB内存和512MB交换空间上限；主监控与模型开关不变。仅启动一个浏览器/显示会话，现有会话未停止时不会抢占端口。
 
 默认服务支持直接打开 `http://8.218.117.20:1455/`，自动跳转到同端口HTTPS。服务模板使用 `--dashboard-auth`：用户名 `jd`，密码沿用现有 `GOLD_WEB_PASSWORD`，不再生成单独的临时访问密码，也没有第二次VNC密码；HTTPS仍验证HTTP和WebSocket访问。临时自签证书首次会触发浏览器证书提示，需要本人确认服务器地址。权限600的 `/run/gold-jd-readonly/access.txt` 只记录入口和认证方式，不重复保存看板明文密码，退出即删除。公网安全组须允许TCP 1455。内部1456（noVNC）、5905（VNC）和9225（CDP）只监听回环，不应放行。
 

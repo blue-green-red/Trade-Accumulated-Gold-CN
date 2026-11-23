@@ -101,7 +101,7 @@ class LoginWatchTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in command.call_args_list],[
             ['systemctl','start','--no-block','gold-jd-login-auto'],['systemctl','stop','--no-block','gold-jd-login-auto']])
         text=(Path(__file__).resolve().parents[1]/'deploy/gold-jd-login-auto.service').read_text()
-        self.assertIn('RuntimeMaxSec=900',text);self.assertIn('MemoryMax=650M',text)
+        self.assertIn('--ttl 1800',text);self.assertIn('RuntimeMaxSec=1860',text);self.assertIn('MemoryMax=650M',text)
         self.assertIn('--dashboard-auth',text);self.assertNotIn('WantedBy=',text)
 
     def test_market_failure_does_not_skip_login_maintenance(self):
