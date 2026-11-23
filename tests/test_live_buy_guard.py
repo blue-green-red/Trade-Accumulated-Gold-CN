@@ -155,11 +155,12 @@ class BuyGuardTests(unittest.TestCase):
             return event_id
 
         first = queue(1, 0, 806, 805)
+        original = read(self.conn, 'codex')['pending']
         now = START + timedelta(minutes=1)
         second = queue(2, 1, 806.2, 806.1)
-        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', now)], [first, second])
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', now)], [second])
         with self.conn:
-            context = {'trigger_events': read(self.conn, 'codex')['pending']}
+            context = {'trigger_events': original}
             remember_reviewed_price_observations(self.conn, 'codex', context, [first], 0)
             acknowledge(self.conn, 'codex', [first])
         self.assertEqual(pending_events(self.conn, 'codex', now), [])
@@ -169,7 +170,24 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=2))], [sell, down])
         self.update_quote(3, 804.9)
         recross = queue(5, 4, 806.5, 806.4)
-        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=4))], [sell, down, recross])
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=4))], [sell, recross])
+
+    def test_pending_plain_buy_survives_an_identical_successor_until_original_expiry(self):
+        self.update_quote(0, 806)
+        revision = accounts(self.conn, START, include_advice=False)[0]['revision']
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805}
+        with self.conn:
+            for i, minute, length in ((1, 0, 6), (2, 1, 15)):
+                at = START + timedelta(minutes=minute)
+                self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                    (i, 'zheshang', 'codex', i, at.isoformat(), (at + timedelta(minutes=length)).isoformat(),
+                     revision, json.dumps({'review_conditions': [{**condition, 'reason': f'第{i}次观察'}]})))
+        key = condition_key(condition)
+        event_id = f'live-price:codex:zheshang:1:{key}'
+        enqueue(self.conn, 'codex', 'test', 0, event_id, {'bank': 'zheshang', 'advice_id': 1,
+            'condition_key': key, 'quote_side': 'buy', 'quoted_at': START.isoformat()})
+        self.assertEqual([e['id'] for e in pending_events(self.conn, 'codex', START + timedelta(minutes=1))], [event_id])
+        self.assertFalse(pending_events(self.conn, 'codex', START + timedelta(minutes=6)))
 
     def test_failed_observation_does_not_ack_a_later_confirmation(self):
         self.update_quote(0, 806)
@@ -879,6 +897,39 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual([e['id'] for e in sent['trigger_events']], ['calendar:release'])
         self.assertEqual(sent['event_coverage']['codex'], ['calendar:release'])
         self.assertNotIn(key, read(self.conn, 'codex')['covered'])
+
+    def test_replaced_buy_threshold_is_rechecked_immediately_before_model_dispatch(self):
+        self.update_quote(0, 806)
+        revision = accounts(self.conn, START, include_advice=False)[0]['revision']
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805}
+        expires = (START + timedelta(minutes=15)).isoformat()
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
+                ('zheshang', 'codex', 1, START.isoformat(), expires, revision,
+                 json.dumps({'review_conditions': [condition]})))
+        fingerprint = condition_key(condition)
+        key = f'live-price:codex:zheshang:1:{fingerprint}'
+        enqueue(self.conn, 'codex', '普通买价复评', 0, key, {'bank': 'zheshang', 'advice_id': 1,
+                'condition_key': fingerprint, 'quote_side': 'buy', 'quoted_at': START.isoformat()})
+        m = Monitor(self.settings, True)
+        self.addCleanup(m.store.conn.close)
+        analyst = AIAnalyst(self.settings, m.store, 'codex', 'codex')
+        analyst.analyze = Mock()
+        m.analysts = {'codex': analyst}
+        now = START + timedelta(minutes=1)
+
+        def assemble(*_):
+            with self.conn:
+                self.conn.execute('INSERT INTO jd_live_advice VALUES(2,?,?,?,?,?,?,?)',
+                    ('zheshang', 'codex', 2, now.isoformat(), expires, revision, '{"review_conditions":[]}'))
+            return {}
+
+        with patch.object(m, 'ai_context', side_effect=assemble), \
+                patch('monitor.jd_live_preflight.prepare', return_value={'can_analyze': True, 'status': 'ready'}), \
+                patch('monitor.__main__.utc_now', return_value=now), patch('monitor.ai.utc_now', return_value=now):
+            m._ai_worker({}, {}, {'codex': '已进入队列'}, automatic={'codex'})
+        analyst.analyze.assert_not_called()
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
 
     def test_manual_analysis_still_uses_latest_input_after_entry_signal_is_removed(self):
         context, _ = self.prepare_signal([self.route()])

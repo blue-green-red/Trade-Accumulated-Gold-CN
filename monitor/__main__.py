@@ -336,12 +336,21 @@ class Monitor:
                         if not manual:return name,None
                     model_context = deepcopy(context)
                     submitted = kept = pending[name]
-                    if any(e['id'].startswith(ENTRY_EVENT_PREFIX) for e in submitted):
+                    recheck = {e['id'] for e in submitted if e['id'].startswith(ENTRY_EVENT_PREFIX)
+                               or e['id'].startswith('live-price:') and e['data'].get('quote_side') == 'buy'
+                               and not e['data'].get('order_key')}
+                    if recheck:
                         current = {e['id']: e for e in pending_events(store.conn, name, utc_now())}
-                        matched = {e['id']: fresh for e in submitted if e['id'].startswith(ENTRY_EVENT_PREFIX)
-                                   and (fresh := matching_entry_event(e, current.get(e['id'])))}
-                        kept = [matched.get(e['id'], e) for e in submitted
-                                if not e['id'].startswith(ENTRY_EVENT_PREFIX) or e['id'] in matched]
+                        kept = []
+                        for event in submitted:
+                            event_id = event['id']
+                            if event_id not in recheck:
+                                kept.append(event)
+                            elif event_id.startswith(ENTRY_EVENT_PREFIX):
+                                if fresh := matching_entry_event(event, current.get(event_id)):
+                                    kept.append(fresh)
+                            elif event_id in current:
+                                kept.append(current[event_id])
                         if name in automatic and not (trigger := self.analysts[name].due(store=store,pending=kept)):
                             log.info("%s 派发前买入复评信号已失效，取消自动分析",name)
                             return name,None

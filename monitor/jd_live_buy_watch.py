@@ -597,18 +597,32 @@ def pending_events(conn, model, now):
                 if condition and (condition.get('bank_breakout') or condition.get('buy_review')):
                     return None
                 if condition and plain_buy_observation(condition):
+                    latest = conn.execute('SELECT id,expires_at,advice_json,snapshot_revision FROM jd_live_advice '
+                                          'WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT 1',
+                                          (data['bank'], model)).fetchone()
+                    if not latest:
+                        return None
+                    renewed = data.get('renewed_pullback')
+                    if renewed and latest[0] != data['advice_id']:
+                        return None
+                    if not renewed and now >= stamp(origin['expires_at']):
+                        return None
+                    if latest[0] != data['advice_id']:
+                        current_conditions = json.loads(latest[2]).get('review_conditions', [])
+                        if (latest[3] != revision or now >= stamp(latest[1])
+                                or not any(plain_buy_observation(c) and condition_key(c) == data['condition_key']
+                                           for c in current_conditions)):
+                            return None
                     quoted, observed = stamp(data.get('quoted_at')), stamp(event.get('observed_at'))
                     buy = number(data.get('price_cny'))
                     if quoted and observed and buy and unchanged_buy_observation(
                             conn, data['bank'], origin, condition, (quoted, observed, buy, None)):
                         return None
                     current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
-                    if data.get('renewed_pullback'):
-                        latest = conn.execute('SELECT max(id) FROM jd_live_advice WHERE bank=? AND analyst=?',
-                                              (data['bank'], model)).fetchone()[0]
-                        if (latest != data['advice_id'] or not current
-                                or not renewed_pullback_deadline(conn, current[0], origin, condition, now)):
-                            return None
+                    if current and current[0].get('revision') != revision:
+                        return None
+                    if renewed and (not current or not renewed_pullback_deadline(conn, current[0], origin, condition, now)):
+                        return None
                     if current and current[0].get('revision') == revision and reviewed_price_observation(
                             conn, model, current[0], condition['condition'], now):
                         return None
