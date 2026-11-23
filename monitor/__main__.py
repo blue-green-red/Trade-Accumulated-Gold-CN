@@ -43,6 +43,7 @@ log = logging.getLogger("monitor")
 DEFAULT_AXIS_M = {"axis": "震荡", "note": "无有效 AI 消息面判断，默认震荡"}
 DAILY_VIEW_MAX_AGE_HOURS = 18
 JIN10_KEEP_HOURS = 36   # 数据库里保留多久的相关快讯（网页展示 + AI 上下文）   # 日线账户 09:05 运行时可用的 AI 判断最长时效（08:40 失败时可用前一晚 20:00 的）
+BANK_IDLE_POLL_SECONDS = 5
 
 
 class Monitor:
@@ -80,6 +81,7 @@ class Monitor:
             for m in settings.ai_analysts if self.portfolios and self.store.open_trade(settings.paper_bank,f"{m}:short_ai")}
         self.notifier = Notifier(settings, dry_run=dry_run)
         self._ai_thread: threading.Thread = None
+        self._last_live_sync_at = None
         self._jin10_at = None
         self._jin10_seen: set = set()
         self._jin10_pending: List[Dict] = []
@@ -521,8 +523,7 @@ class Monitor:
             self.store.set_state("jd_session_closed", False)
         if snap.get("xauusd") is None:
             if snap["market_open"]:
-                from .jd_live_review import request_reviews
-                request_reviews(self.store,utc_now(),settings=self.settings)
+                self.check_live_reviews()
             log.warning("本轮取价全部失败: %s", snap["errors"])
             return snap, None, events
 
@@ -548,8 +549,7 @@ class Monitor:
         self.request_ai_after_data_release()
         from .cadence import request_periodic
         request_periodic(self.settings,self.store,self.enabled_analysts(),snap,utc_now())
-        from .jd_live_review import request_reviews
-        request_reviews(self.store,utc_now(),settings=self.settings)
+        self.check_live_reviews()
         events += self.run_ai_if_due(snap, force=force_ai)
         cost = {"spread_cny": self.settings.spread_cny, "sell_fee_rate": self.settings.sell_fee_rate,
                 "ratio_bank": self.settings.paper_bank}
@@ -593,11 +593,47 @@ class Monitor:
         from .notification_outbox import dispatch
         dispatch(self.store,self.notifier,events,mode=self.settings.ai_trading_mode)
 
+    def check_live_reviews(self, *, only_new_sync=False):
+        from .jd_live_review import request_reviews
+
+        sync = self.store.get_state('jd_live_sync_status', {})
+        completed_at = sync.get('at') if sync.get('status') == 'completed' else None
+        if only_new_sync and (not completed_at or completed_at == self._last_live_sync_at):
+            return False
+        checked = request_reviews(self.store, utc_now(), settings=self.settings)
+        if checked and completed_at:
+            self._last_live_sync_at = completed_at
+        return checked
+
+    def wait_for_next_tick(self, seconds, snap):
+        """Evaluate newly cached bank quotes during idle time, without fetching another market tick."""
+        if self.settings.ai_trading_mode != 'live_only' or not snap or not snap.get('market_open') or not snap.get('xauusd'):
+            time.sleep(seconds)
+            return
+
+        from .ai_events import read
+
+        deadline = time.monotonic() + seconds
+        while (remaining := deadline - time.monotonic()) > 0:
+            time.sleep(min(remaining, BANK_IDLE_POLL_SECONDS))
+            if time.monotonic() >= deadline:
+                break
+            try:
+                if self.check_live_reviews(only_new_sync=True) and not self.ai_running() and any(
+                        event.get('data', {}).get('bank') for name in self.enabled_analysts()
+                        for event in read(self.store.conn, name)['pending']):
+                    events = self.run_ai_if_due(snap)
+                    if events:
+                        self.dispatch(events)
+            except Exception:
+                log.exception('京东缓存复评异常，保留常规调度')
+
     def run_forever(self) -> None:
         log.info("监控启动：推送通道=%s，每 %ss 一轮，模拟盘=%s", self.notifier.channel,
                  self.settings.tick_seconds, BANK_NAMES[self.settings.paper_bank])
         while True:
             started = time.monotonic()
+            snap = None
             try:
                 if not self.ai_running():
                     from .ai_runtime import recover as recover_runtime
@@ -614,7 +650,7 @@ class Monitor:
                              plan["action"] if plan and plan.get("ok") else "")
             except Exception:
                 log.exception("本轮异常，下一轮继续")
-            time.sleep(max(1.0, self.settings.tick_seconds - (time.monotonic() - started)))
+            self.wait_for_next_tick(max(1.0, self.settings.tick_seconds - (time.monotonic() - started)), snap)
 
 
 def print_stats(monitor: Monitor) -> None:

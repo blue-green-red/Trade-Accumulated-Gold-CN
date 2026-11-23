@@ -259,6 +259,45 @@ class BuyGuardTests(unittest.TestCase):
         self.assertEqual(event['data']['routes'][0]['confirmation_mode'], 'continuation')
         self.assertEqual(datetime.fromisoformat(event['data']['routes'][0]['touched_at']), START)
 
+    def test_live_monitor_checks_a_completed_sync_during_the_idle_interval(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5), (1, 806)])
+        monitor = Monitor(self.settings, True)
+        self.addCleanup(monitor.store.conn.close)
+        monitor.analysts = {'codex': Mock()}
+        monitor.store.set_state('ai_status:codex', {'available': True})
+        monitor.market.snapshot = Mock()
+        monitor.dispatch = Mock()
+        elapsed = 0
+        arrived = START + timedelta(minutes=3)
+        starts = []
+
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+            if elapsed == 5:
+                monitor.store.set_state('jd_live_sync_status', {'status': 'running', 'at': arrived.isoformat()})
+            if elapsed == 10:
+                self.update_quote(3, 806.5)
+                monitor.store.set_state('jd_live_sync_status', {'status': 'completed', 'at': arrived.isoformat()})
+
+        def schedule(_):
+            event, = [event for event in read(monitor.store.conn, 'codex')['pending']
+                      if event['id'].startswith('live-buy-confirmed:')]
+            starts.append((elapsed, event['data']['routes'][0]['confirmation_mode']))
+            return []
+
+        monitor.run_ai_if_due = Mock(side_effect=schedule)
+        with patch('monitor.__main__.time.monotonic', side_effect=lambda: elapsed), \
+                patch('monitor.__main__.time.sleep', side_effect=sleep), \
+                patch('monitor.__main__.utc_now', side_effect=lambda: arrived + timedelta(seconds=elapsed)):
+            monitor.wait_for_next_tick(60, {'market_open': True, 'xauusd': 4000})
+        self.assertEqual(starts, [(10, 'continuation')])
+        self.assertEqual(elapsed, 60)
+        monitor.market.snapshot.assert_not_called()
+        monitor.dispatch.assert_not_called()
+
     def test_quote_recorded_during_plan_change_can_finish_breakout_confirmation(self):
         self.update_quote(0, 805.5)
         first = self.publish_watch(1, START, 799)

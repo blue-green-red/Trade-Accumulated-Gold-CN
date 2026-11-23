@@ -12,9 +12,9 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
     config=settings or Settings()
     threshold=config.ai_periodic_min_move_pct
     from .trading_hours import trading_session
-    if not trading_session(now)['is_open']:return
+    if not trading_session(now)['is_open']:return False
     sync=store.get_state('jd_live_sync_status',{})
-    if not after_sync and sync.get('status')=='running' and age(sync.get('at'),now)<180:return
+    if not after_sync and sync.get('status')=='running' and age(sync.get('at'),now)<180:return False
     from .jd_live_buy_watch import record, request as request_buy_review, sample
     for account in accounts(store.conn,now):
         bank=account['bank']
@@ -72,6 +72,7 @@ def request_reviews(store,now=None,after_sync=False,settings=None):
                 monitor_prices(store,account,advice,now)
                 if point:
                     request_buy_review(store,account,advice,now,point)
+    return True
 
 
 def request_bank_move(store,account,advice,threshold,now,interval=0):
