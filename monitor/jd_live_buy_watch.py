@@ -385,6 +385,16 @@ def pending_plan_review(events, bank, identity):
                  and event['data'].get('plan_id', event['data'].get('advice_id')) == identity), None)
 
 
+def advance_observation(condition, tape, stage):
+    confirmation_price = None
+    for at, buy, _ in tape:
+        step = advance_watch(stage, condition, at, buy)
+        if step.get('confirmed_at') != stage.get('confirmed_at'):
+            confirmation_price = buy if step.get('stage') == 'confirmed' else None
+        stage = step
+    return stage, confirmation_price
+
+
 def replay_observation(conn, account, stage, condition, boundary, now):
     point = sample(account, now)
     start = stamp(stage.get('touched_at'))
@@ -393,15 +403,9 @@ def replay_observation(conn, account, stage, condition, boundary, now):
     tape = quote_tape(conn, account['bank'], start - timedelta(microseconds=1), point)
     if tape[0][0] != start:
         return {}, None
-    rebuilt, confirmation_price = {}, None
-    for at, buy, sell in tape:
-        if boundary is not None and sell <= boundary:
-            return {}, None
-        step = advance_watch(rebuilt, condition, at, buy)
-        if step.get('confirmed_at') != rebuilt.get('confirmed_at'):
-            confirmation_price = buy if step.get('stage') == 'confirmed' else None
-        rebuilt = step
-    return rebuilt, confirmation_price
+    if boundary is not None and any(sell <= boundary for _, _, sell in tape):
+        return {}, None
+    return advance_observation(condition, tape, {})
 
 
 def observation_terms(condition):
@@ -588,7 +592,7 @@ def request(store, account, advice, now, point):
     from .jd_live_buy_guard import reviewed_breakout, with_active_routes
     from .jd_live_conditions import read_watch
 
-    at, observed, buy, sell = point
+    at, observed, _, sell = point
     watch = advice.get('buy_watch') or {}
     created = stamp(watch.get('starts_at') or advice.get('created_at'))
     boundary = (advice.get('position_path') or {}).get('boundary_price_cny')
@@ -622,8 +626,16 @@ def request(store, account, advice, now, point):
             current = {'advice_id': advice['id'], 'plan_id': identity, 'generation': switch['generation'], 'routes': {}}
         if current.get('invalidated_at'):
             return
-        if boundary_hit:
-            current['invalidated_at'] = utc_text(at)
+        cursor = stamp(current.get('last_quote_at')) or max(
+            (seen for stage in current['routes'].values() if (seen := stamp(stage.get('last_at')))),
+            default=created - timedelta(microseconds=1),
+        )
+        if at <= cursor:
+            return
+        tape = quote_tape(conn, bank, cursor, point)
+        current['last_quote_at'] = utc_text(at)
+        if watch and boundary is not None and (hit := next((when for when, _, price in tape if price <= boundary), None)):
+            current['invalidated_at'] = utc_text(hit)
             routes = []
         updated = {}
         confirmed = []
@@ -634,23 +646,25 @@ def request(store, account, advice, now, point):
             previous = current['routes'].get(fingerprint, {})
             if previous.get('reviewed_confirmation_at'):
                 reviewed.setdefault(fingerprint, previous.get('event_id', event_id))
+            route_tape = tape
+            if not previous and tape[0][0] < created:
+                route_tape = [quote for quote in tape if quote[0] >= created]
             if (deadline := stamp(previous.get('observation_expires_at'))) and observed >= deadline:
                 if at < deadline:
                     updated[fingerprint] = previous
                     continue
                 previous = {}
-            step = advance_watch(previous, condition, at, buy)
-            if (step.get('stage') == 'confirmed' and previous.get('stage') != 'confirmed'
+                route_tape = [quote for quote in tape if quote[0] >= deadline]
+            step, confirmation_price = advance_observation(condition, route_tape, previous)
+            if (step.get('stage') == 'confirmed' and confirmation_price is not None
                     and fingerprint not in reviewed):
                 if condition.get('bank_breakout') and (receipt := reviewed_breakout(
                         conn, model, account, condition['price_cny'], observed)):
                     updated[fingerprint] = {**step, 'stage': 'episode_reviewed',
                                             'confirmed_at': receipt['confirmed_at'], 'event_id': receipt['event_id']}
                     continue
-                confirmed.append(confirmed_route(condition, step, buy, boundary if watch else None, advice))
+                confirmed.append(confirmed_route(condition, step, confirmation_price, boundary if watch else None, advice))
             updated[fingerprint] = step
-        if updated == current['routes'] and not current.get('invalidated_at'):
-            return
         current['routes'] = updated
         events = read(conn, model)
         existing = pending_plan_review(events, bank, identity)

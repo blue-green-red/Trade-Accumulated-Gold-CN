@@ -386,6 +386,63 @@ class BuyGuardTests(unittest.TestCase):
         monitor.market.snapshot.assert_not_called()
         monitor.dispatch.assert_not_called()
 
+    def test_live_watch_uses_the_quote_that_confirmed_between_monitor_checks(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5)])
+        self.update_quote(1, 805.9)
+        self.update_quote(3, 806.5)
+        self.observe_watch(advice, [(4, 806.4)])
+
+        now = START + timedelta(minutes=4)
+        event, = pending_events(self.conn, 'codex', now)
+        route, = event['data']['routes']
+        self.assertEqual(route['confirmation_mode'], 'continuation')
+        self.assertEqual(datetime.fromisoformat(route['confirmed_at']), START + timedelta(minutes=3))
+        self.assertEqual(route['price_cny'], 806.5)
+        self.observe_watch(advice, [(4, 806.4)])
+        self.assertEqual(pending_events(self.conn, 'codex', now), [event])
+
+    def test_live_watch_restarts_after_an_intervening_breakout_failure(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5), (1, 806)])
+        self.update_quote(2, 804.9)
+        self.observe_watch(advice, [(3, 806.5)])
+
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        watch = read_watch(self.conn, 'live-buy-watch:codex:zheshang')
+        step = watch['routes'][condition_key(advice['review_conditions'][-1])]
+        self.assertEqual(datetime.fromisoformat(step['touched_at']), START + timedelta(minutes=3))
+        self.assertEqual(step['breakout_quote_count'], 1)
+
+    def test_live_watch_remains_invalid_after_an_intervening_exit_boundary_hit(self):
+        self.update_quote(0, 805.5)
+        advice = self.publish_watch(1, START, 799)
+        self.observe_watch(advice, [(0, 805.5), (1, 806), (3, 806.5)])
+        self.assertEqual(len(read(self.conn, 'codex')['pending']), 1)
+        self.update_quote(4, 794)
+        self.observe_watch(advice, [(5, 806.4), (6, 807), (8, 807.2)])
+
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        watch = read_watch(self.conn, 'live-buy-watch:codex:zheshang')
+        self.assertEqual(datetime.fromisoformat(watch['invalidated_at']), START + timedelta(minutes=4))
+
+    def test_delayed_quote_cannot_start_a_condition_published_after_its_timestamp(self):
+        self.update_quote(0, 805.5)
+        first = self.publish_watch(1, START, 799)
+        self.observe_watch(first, [(0, 805.5), (1, 806)])
+        at = START + timedelta(minutes=1, seconds=30)
+        second = self.publish_watch(2, at, 800)
+        with self.conn:
+            carry_entry_observations(self.conn, 'codex', 2, at)
+        self.update_quote(1.25, 799)
+        self.observe_watch(second, [(2, 803.6), (4, 804), (5, 804.2)])
+
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        watch = read_watch(self.conn, 'live-buy-watch:codex:zheshang')
+        self.assertNotIn('stage', watch['routes'][condition_key(second['review_conditions'][0])])
+
     def test_quote_recorded_during_plan_change_can_finish_breakout_confirmation(self):
         self.update_quote(0, 805.5)
         first = self.publish_watch(1, START, 799)
