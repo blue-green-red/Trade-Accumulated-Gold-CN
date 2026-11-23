@@ -470,6 +470,23 @@ class BuyAuditTests(unittest.TestCase):
                 self.assertEqual(row['observation_progress'], {'last_stage': phase,
                     'closest_trigger_gap_cny_per_gram': gap, 'quote_samples_examined': len(points)})
 
+    def test_replay_requires_a_new_dip_and_hold_after_an_above_cap_quote(self):
+        end = START + timedelta(minutes=15)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                 'review_conditions': [zoned_route()]}
+        overheated = [(0, 799), (1, 803), (2, 805), (3, 803.5), (4, 804)]
+        returned = [(5, 799.8), (6, 803.2), (8, 804)]
+        now = START + timedelta(minutes=9)
+        for prices, phase in ((overheated, 'above_cap'), (overheated + returned, 'confirmed'),
+                              (overheated + [(4.5, 797)] + returned, 'pullback_lost')):
+            with self.subTest(phase=phase):
+                samples = [point(m, p) for m, p in prices]
+                row, = independent_branch_replay(value, START, end, samples, now)
+                self.assertEqual(row['observation_progress']['last_stage'], phase)
+                if phase == 'confirmed':
+                    self.assertEqual(datetime.fromisoformat(row['confirmation']['quoted_at']), point(8, 804)[0])
+
     def test_independent_replay_keeps_the_later_retest_and_shallow_pullback(self):
         breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}

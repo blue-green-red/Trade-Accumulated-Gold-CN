@@ -972,6 +972,32 @@ class BuyGuardTests(unittest.TestCase):
         self.observe_watch(advice, [(22, 807.0)])
         self.assertEqual(read(self.conn, 'codex')['pending'], [again])
 
+    def test_same_watch_can_review_a_new_pullback_after_cap_invalidation(self):
+        from monitor.jd_live_buy_guard import remember_reviewed_confirmations
+
+        self.update_quote(0, 799.5)
+        advice = self.publish_watch(1, START, 800)
+        self.observe_watch(advice, [(0, 799.5), (1, 803.5), (4, 804)])
+        first, = pending_events(self.conn, 'codex', START + timedelta(minutes=4))
+        with self.conn:
+            remember_reviewed_confirmations(self.conn, 'codex', [first])
+            acknowledge(self.conn, 'codex', [first['id']])
+
+        self.observe_watch(advice, [(8, 807), (9, 803.5), (10, 804)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        self.update_quote(11, 799.5)
+        self.observe_watch(advice, [(12, 803.5), (14, 804)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+        self.observe_watch(advice, [(15, 804.2)])
+        again, = pending_events(self.conn, 'codex', START + timedelta(minutes=15))
+        again_route, = again['data']['routes']
+        self.assertEqual(again['data']['plan_id'], first['data']['plan_id'])
+        self.assertNotEqual(again['id'], first['id'])
+        self.assertEqual(datetime.fromisoformat(again_route['touched_at']), START + timedelta(minutes=11))
+
+        self.observe_watch(advice, [(16, 796.5), (17, 799.5), (18, 803.5), (21, 804)])
+        self.assertEqual(read(self.conn, 'codex')['pending'], [])
+
     def test_queue_keeps_the_independent_entry_when_the_breakout_was_reviewed(self):
         rule = {'retest_ceiling_cny': 806, 'hold_minutes': 3}
         context, previous = self.prepare_signal([self.route(805, bank_breakout=rule)])

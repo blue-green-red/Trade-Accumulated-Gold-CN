@@ -4,7 +4,7 @@ from hashlib import sha256
 from datetime import timedelta, timezone
 from statistics import median
 
-from .jd_live_conditions import condition_key, renewed_pullback_deadline, stamp, unchanged_buy_observation
+from .jd_live_conditions import condition_key, renewed_pullback_deadline, stamp, unchanged_buy_observation, zoned_pullback
 from .trade_costs import cost_reference, number
 
 MAX_GAP = timedelta(minutes=3)
@@ -331,8 +331,12 @@ def advance(state, condition, at, buy, *, breakout_mode=None):
     previous_at = stamp(state.get('last_at'))
     stage = state.get('stage')
     bank_breakout = condition.get('bank_breakout')
-    if stage in ('confirmed', 'episode_reviewed', 'above_cap') or (previous_at and at <= previous_at):
+    if stage in ('confirmed', 'episode_reviewed') or (previous_at and at <= previous_at):
         return state
+    if stage == 'above_cap':
+        if not zoned_pullback(condition) or buy > min(condition['price_cny'], condition['buy_review']['max_buy_price_cny']):
+            return state
+        state = {}
     if stage == 'pullback_lost' and not bank_breakout:
         return state
     if stage == 'pullback_lost':
@@ -393,13 +397,14 @@ def advance_watch(previous, condition, at, buy):
     mode = condition.get('confirmation_mode')
     if previous.get('stage') not in ('confirmed', 'episode_reviewed') or not last or at <= last:
         return advance(previous, condition, at, buy, breakout_mode=mode)
-    if at - last > MAX_GAP:
+    review = condition.get('buy_review')
+    above_cap = review and buy > review['max_buy_price_cny']
+    if at - last > MAX_GAP and not (above_cap and zoned_pullback(condition)):
         return advance({}, condition, at, buy, breakout_mode=mode)
     if condition.get('bank_breakout') and buy < condition['price_cny']:
         return failed_breakout(at, buy)
     step = {**previous, 'last_at': utc_text(at), 'last_price_cny': buy}
-    review = condition.get('buy_review')
-    if review and buy > review['max_buy_price_cny']:
+    if above_cap:
         step['stage'] = 'above_cap'
     elif review and review.get('zone') and buy < review['recovery_price_cny']:
         stage = 'pullback_lost' if buy < review['zone']['floor_cny'] else 'retest'
@@ -450,12 +455,15 @@ def pending_plan_review(events, bank, identity):
 
 def advance_observation(condition, tape, stage):
     confirmation_price = None
+    reentered = False
     for at, buy, _ in tape:
         step = advance_watch(stage, condition, at, buy)
+        if stage.get('stage') == 'above_cap' and step.get('stage') == 'touched':
+            reentered = True
         if step.get('confirmed_at') != stage.get('confirmed_at'):
             confirmation_price = buy if step.get('stage') == 'confirmed' else None
         stage = step
-    return stage, confirmation_price
+    return stage, confirmation_price, reentered
 
 
 def replay_observation(conn, account, stage, condition, boundary, now):
@@ -468,7 +476,8 @@ def replay_observation(conn, account, stage, condition, boundary, now):
         return {}, None
     if boundary is not None and any(sell <= boundary for _, _, sell in tape):
         return {}, None
-    return advance_observation(condition, tape, {})
+    stage, price, _ = advance_observation(condition, tape, {})
+    return stage, price
 
 
 def observation_terms(condition):
@@ -783,7 +792,9 @@ def request(store, account, advice, now, point):
                     and any(buy < condition['price_cny'] for _, buy, _ in route_tape)):
                 # A new breakout can be reviewed after a verified break below the level.
                 del reviewed[fingerprint]
-            step, confirmation_price = advance_observation(condition, route_tape, previous)
+            step, confirmation_price, reentered = advance_observation(condition, route_tape, previous)
+            if reentered:
+                reviewed.pop(fingerprint, None)
             if step and candidate:
                 step['observation_expires_at'] = utc_text(min(deadline, candidate) if deadline else candidate)
             if (step.get('stage') == 'confirmed' and confirmation_price is not None
