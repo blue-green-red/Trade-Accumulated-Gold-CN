@@ -405,6 +405,23 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_replay_distinguishes_the_stages_before_a_shallow_pullback_confirms(self):
+        end = START + timedelta(minutes=8)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                 'review_conditions': [zoned_route()]}
+        for prices, phase, gap in (([803, 804, 803, 802], 'awaiting_trigger', 2),
+                                   ([799, 800, 801, 802], 'touched', 0),
+                                   ([799, 801, 802, 803.5], 'holding', 0),
+                                   ([797, 801, 803, 804], 'pullback_lost', 0),
+                                   ([799, 806, 803, 804], 'above_cap', 0)):
+            with self.subTest(phase=phase):
+                points = [point(i, p) for i, p in zip((1, 3, 5, 7), prices)]
+                row, = independent_branch_replay(value, START, end, points, end + timedelta(minutes=1))
+                self.assertEqual(row['confirmation']['status'], 'no_confirmation')
+                self.assertEqual(row['observation_progress'], {'last_stage': phase,
+                    'closest_trigger_gap_cny_per_gram': gap, 'quote_samples_examined': len(points)})
+
     def test_independent_replay_keeps_the_later_retest_and_shallow_pullback(self):
         breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}

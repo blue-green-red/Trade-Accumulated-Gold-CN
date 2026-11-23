@@ -35,7 +35,7 @@ def unavailable(status):
     return {'status': status}
 
 
-def entries(value, published, expires, quotes, now, *, breakout_mode=None):
+def entries(value, published, expires, quotes, now, *, breakout_mode=None, progress=None):
     fee = number(value.get('input_sell_fee_rate'))
     minimum = number(value.get('input_minimum_buy_grams'))
     cash = number(value.get('input_participation_cash_cny'))
@@ -68,12 +68,21 @@ def entries(value, published, expires, quotes, now, *, breakout_mode=None):
     for point in actionable:
         if watch_end and boundary is not None and point[3] <= boundary:
             last_deadline = point[1]
+            if progress is not None:
+                progress['last_stage'] = 'position_boundary'
             break
         for i, route in enumerate(routes):
             if point[1] >= deadlines[i]:
                 continue
             previous = states[i]
             states[i] = advance(previous, route, point[0], point[2], breakout_mode=breakout_mode)
+            if progress is not None:
+                buy, trigger = point[2], route['price_cny']
+                gap = max(0., buy-trigger if route['condition']=='at_or_below' else trigger-buy)
+                progress['closest_trigger_gap_cny_per_gram'] = min(
+                    gap, progress.get('closest_trigger_gap_cny_per_gram', gap))
+                progress['quote_samples_examined'] = progress.get('quote_samples_examined', 0) + 1
+                progress['last_stage'] = states[i].get('stage') or 'awaiting_trigger'
             if states[i].get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 if point[2] * GRAMS <= cash:
                     branch = review_branch({**route, 'confirmation_mode': states[i].get('confirmation_mode')})
@@ -170,12 +179,18 @@ def independent_branch_replay(value, published, expires, quotes, now):
         modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
         for mode in modes:
             branch = review_branch({**condition, 'confirmation_mode': mode})
-            immediate, confirmation, _ = entries(only_condition, published, expires, quotes, now, breakout_mode=mode)
+            progress = {}
+            immediate, confirmation, _ = entries(only_condition, published, expires, quotes, now,
+                                                 breakout_mode=mode, progress=progress)
+            gap = progress.get('closest_trigger_gap_cny_per_gram')
+            if gap is not None:
+                progress['closest_trigger_gap_cny_per_gram'] = round(gap,2)
             outcomes = evaluate_entries(immediate, confirmation, branch, published, fee, quotes, now)
             evidence = (confirmation if isinstance(confirmation, dict) else
                         {'status': 'confirmed', 'quoted_at': utc_text(confirmation[0]),
                          'observed_at': utc_text(confirmation[1]), 'buy_cny_per_gram': confirmation[2]})
             cases.append({'branch': branch, 'threshold_cny': condition['price_cny'], 'confirmation': evidence,
+                          'observation_progress': progress,
                           'horizons': [{'trading_days': row['trading_days'], 'target_at': row['target_at'],
                                         'confirmed_10g': row['confirmed_10g']} for row in outcomes]})
     return cases
