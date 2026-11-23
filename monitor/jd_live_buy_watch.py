@@ -239,7 +239,7 @@ def failed_breakout(at, buy):
     return {'stage': 'breakout_failed', 'last_at': utc_text(at), 'last_price_cny': buy}
 
 
-def advance_breakout(state, condition, at, buy):
+def advance_breakout(state, condition, at, buy, *, breakout_mode=None):
     threshold = condition['price_cny']
     stage = state.get('stage')
     if stage in (None, 'breakout_failed'):
@@ -254,7 +254,7 @@ def advance_breakout(state, condition, at, buy):
     if buy > threshold:
         since = state.setdefault('continuation_since', utc_text(at))
         count = state['breakout_quote_count'] = state.get('breakout_quote_count', 0) + 1
-        if (rising and count >= CONTINUATION_MIN_QUOTES
+        if (breakout_mode != 'retest' and rising and count >= CONTINUATION_MIN_QUOTES
                 and at - stamp(since) >= timedelta(minutes=CONTINUATION_HOLD_MINUTES)):
             return {**state, 'stage': 'confirmed', 'peak': buy, 'confirmed_at': utc_text(at),
                     'hold_since': since, 'confirmation_mode': 'continuation'}
@@ -270,12 +270,12 @@ def advance_breakout(state, condition, at, buy):
             return state
         return {**state, 'stage': 'holding', 'hold_since': utc_text(at)}
     since = stamp(state.get('hold_since'))
-    if at - since >= timedelta(minutes=rule['hold_minutes']):
+    if breakout_mode != 'continuation' and at - since >= timedelta(minutes=rule['hold_minutes']):
         return {**state, 'stage': 'confirmed', 'confirmed_at': utc_text(at), 'confirmation_mode': 'retest'}
     return state
 
 
-def advance(state, condition, at, buy):
+def advance(state, condition, at, buy, *, breakout_mode=None):
     """Require ordered quotes with no stale gap across the setup and its hold."""
     previous_at = stamp(state.get('last_at'))
     stage = state.get('stage')
@@ -291,7 +291,7 @@ def advance(state, condition, at, buy):
         state = {}
     state = {**state, 'last_at': utc_text(at), 'last_price_cny': buy}
     if bank_breakout:
-        return advance_breakout(state, condition, at, buy)
+        return advance_breakout(state, condition, at, buy, breakout_mode=breakout_mode)
     review = condition['buy_review']
     trigger = condition['price_cny']
     recovery = review['recovery_price_cny']

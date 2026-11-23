@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
-from monitor.jd_live_buy_audit import evaluate, first_observed_quote, followup_quote, observed_review_horizons, observed_reviews
+from monitor.jd_live_buy_audit import (evaluate, first_observed_quote, followup_quote, independent_branch_replay,
+                                       observed_review_horizons, observed_reviews)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
 from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
 from monitor.jd_live_conditions import condition_key, condition_state, monitor_prices, validate_structure
@@ -404,6 +405,30 @@ class BuyWatchTests(unittest.TestCase):
 
 
 class BuyAuditTests(unittest.TestCase):
+    def test_independent_replay_keeps_the_later_retest_and_shallow_pullback(self):
+        breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                    'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        end = START + timedelta(minutes=15)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 10_000, 'input_sell_fee_rate': .005,
+                 'buy_watch': {'starts_at': START.isoformat(), 'expires_at': end.isoformat()},
+                 'review_conditions': [breakout, zoned_route()]}
+        samples = [point(m, p) for m, p in ((0, 805.1), (1, 806.3), (2, 805.8), (3, 806.5), (4, 806.4),
+                                             (5, 805.9), (6, 799), (7, 803.5), (9, 804), (1441, 812))]
+        now = START + timedelta(days=2)
+        original, _ = evaluate(value, START, end, samples, now)
+        self.assertEqual(original['confirmation_branch'], 'breakout_continuation')
+        cases = {c['branch']: c for c in independent_branch_replay(value, START, end, samples, now)}
+        for branch, minute, price in (('breakout_continuation', 3, 806.5), ('breakout_retest', 5, 805.9),
+                                       ('shallow_pullback', 9, 804)):
+            case = cases[branch]
+            self.assertEqual(datetime.fromisoformat(case['confirmation']['quoted_at']), START + timedelta(minutes=minute))
+            self.assertEqual(case['confirmation']['buy_cny_per_gram'], price)
+            self.assertEqual(case['horizons'][0]['confirmed_10g']['net_cny'], round(10 * (812*.995-price), 2))
+        self.assertEqual(independent_branch_replay(value, START + timedelta(minutes=1), end, samples, now), [])
+        empty = independent_branch_replay(value, START, end, [], now)
+        self.assertTrue(all(c['confirmation']['status'] == 'confirmation_quotes_missing' for c in empty))
+
     def test_actual_branch_marks_both_timings_on_same_day_quote_and_drawdown(self):
         with TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / 'horizon.db')

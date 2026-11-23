@@ -35,7 +35,7 @@ def unavailable(status):
     return {'status': status}
 
 
-def entries(value, published, expires, quotes, now):
+def entries(value, published, expires, quotes, now, *, breakout_mode=None):
     fee = number(value.get('input_sell_fee_rate'))
     minimum = number(value.get('input_minimum_buy_grams'))
     cash = number(value.get('input_participation_cash_cny'))
@@ -73,7 +73,7 @@ def entries(value, published, expires, quotes, now):
             if point[1] >= deadlines[i]:
                 continue
             previous = states[i]
-            states[i] = advance(previous, route, point[0], point[2])
+            states[i] = advance(previous, route, point[0], point[2], breakout_mode=breakout_mode)
             if states[i].get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 if point[2] * GRAMS <= cash:
                     branch = review_branch({**route, 'confirmation_mode': states[i].get('confirmation_mode')})
@@ -81,7 +81,7 @@ def entries(value, published, expires, quotes, now):
                 too_expensive = True
     if now < last_deadline:
         return immediate, unavailable('pending'), None
-    if not complete_sampling(published, last_deadline, actionable):
+    if not actionable or not complete_sampling(published, last_deadline, actionable):
         return immediate, unavailable('confirmation_quotes_missing'), None
     return immediate, unavailable('insufficient_input_cash' if too_expensive else 'no_confirmation'), None
 
@@ -122,9 +122,7 @@ def trading_horizon(anchor, days):
     return target, deadline
 
 
-def evaluate(value, published, expires, quotes, now):
-    immediate, confirmed, branch = entries(value, published, expires, quotes, now)
-    fee = number(value.get('input_sell_fee_rate'))
+def evaluate_entries(immediate, confirmed, branch, published, fee, quotes, now):
     horizons = []
     for days in (1, 3):
         target, deadline = trading_horizon(published, days)
@@ -150,6 +148,37 @@ def evaluate(value, published, expires, quotes, now):
             row[label] = result
         horizons.append(row)
     return horizons
+
+
+def evaluate(value, published, expires, quotes, now):
+    immediate, confirmed, branch = entries(value, published, expires, quotes, now)
+    return evaluate_entries(immediate, confirmed, branch, published, number(value.get('input_sell_fee_rate')), quotes, now)
+
+
+def independent_branch_replay(value, published, expires, quotes, now):
+    """Use each condition alone and preserve the original observation window."""
+    watch = value.get('buy_watch')
+    if watch and stamp(watch.get('starts_at')) != published:
+        return []
+    minimum = number(value.get('input_minimum_buy_grams'))
+    fee = number(value.get('input_sell_fee_rate'))
+    cases = []
+    for condition in value.get('review_conditions', []):
+        if not eligible(condition, minimum):
+            continue
+        only_condition = {**value, 'review_conditions': [condition]}
+        modes = ('continuation', 'retest') if condition.get('bank_breakout') else (None,)
+        for mode in modes:
+            branch = review_branch({**condition, 'confirmation_mode': mode})
+            immediate, confirmation, _ = entries(only_condition, published, expires, quotes, now, breakout_mode=mode)
+            outcomes = evaluate_entries(immediate, confirmation, branch, published, fee, quotes, now)
+            evidence = (confirmation if isinstance(confirmation, dict) else
+                        {'status': 'confirmed', 'quoted_at': utc_text(confirmation[0]),
+                         'observed_at': utc_text(confirmation[1]), 'buy_cny_per_gram': confirmation[2]})
+            cases.append({'branch': branch, 'threshold_cny': condition['price_cny'], 'confirmation': evidence,
+                          'horizons': [{'trading_days': row['trading_days'], 'target_at': row['target_at'],
+                                        'confirmed_10g': row['confirmed_10g']} for row in outcomes]})
+    return cases
 
 
 def review_branch(route):
@@ -350,7 +379,8 @@ def report(conn, bank, model, limit, now):
             if replacement:
                 watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
-                      'horizons': evaluate(value, published, end, points, now)})
+                      'horizons': evaluate(value, published, end, points, now),
+                      'independent_branch_replay': independent_branch_replay(value, published, end, points, now)})
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': GRAMS, 'cases': cases,
             'observed_reviews': observed_reviews(conn, bank, model, limit, now)}
 
