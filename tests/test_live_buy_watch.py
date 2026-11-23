@@ -603,6 +603,11 @@ class BuyAuditTests(unittest.TestCase):
         wrong_window = {**matched, 'attempt_id': 6, 'event_queued_at': end.isoformat()}
         review = status(quotes,reviews={(1,condition_key(condition)):[late,wrong_window]})
         self.assertEqual(review['review_attempts'], [late])
+        key = 1, condition_key(condition)
+        suppressed = {'evaluated_at': archived.isoformat(), 'reason': 'same_event_pending'}
+        row, = plain_buy_quote_observations(1,value,START,end,quotes,end,{},[],suppressions={key:[suppressed]})
+        self.assertEqual(row['review_archive_status'], 'touch_suppressed')
+        self.assertEqual(row['suppressed_touches'], [suppressed])
 
     def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
         with TemporaryDirectory() as tmp:

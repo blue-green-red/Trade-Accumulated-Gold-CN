@@ -16,7 +16,8 @@ from monitor.jd_live_buy_guard import (block_entries, remember_reviewed_breakout
                                        remember_reviewed_price_observations, remove_submitted_confirmations,
                                        review_failures, retire_failed_events)
 from monitor.jd_live_semantics import notification_parts
-from monitor.jd_live_buy_watch import carry_entry_observations, pending_events, plain_buy_discards, record, request, set_watch
+from monitor.jd_live_buy_watch import (carry_entry_observations, pending_events, plain_buy_discards, plain_buy_suppressions,
+                                      record, request, set_watch)
 from monitor.jd_live_conditions import condition_key, condition_state, read_watch
 from monitor.jd_live_readonly import accounts, ensure_schema, model_input, parse_account, record_success
 from monitor.notification_control import set_subscription
@@ -238,6 +239,34 @@ class BuyGuardTests(unittest.TestCase):
         queue(2,2,high,807.6)
         self.assertEqual(pending_events(self.conn,'codex',START+timedelta(minutes=2)),[])
 
+    def test_plain_buy_records_initial_suppression_once_then_allows_a_new_crossing(self):
+        from monitor.jd_live_conditions import monitor_prices
+
+        self.update_quote(0, 806)
+        revision = accounts(self.conn, START, include_advice=False)[0]['revision']
+        condition = {'condition':'at_or_above','quote_side':'buy','price_cny':805,'reason':'买价上穿后复评。'}
+        value = {'action':'hold','review_conditions':[condition],'input_quote_at':START.isoformat(),
+                 'input_quote_status':'fresh','input_buy_quote_cny':806}
+        with self.conn:
+            self.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)', (1,'zheshang','codex',1,
+                (START+timedelta(seconds=30)).isoformat(), (START+timedelta(minutes=10)).isoformat(), revision,json.dumps(value)))
+
+        def watch(minute, price):
+            self.update_quote(minute,price)
+            at = START+timedelta(minutes=minute)
+            account = accounts(self.conn,at,selected_bank='zheshang')[0]
+            monitor_prices(self.store,account,account['advice'][0],at)
+            return pending_events(self.conn,'codex',at)
+
+        self.assertEqual(watch(1,806.2),[])
+        note, = plain_buy_suppressions(self.conn,'codex')
+        self.assertEqual((note['reason'],note['buy_price_cny']), ('trigger_already_met_at_input',806.2))
+        self.assertEqual(watch(2,806.4),[])
+        self.assertEqual(watch(3,804.9),[])
+        event, = watch(4,806.1)
+        self.assertEqual(event['data']['condition_key'],note['condition_key'])
+        self.assertEqual(plain_buy_suppressions(self.conn,'codex'), [note])
+
     def test_same_plain_buy_can_recross_when_successful_analysis_leaves_the_advice_in_place(self):
         from monitor.jd_live_conditions import monitor_prices
 
@@ -266,6 +295,10 @@ class BuyGuardTests(unittest.TestCase):
         self.assertNotEqual(second['id'],first['id'])
         self.assertEqual(second['data']['advice_id'],1)
         self.assertEqual(second['data']['price_cny'],806.2)
+        self.assertEqual(watch(4,804.9), [second])
+        self.assertEqual(watch(5,806.3), [second])
+        note, = plain_buy_suppressions(self.conn,'codex')
+        self.assertEqual(note['reason'], 'same_event_pending')
         self.assertEqual(watch(4,804.9),[second])
         self.assertEqual(watch(5,806.7),[second])
 

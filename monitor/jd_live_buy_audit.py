@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .jd_live_buy_watch import (MAX_GAP, advance_watch, breakout_retest_price_status, eligible, utc_text,
-                               plain_buy_discards, watch_deadline, watch_routes)
+                               plain_buy_discards, plain_buy_suppressions, watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
 from .participation_audit import horizon_at, readonly
@@ -815,7 +815,7 @@ def latched_at_model_input(condition, value, points, published):
 
 
 def plain_buy_quote_observations(advice_id, value, published, expires, quotes, now, reviews, bank_inputs,
-                                *, markers=None, discards=None):
+                                *, markers=None, discards=None, suppressions=None):
     """Show whether each ordinary price level was reached on available quotes."""
     conditions = [item for item in value.get('review_conditions', []) if plain_buy_observation(item)]
     if not conditions or expires <= published:
@@ -854,6 +854,10 @@ def plain_buy_quote_observations(advice_id, value, published, expires, quotes, n
                     if (queued := stamp(event['queued_at'])) and published <= queued < expires]
         if rejected:
             row['discarded_events'] = rejected
+        suppressed = [event for event in (suppressions or {}).get(key, [])
+                      if (evaluated := stamp(event['evaluated_at'])) and published <= evaluated < expires]
+        if suppressed:
+            row['suppressed_touches'] = suppressed
         if attempts:
             row.update(review_archive_status='review_archived', review_attempts=attempts)
         elif rejected:
@@ -866,9 +870,13 @@ def plain_buy_quote_observations(advice_id, value, published, expires, quotes, n
                              if first[0] <= quoted <= archived and first[1] <= archived < expires and price_met(condition, buy)]
             if other_reviews:
                 row.update(review_archive_status='price_seen_in_other_analysis', other_review_attempt_ids=other_reviews)
+            elif suppressed:
+                row['review_archive_status'] = 'touch_suppressed'
             else:
                 row['review_archive_status'] = ('threshold_already_met_at_input' if latched_at_model_input(
                     condition, value, tape, published) else 'no_matching_archived_review')
+        elif suppressed:
+            row['review_archive_status'] = 'touch_suppressed'
         available.append({**row, 'status': status})
     return available
 
@@ -892,6 +900,10 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
     for event in plain_buy_discards(conn, model):
         if event['bank'] == bank and (discarded_at := stamp(event['discarded_at'])) and discarded_at <= now:
             plain_discards[(event['advice_id'], event['condition_key'])].append(event)
+    plain_suppressions = defaultdict(list)
+    for event in plain_buy_suppressions(conn, model):
+        if event['bank'] == bank and (at := stamp(event['evaluated_at'])) and at <= now:
+            plain_suppressions[(event['advice_id'], event['condition_key'])].append(event)
     has_history = conn.execute("SELECT 1 FROM sqlite_master WHERE name='ai_views'").fetchone()
     for advice_id, published, end, value, view_id in history[:limit]:
         input_at = stamp(value.get('input_quote_at')) if value.get('input_quote_status') == 'fresh' else None
@@ -918,7 +930,8 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                       'horizons': evaluate(value, published, end, points, now, grams=grams),
                       'plain_buy_quote_observations': plain_buy_quote_observations(
                           advice_id, value, published, min(end, next_publications.get(advice_id, end)), points, now,
-                          plain_reviews, bank_inputs, markers=queue_markers, discards=plain_discards),
+                          plain_reviews, bank_inputs, markers=queue_markers, discards=plain_discards,
+                          suppressions=plain_suppressions),
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})

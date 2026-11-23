@@ -13,7 +13,8 @@ CONTINUATION_HOLD_MINUTES = 3
 CONTINUATION_MIN_QUOTES = 3
 BREAKOUT_MODES = ('continuation', 'retest')
 PRICE_DISCARD_KEY = 'live-price-discards:'
-PRICE_DISCARD_LIMIT = 512
+PRICE_SUPPRESSION_KEY = 'live-price-suppressed:'
+PRICE_REVIEW_HISTORY_LIMIT = 512
 QUOTE_SCHEMA = """CREATE TABLE IF NOT EXISTS jd_live_quote_samples (
     bank TEXT NOT NULL, quoted_at TEXT NOT NULL, observed_at TEXT NOT NULL,
     buy_price_cny REAL NOT NULL, sell_price_cny REAL NOT NULL,
@@ -638,6 +639,19 @@ def plain_buy_discards(conn, model):
     return read(conn, PRICE_DISCARD_KEY + model).get('events', [])
 
 
+def plain_buy_suppressions(conn, model):
+    from .price_guard import read
+
+    return read(conn, PRICE_SUPPRESSION_KEY + model).get('events', [])
+
+
+def append_price_review_records(conn, key, records):
+    from .price_guard import read, save
+
+    history = [*read(conn,key).get('events', []), *records][-PRICE_REVIEW_HISTORY_LIMIT:]
+    save(conn,key,{'events': history})
+
+
 def pending_events(conn, model, now):
     """Remove superseded signals and verify actionable confirmations against bank quotes."""
     from .ai_events import read, write
@@ -748,10 +762,7 @@ def pending_events(conn, model, now):
             events['pending'] = pending
             write(conn, model, events)
             if discarded:
-                from .price_guard import save
-
-                history = [*plain_buy_discards(conn, model), *discarded][-PRICE_DISCARD_LIMIT:]
-                save(conn, PRICE_DISCARD_KEY + model, {'events': history})
+                append_price_review_records(conn, PRICE_DISCARD_KEY + model, discarded)
     return pending
 
 

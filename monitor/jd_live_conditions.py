@@ -352,23 +352,28 @@ def unchanged_buy_observation(conn, bank, advice, condition, point):
             and stayed_on_trigger_side(conn, bank, condition, input_at, point))
 
 
-def buy_observation_latched(conn, account, advice, condition, watch, now):
-    """A bank price already seen by the model needs a new crossing to request a review."""
+def buy_observation_latch_reason(conn, account, advice, condition, watch, now):
+    """Explain when no new crossing has occurred since the input or last observation."""
     quote = account['quote']
     point = (stamp(quote['quoted_at']), now, quote['buy_price_cny'], quote.get('sell_price_cny'))
     previous_at = stamp(watch.get('last_quote_at'))
     input_at = stamp(advice.get('input_quote_at'))
     if previous_at and (not input_at or previous_at >= input_at):
-        return watch.get('latched') and stayed_on_trigger_side(conn, account['bank'], condition, previous_at, point)
+        if watch.get('latched') and stayed_on_trigger_side(conn, account['bank'], condition, previous_at, point):
+            return 'same_side_since_last_observation'
+        return None
     if not input_at or advice.get('input_buy_quote_cny') is None:
-        return bool(watch.get('latched'))
-    return unchanged_buy_observation(conn, account['bank'], advice, condition, point)
+        return 'same_side_since_last_observation' if watch.get('latched') else None
+    if unchanged_buy_observation(conn, account['bank'], advice, condition, point):
+        return 'trigger_already_met_at_input'
+    return None
 
 
 def monitor_prices(store,account,advice,now):
     from .ai_events import read,write
     from .controls import active,control
     from .jd_live_buy_guard import plain_buy_observation
+    from .jd_live_buy_watch import PRICE_SUPPRESSION_KEY, append_price_review_records
     from .jd_live_path import observed_exit_touch
     from .jd_live_readonly import PRODUCTS
     for condition in advice.get('review_conditions',[]):
@@ -387,8 +392,12 @@ def monitor_prices(store,account,advice,now):
             if watch.get('last_quote_at') and stamp(quote['quoted_at'])<=stamp(watch['last_quote_at']):continue
             latched = watch.get('latched')
             ordinary_buy=plain_buy_observation(condition)
+            suppressed = None
             if met and ordinary_buy:
-                latched = buy_observation_latched(store.conn, account, advice, condition, watch, now)
+                latch_reason = buy_observation_latch_reason(store.conn, account, advice, condition, watch, now)
+                latched = bool(latch_reason)
+                if watch.get('advice_id') != advice['id']:
+                    suppressed = latch_reason
             trigger_price, trigger_at = price, quote['quoted_at']
             recovered = None
             if not met and not latched:
@@ -416,6 +425,13 @@ def monitor_prices(store,account,advice,now):
                                 **({'renewed_pullback': True} if state.get('renewed_pullback') else {})}})
                     write(store.conn,advice['analyst'],events)
                     watch.update(triggered_at=now.isoformat(),event_id=event_id,advice_id=advice['id'])
+                elif ordinary_buy:
+                    suppressed = 'same_event_pending' if pending else 'same_event_already_covered'
+            if suppressed and watch.get('suppressed_advice_id') != advice['id']:
+                append_price_review_records(store.conn, PRICE_SUPPRESSION_KEY + advice['analyst'], [{
+                    'bank': account['bank'], 'advice_id': advice['id'], 'condition_key': condition_key(condition),
+                    'evaluated_at': now.isoformat(),'quoted_at':trigger_at,'buy_price_cny':trigger_price,'reason':suppressed}])
+                watch['suppressed_advice_id'] = advice['id']
             watch.update(latched=met,last_quote_at=quote['quoted_at'],last_price_cny=price)
             store.conn.execute('INSERT INTO state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
                                (key,json.dumps(watch,ensure_ascii=False),now.isoformat()))
