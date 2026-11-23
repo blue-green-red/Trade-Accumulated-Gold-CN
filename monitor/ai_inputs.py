@@ -18,7 +18,7 @@ def fill_cause(reason):
 def prepare_bank_entry_context(out):
     from .jd_live_buy_guard import ENTRY_EVENT_PREFIX
     from .jd_live_conditions import stamp
-    from .trade_costs import bank_review_payoff, number
+    from .trade_costs import bank_review_payoff, cost_reference, number
 
     accounts = (out.get('live_readonly_accounts') or {}).get('accounts', {})
     for account in accounts.values():
@@ -30,22 +30,33 @@ def prepare_bank_entry_context(out):
         account = accounts.get(data.get('bank')) or {}
         quote = account.get('quote') or {}
         buy = number(quote.get('buy_price_cny'))
+        fee = account.get('sell_fee_rate')
         quoted_at = stamp(quote.get('quoted_at'))
         fresh = (account.get('status') == 'fresh' and quote.get('status') == 'fresh'
                  and buy is not None and buy > 0 and quoted_at is not None)
         for route in data.get('routes', []):
             for key in ('position_boundary_cny', 'signal_expires_at', 'source_advice_id'):
                 route.pop(key, None)
-            review = route.get('buy_review') or {}
-            zone = review.get('zone')
             confirmed = stamp(route.get('confirmed_at'))
             condition = route.get('condition_key')
-            recovery, cap = number(review.get('recovery_price_cny')), number(review.get('max_buy_price_cny'))
-            if (not fresh or not zone or not condition or not confirmed or quoted_at < confirmed
-                    or recovery is None or cap is None or not recovery <= buy <= cap):
+            if not fresh or not condition or not confirmed or quoted_at < confirmed:
                 continue
-            payoff = bank_review_payoff(buy, review.get('grams'), zone, account.get('sell_fee_rate'),
-                                       current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
+            if route.get('bank_breakout'):
+                breakout = number(route.get('threshold_cny'))
+                if breakout is None or buy < breakout:
+                    continue
+                retest = cost_reference(breakout, fee)
+                if retest is None:
+                    continue
+                payoff = {'at_breakout_level_net_cny_per_gram': round(retest['net_sell_price_cny'] - buy, 2)}
+            else:
+                review = route.get('buy_review') or {}
+                zone = review.get('zone')
+                recovery, cap = number(review.get('recovery_price_cny')), number(review.get('max_buy_price_cny'))
+                if not zone or recovery is None or cap is None or not recovery <= buy <= cap:
+                    continue
+                payoff = bank_review_payoff(buy, review.get('grams'), zone, fee,
+                                           current_sell=quote.get('sell_price_cny'), holding=account.get('total_grams'))
             if payoff is not None:
                 account.setdefault('entry_review_payoffs_at_input', {})[condition] = payoff
 

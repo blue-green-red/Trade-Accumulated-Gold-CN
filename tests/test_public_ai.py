@@ -121,8 +121,9 @@ class PublicTests(unittest.TestCase):
             'recent_samples': [[-120, 868.05]]}
         account['previous_advice'] = [{'review_conditions': [{'buy_review': {'zone': {'floor_cny': 866.12}}}]}]
         account['new_buy_break_even_sell_cny'] = 872.93
-        account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52}}
-        for price in (865.32, 868.05, 866.12, 872.93, 234.52):
+        account['entry_review_payoffs_at_input'] = {'pullback': {'risk_exit_net_cny': -234.52},
+                                                   'breakout': {'at_breakout_level_net_cny_per_gram': -3.66}}
+        for price in (865.32, 868.05, 866.12, 872.93, 234.52, 3.66):
             d = content(); d['analysis']['outlook'] = f'观察价{price}元/克。'
             self.assertEqual(self.publish(d, view_id=int(price * 100)), 'unavailable')
 

@@ -186,6 +186,8 @@ def privacy_ok(content, context):
     public_numbers = set(numbers(public_context))
     output_numbers = set(numbers(content))
     output_numbers.update(float(m.replace(",", "")) for m in re.findall(r"(?<![0-9.])\d[\d,]*(?:\.\d+)?", text))
+    per_gram_amounts = {float(m.replace(",", "")) for m in re.findall(
+        r"(?<![0-9.])\d[\d,]*(?:\.\d+)?(?=\s*元\s*(?:[/／]|每)\s*克)", text)}
     sensitive = {"average_cost_cny", "avg_cost", "cash_cny", "cash_balance_cny", "cash", "budget", "holding_pnl_cny",
                  "price", "price_cny", "buy_price_cny", "sell_price_cny", "loss_price_cny", "limit_price_cny", "limit_price",
                  "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
@@ -221,6 +223,10 @@ def privacy_ok(content, context):
         for key, account in private.get("accounts", {}).items():
             if str(key) in text or any(str(account.get(k, "")) in text for k in ("key", "revision") if len(str(account.get(k, ""))) >= 8):
                 return False
+            for payoff in account.get('entry_review_payoffs_at_input', {}).values():
+                for amount in numbers(payoff.get('at_breakout_level_net_cny_per_gram')):
+                    if abs(amount) in per_gram_amounts and abs(amount) not in public_numbers:
+                        return False
         def identifiers(value):
             if isinstance(value, dict):
                 for k, v in value.items():

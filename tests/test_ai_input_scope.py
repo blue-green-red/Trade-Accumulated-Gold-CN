@@ -15,7 +15,7 @@ class InputScopeTests(unittest.TestCase):
                   'zone': {'weak_target_cny': 812, 'risk_exit_cny': 800}}
         route = {'condition_key': 'pullback', 'confirmed_at': confirmed, 'price_cny': 804, 'buy_review': review}
         automatic = {'condition_key': 'continuation', 'confirmed_at': confirmed,
-                     'price_cny': 805, 'bank_breakout': {'hold_minutes': 3}}
+                     'price_cny': 805, 'threshold_cny': 805, 'bank_breakout': {'hold_minutes': 3}}
         event = {'id': 'live-buy-confirmed:codex:zheshang:test',
                  'data': {'bank': 'zheshang', 'routes': [route, automatic]}}
         account = {'status': 'fresh', 'quote': quote, 'sell_fee_rate': .005, 'total_grams': 42}
@@ -23,21 +23,27 @@ class InputScopeTests(unittest.TestCase):
                     'minsheng': {**account, 'sell_fee_rate': .01}}}, 'trigger_events': [event]}
         result = compact_context(original)
         by_bank = result['live_readonly_accounts']['accounts']
-        self.assertEqual(by_bank['zheshang']['entry_review_payoffs_at_input'], {'pullback': {
+        payoffs = by_bank['zheshang']['entry_review_payoffs_at_input']
+        self.assertEqual(payoffs['pullback'], {
             'weak_target_net_cny': round(12 * (812 * .995 - 806), 2),
             'risk_exit_net_cny': -120.0, 'hold_only_at_exit_delta_cny': -208.95,
-            'hold_plus_candidate_at_exit_delta_cny': -328.95}})
+            'hold_plus_candidate_at_exit_delta_cny': -328.95})
+        self.assertEqual(payoffs['continuation'], {'at_breakout_level_net_cny_per_gram': round(805 * .995 - 806, 2)})
         self.assertNotIn('entry_review_payoffs_at_input', by_bank['minsheng'])
         self.assertNotIn('entry_review_payoffs_at_input', account)
         self.assertEqual(compact_context(result), result)
 
-        for changes in ({'status': 'historical'}, {'buy_price_cny': 802}, {'buy_price_cny': 808},
+        for changes in ({'status': 'historical'}, {'buy_price_cny': 802},
                         {'quoted_at': '2026-11-23T01:59:00+00:00'}):
             with self.subTest(changes=changes):
                 changed = deepcopy(original)
                 changed['live_readonly_accounts']['accounts']['zheshang']['quote'].update(changes)
                 info = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']
                 self.assertNotIn('entry_review_payoffs_at_input', info)
+        changed = deepcopy(original)
+        changed['live_readonly_accounts']['accounts']['zheshang']['quote']['buy_price_cny'] = 808
+        latest = market_context(changed)['live_readonly_accounts']['accounts']['zheshang']['entry_review_payoffs_at_input']
+        self.assertEqual(set(latest), {'continuation'})
         for holding, expected in ((0, -120.0), (None, None)):
             with self.subTest(holding=holding):
                 account['total_grams'] = holding
