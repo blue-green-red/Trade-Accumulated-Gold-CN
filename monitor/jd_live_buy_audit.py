@@ -71,7 +71,8 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
     boundary = number((value.get('position_path') or {}).get('boundary_price_cny'))
     actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline and p[1] <= now]
     states = [{} for _ in routes]
-    unfunded = {}
+    unfunded = []
+    rejected_episodes = defaultdict(set)
     for point in actionable:
         if watch_end and boundary is not None and point[3] <= boundary:
             last_deadline = point[1]
@@ -79,7 +80,8 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
                 progress['last_stage'] = 'position_boundary'
             break
         for i, route in enumerate(routes):
-            if point[1] >= deadlines[i] or i in unfunded:
+            rejected = rejected_episodes.get(i)
+            if point[1] >= deadlines[i] or (rejected and (blocked or not zoned_pullback(route))):
                 continue
             states[i] = advance_watch(states[i], route, point[0], point[2])
             if progress is not None:
@@ -90,16 +92,22 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
                 progress['quote_samples_examined'] = progress.get('quote_samples_examined', 0) + 1
                 progress['last_stage'] = states[i].get('stage') or 'awaiting_trigger'
             if states[i].get('stage') == 'confirmed':
+                episode = states[i].get('touched_at') or states[i]['confirmed_at']
+                if rejected and episode in rejected:
+                    continue
                 branch = review_branch(route)
                 error = blocked or ('insufficient_input_cash' if point[2] * grams > cash + 1e-8 else None)
                 if not error:
+                    if progress is not None and unfunded:
+                        progress['earlier_unfunded_confirmations'] = unfunded
                     return immediate, point, branch
-                unfunded[i] = {'branch': branch, 'quoted_at': utc_text(point[0]),
-                               'observed_at': utc_text(point[1]), 'buy_cny_per_gram': point[2],
-                               'paper_entry_status': error}
-        if len(unfunded) == len(routes):
+                rejected_episodes[i].add(episode)
+                unfunded.append({'branch': branch, 'quoted_at': utc_text(point[0]),
+                                 'observed_at': utc_text(point[1]), 'buy_cny_per_gram': point[2],
+                                 'paper_entry_status': error})
+        if blocked and len(rejected_episodes) == len(routes):
             break
-    if blocked or len(unfunded) == len(routes):
+    if blocked or len(rejected_episodes) == len(routes):
         status = blocked or 'insufficient_input_cash'
     elif now < last_deadline:
         status = 'pending'
@@ -109,7 +117,7 @@ def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mod
         status = 'insufficient_input_cash' if unfunded else 'no_confirmation'
     confirmation = unavailable(status)
     if unfunded:
-        confirmation['observed_price_confirmations'] = list(unfunded.values())
+        confirmation['observed_price_confirmations'] = unfunded
     return immediate, confirmation, None
 
 
@@ -201,6 +209,8 @@ def replay_one_branch(value, condition, mode, published, expires, quotes, now, g
     evidence = (confirmation if isinstance(confirmation, dict) else
                 {'status': 'confirmed', 'quoted_at': utc_text(confirmation[0]),
                  'observed_at': utc_text(confirmation[1]), 'buy_cny_per_gram': confirmation[2]})
+    if earlier := progress.pop('earlier_unfunded_confirmations', None):
+        evidence['earlier_unfunded_confirmations'] = earlier
     return {'branch': branch, 'threshold_cny': condition['price_cny'], 'confirmation': evidence,
             'observation_progress': progress,
             'horizons': [{'trading_days': row['trading_days'], 'target_at': row['target_at'],

@@ -534,6 +534,29 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(datetime.fromisoformat(window['observation_ends_at']), at(20))
             self.assertEqual(window['confirmation']['status'], 'pending')
 
+    def test_replay_rechecks_size_after_a_new_pullback_in_the_same_window(self):
+        end = START + timedelta(minutes=15)
+        value = {'input_quote_status': 'fresh', 'input_data_status': {'account': 'fresh'},
+                 'input_participation_cash_cny': 8035, 'input_sell_fee_rate': .005,
+                 'buy_watch': {'starts_at': START.isoformat(), 'expires_at': end.isoformat()},
+                 'review_conditions': [zoned_route()], 'position_path': {'boundary_price_cny': 795}}
+        first_dip = [(0, 799), (1, 803.1), (3, 804), (3.5, 803.2), (4, 805)]
+        next_dip = [(5, 799), (6, 803.1), (8, 803.4)]
+        early, = independent_branch_replay(value, START, end, [point(m, p) for m, p in first_dip],
+                                            START + timedelta(minutes=5))
+        self.assertEqual(early['confirmation']['status'], 'insufficient_input_cash')
+        rejected, = early['confirmation']['observed_price_confirmations']
+        self.assertEqual(datetime.fromisoformat(rejected['quoted_at']), point(3, 804)[0])
+        full, = independent_branch_replay(value, START, end, [point(m, p) for m, p in first_dip + next_dip],
+                                           START + timedelta(minutes=9))
+        self.assertEqual(datetime.fromisoformat(full['confirmation']['quoted_at']), point(8, 803.4)[0])
+        self.assertEqual(full['confirmation']['earlier_unfunded_confirmations'], [rejected])
+
+        boundary, = independent_branch_replay(value, START, end,
+            [point(m, p) for m, p in first_dip + [(4.5, 794)] + next_dip], START + timedelta(minutes=9))
+        self.assertEqual(boundary['observation_progress']['last_stage'], 'position_boundary')
+        self.assertEqual(boundary['confirmation']['observed_price_confirmations'], [rejected])
+
     def test_independent_replay_keeps_the_later_retest_and_shallow_pullback(self):
         breakout = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
