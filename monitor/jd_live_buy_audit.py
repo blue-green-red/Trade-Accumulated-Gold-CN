@@ -1,11 +1,13 @@
 """Read-only replay of a hypothetical bank-gold purchase, with a configurable size."""
 import argparse
 import json
-from collections import defaultdict
+from bisect import bisect_left, bisect_right
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
-from .config import Settings
-from .jd_live_buy_watch import (MAX_GAP, advance_watch, breakout_retest_price_status, eligible, utc_text,
+from .config import BJ, Settings
+from .jd_live_buy_watch import (BREAKOUT_MODES, MAX_GAP, WATCH_WINDOW, advance, advance_watch, bank_breakout_condition,
+                               breakout_retest_price_status, buy_price_windows, eligible, utc_text,
                                plain_buy_discards, plain_buy_suppressions, watch_deadline, watch_routes)
 from .jd_live_conditions import archived_bank_quotes, condition_key, price_met, pullback_depth, stamp, zoned_pullback
 from .jd_live_buy_guard import ENTRY_EVENT_PREFIX, confirmation_key, plain_buy_observation, stored_price_condition
@@ -43,6 +45,111 @@ def observable_quotes(quotes):
         if latest is None or point[0] > latest:
             latest = point[0]
             yield point
+
+
+def market_breakout_episodes(points):
+    """Identify breakouts independently of when the model published recommendations."""
+    window = deque()
+    condition = None
+    for point in points:
+        at, received, buy, _ = point
+        gap = bool(window and (at - window[-1][0] > MAX_GAP or received - window[-1][1] > MAX_GAP))
+        if condition and (gap or received >= began + WATCH_WINDOW or buy < condition['price_cny']):
+            ending = 'sampling_gap' if gap else 'window_expired' if received >= began + WATCH_WINDOW else 'fell_below_level'
+            yield condition['price_cny'], began, confirmations, ending
+            condition = None
+        if gap:
+            window.clear()
+        if condition is None and window:
+            anchor = window[-1][0]
+            while window[0][0] <= anchor - WATCH_WINDOW:
+                window.popleft()
+            if (anchor - window[0][0] >= WATCH_WINDOW - MAX_GAP
+                    and buy > max(quote[2] for quote in window)):
+                condition = bank_breakout_condition(buy_price_windows([(p[0], p[2]) for p in window], anchor))
+                states = {mode: {} for mode in BREAKOUT_MODES}
+                confirmations = {}
+                began = received
+        if condition:
+            for mode, prior in states.items():
+                if prior.get('stage') == 'confirmed':
+                    continue
+                step = states[mode] = advance(prior, condition, at, buy, breakout_mode=mode)
+                if step.get('stage') == 'confirmed':
+                    confirmations[mode] = point
+        window.append(point)
+        while window[0][0] <= at - WATCH_WINDOW:
+            window.popleft()
+    if condition:
+        yield condition['price_cny'], began, confirmations, 'as_of'
+
+
+def market_breakout_horizon(points, times, entry, fee, now, *, minutes=None, days=None):
+    if minutes is not None:
+        target = entry[1] + timedelta(minutes=minutes)
+        session = trading_session(target)
+        if not session['is_open']:
+            return unavailable('market_closed')
+        deadline = min(target + MAX_GAP, stamp(session['close_at']) - timedelta(microseconds=1))
+    else:
+        target, deadline = trading_horizon(entry[1], days)
+    start = bisect_left(times, entry[0])
+    horizon = bisect_left(times, target, start)
+    exit_point = next((point for point in points[horizon:bisect_right(times, deadline, horizon)]
+                       if point[1] <= min(now, deadline)), None)
+    if not exit_point:
+        return unavailable('pending' if now < deadline else 'horizon_quote_missing')
+    end = bisect_right(times, exit_point[0], horizon)
+    return mark(entry, exit_point, fee, points[start:end], 1)
+
+
+def market_breakout_baseline(conn, bank, now, fee):
+    """Read-only net outcomes after independent, causally identified bank breakthroughs."""
+    since = now - timedelta(days=7)
+    rows = conn.execute('SELECT quoted_at,observed_at,buy_price_cny,sell_price_cny FROM jd_live_quote_samples '
+                        'WHERE bank=? AND quoted_at>? AND quoted_at<=? AND observed_at BETWEEN quoted_at AND ? '
+                        'ORDER BY quoted_at', (bank, utc_text(since - WATCH_WINDOW), utc_text(now), utc_text(now)))
+    tape = ((stamp(quoted), stamp(seen), buy, sell) for quoted, seen, buy, sell in rows)
+    points = list(observable_quotes(point for point in tape
+                                    if point[1] - point[0] <= MAX_GAP and trading_session(point[0])['is_open']))
+    times = [point[0] for point in points]
+    horizons = {'15m': {'minutes': 15}, '60m': {'minutes': 60}, '1d': {'days': 1}, '3d': {'days': 3}}
+    cases = []
+    endings = defaultdict(int)
+    unconfirmed_endings = defaultdict(int)
+    for threshold, began, confirmations, ending in market_breakout_episodes(points):
+        if began < since:
+            continue
+        endings[ending] += 1
+        if not confirmations:
+            unconfirmed_endings[ending] += 1
+        for mode, entry in confirmations.items():
+            outcomes = {label: (market_breakout_horizon(points, times, entry, fee, now, **period)
+                                if fee is not None else unavailable('fee_unknown')) for label, period in horizons.items()}
+            cases.append({'branch': f'breakout_{mode}', 'threshold_cny': threshold, 'breakout_at': utc_text(began),
+                          'confirmed_at': utc_text(entry[1]), 'confirmed_buy_cny': entry[2], 'outcomes_per_gram': outcomes})
+    by_branch = {}
+    for mode in BREAKOUT_MODES:
+        branch = f'breakout_{mode}'
+        selected = [row for row in cases if row['branch'] == branch]
+        by_branch[branch] = {'confirmations': len(selected), 'horizons': {}}
+        for label in horizons:
+            observed = [r['outcomes_per_gram'][label] for r in selected if r['outcomes_per_gram'][label]['status'] == 'valued']
+            complete = [r for r in observed if r['sampled_best_net_cny'] is not None]
+            by_branch[branch]['horizons'][label] = {'valued': len(observed), 'full_path_samples': len(complete),
+                'positive_at_horizon': sum(r['net_cny'] > 0 for r in observed),
+                'sampled_break_even': sum(r['sampled_first_break_even_at'] is not None for r in complete)}
+    paired = defaultdict(dict)
+    for row in cases:
+        paired[row['breakout_at']][row['branch']] = row['confirmed_buy_cny']
+    both = [pair for pair in paired.values() if len(pair) == 2]
+    differences = [pair['breakout_continuation'] - pair['breakout_retest'] for pair in both]
+    return {'from': utc_text(since), 'to': utc_text(now), 'fee_rate': fee, 'cases': cases, 'by_branch': by_branch,
+            'episode_endings': endings, 'unconfirmed_episode_endings': unconfirmed_endings,
+            'paired_entry_prices': {'episodes': len(both), 'retest_lower': sum(diff > 0 for diff in differences),
+                                    'continuation_lower': sum(diff < 0 for diff in differences),
+                                    'equal': sum(diff == 0 for diff in differences)},
+            'sampled_dates_bj': sorted({p[0].astimezone(BJ).date().isoformat() for p in points if p[0] >= since})}
 
 
 def entries(value, published, expires, quotes, now, *, grams=GRAMS, breakout_mode=None, progress=None):
@@ -935,8 +1042,13 @@ def report(conn, bank, model, limit, now, *, grams=GRAMS):
                       'independent_branch_replay': independent_branch_replay(value, published, end, points, now,
                                                                             archived_quotes=archived_quotes, grams=grams,
                                                                             pullback_windows=windows.get(advice_id, {}))})
+    fee_reference = conn.execute("""SELECT id,json_extract(advice_json,'$.input_sell_fee_rate') AS fee
+        FROM jd_live_advice WHERE bank=? AND analyst=? AND julianday(created_at)<=julianday(?)
+        AND fee>=0 AND fee<1 ORDER BY id DESC LIMIT 1""", (bank, model, utc_text(now))).fetchone() or (None, None)
+    market_breakouts = market_breakout_baseline(conn, bank, now, fee_reference[1])
+    market_breakouts['fee_reference_advice_id'] = fee_reference[0]
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': grams, 'cases': cases,
-            'observed_reviews': observed}
+            'observed_reviews': observed, 'market_breakout_baseline': market_breakouts}
 
 
 def main():

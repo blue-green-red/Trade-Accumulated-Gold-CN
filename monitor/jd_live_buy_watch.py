@@ -78,16 +78,8 @@ def earlier_sampled_ranges(conn, bank, before, now):
     return ranges
 
 
-def quote_context(conn, account, now):
-    """Compact price history and fee-adjusted rebound reference aligned to the current bank quote."""
-    current = sample(account, now)
-    if current is None:
-        return {'status': 'unavailable'}
-    anchor, _, buy, sell = current
-    start = anchor - timedelta(hours=1)
-    has_samples = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone()
-    tape = quote_tape(conn, account['bank'], start, current) if has_samples else [(anchor, buy, sell)]
-    points = [(at, price) for at, price, _ in tape]
+def buy_price_windows(points, anchor):
+    start = anchor - WATCH_WINDOW
     windows = []
     for index in range(4):
         end = start + timedelta(minutes=(index + 1) * 15)
@@ -96,10 +88,31 @@ def quote_context(conn, account, now):
             values = [p for _, p in window]
             windows.append({'from': utc_text(window[0][0]), 'to': utc_text(window[-1][0]),
                             'n': len(values), 'low': min(values), 'high': max(values), 'last': values[-1]})
+    return windows
+
+
+def bank_breakout_condition(windows):
+    high = max(window['high'] for window in windows)
+    tolerance = max(0.01, round(median(w['high'] - w['low'] for w in windows) / 2, 2))
+    return {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': high,
+            'bank_breakout': {'retest_ceiling_cny': round(high + tolerance, 2), 'hold_minutes': 3},
+            'reason': '本行买价突破近期高位后，持续走高或回踩守稳时重新评估。', 'checks': []}
+
+
+def quote_context(conn, account, now):
+    """Compact price history and fee-adjusted rebound reference aligned to the current bank quote."""
+    current = sample(account, now)
+    if current is None:
+        return {'status': 'unavailable'}
+    anchor, _, buy, sell = current
+    start = anchor - WATCH_WINDOW
+    has_samples = conn.execute("SELECT 1 FROM sqlite_master WHERE name='jd_live_quote_samples'").fetchone()
+    tape = quote_tape(conn, account['bank'], start, current) if has_samples else [(anchor, buy, sell)]
+    points = [(at, price) for at, price, _ in tape]
     recent = [(at, p) for at, p in points if anchor - timedelta(minutes=10) < at]
     available = len(recent) >= 3 and recent[-1][0] - recent[0][0] >= timedelta(minutes=2)
     context = {'status': 'available' if available else 'limited', 'as_of': utc_text(anchor),
-               'buy_price_windows_15m': windows,
+               'buy_price_windows_15m': buy_price_windows(points, anchor),
                'recent_samples': [[int((at-anchor).total_seconds()), p] for at, p in recent[-6:]],
                'recent_sample_format': ['seconds_before_as_of_signed', 'buy_cny_per_gram'],
                'max_gap_seconds': max((int((right[0]-left[0]).total_seconds())
@@ -300,13 +313,7 @@ def set_watch(conn, bank, analyst, value, source, now, minimum):
         if prior and prior_active:
             conditions.append(prior)
         else:
-            windows = evidence['buy_price_windows_15m']
-            high = max(window['high'] for window in windows)
-            # Use observed 15-minute ranges for the retest tolerance around the bank high.
-            tolerance = max(0.01, round(median(w['high'] - w['low'] for w in windows) / 2, 2))
-            conditions.append({'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': high,
-                'bank_breakout': {'retest_ceiling_cny': round(high + tolerance, 2), 'hold_minutes': 3},
-                'reason': '本行买价突破近期高位后，持续走高或回踩守稳时重新评估。', 'checks': []})
+            conditions.append(bank_breakout_condition(evidence['buy_price_windows_15m']))
         generated = conditions[-1]
         if any(c.get('buy_review') and condition_key(c) == condition_key(generated) for c in conditions[:-1]):
             generated['bank_breakout']['companion'] = True

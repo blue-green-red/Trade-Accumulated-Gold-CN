@@ -6,7 +6,8 @@ from tempfile import TemporaryDirectory
 
 from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import (bank_quotes_during_review, evaluate, first_observed_quote, first_review_quote,
-                                       followup_quote, independent_branch_replay,
+                                       followup_quote, independent_branch_replay, market_breakout_baseline,
+                                       market_breakout_episodes,
                                        observed_review_horizons, observed_reviews, plain_buy_quote_observations,
                                        report, retest_price_evidence)
 from monitor.jd_live_buy_guard import remember_reviewed_confirmations, remove_submitted_confirmations
@@ -51,6 +52,50 @@ class BuyWatchTests(unittest.TestCase):
         for minute, price in quotes:
             state = advance(state, condition, point(minute, price)[0], price)
         return state.get('stage')
+
+    def market_breakout_points(self):
+        moves = {60: 800.2, 61: 800.4, 62: 800.4, 63: 800.5, 64: 800.01, 65: 800.02,
+                 66: 800.04, 67: 800.05, 68: 799, 69: 801.1, 70: 800.4}
+        return [point(minute, moves.get(minute, 800)) for minute in range(130)]
+
+    def test_market_breakout_baseline_uses_independent_confirmations_and_paid_exit_side(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'market-breakout.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            for quote in self.market_breakout_points():
+                record(store.conn, 'zheshang', quote)
+            record(store.conn, 'minsheng', point(78, 1000))
+            day = timedelta(days=1)
+            for minute in (64, 68):
+                at, received, buy, sell = point(minute, 810)
+                record(store.conn, 'zheshang', (at + day, received + day, buy, sell))
+            cutoff = START + timedelta(minutes=128, seconds=20)
+            result = market_breakout_baseline(store.conn, 'zheshang', cutoff, .004)
+            matured = market_breakout_baseline(store.conn, 'zheshang', cutoff + day, .004)
+        self.assertEqual(result['episode_endings'], {'fell_below_level': 2})
+        self.assertEqual(result['unconfirmed_episode_endings'], {'fell_below_level': 1})
+        self.assertEqual(result['paired_entry_prices'], {'episodes': 1, 'retest_lower': 1, 'continuation_lower': 0, 'equal': 0})
+        early, later = result['cases']
+        self.assertEqual((early['branch'], early['confirmed_buy_cny']), ('breakout_continuation', 800.5))
+        self.assertEqual((later['branch'], later['confirmed_buy_cny']), ('breakout_retest', 800.05))
+        for case in (early, later):
+            self.assertEqual(case['threshold_cny'], 800)
+            self.assertEqual(case['outcomes_per_gram']['15m']['net_cny'], round(800 * .996 - case['confirmed_buy_cny'], 2))
+        self.assertEqual(result['by_branch']['breakout_retest']['horizons']['60m'],
+                         {'valued': 1, 'full_path_samples': 1, 'positive_at_horizon': 0, 'sampled_break_even': 0})
+        self.assertEqual(later['outcomes_per_gram']['1d']['status'], 'pending')
+        next_day = matured['cases'][0]['outcomes_per_gram']['1d']
+        self.assertEqual(next_day['net_cny'], round(810 * .996 - 800.5, 2))
+        self.assertIsNone(next_day['sampled_best_net_cny'])
+
+    def test_market_breakout_needs_a_continuous_hour_and_restarts_after_a_gap(self):
+        prices = self.market_breakout_points()
+        with_gap_before_start = [p for i, p in enumerate(prices[:68]) if i not in range(48, 53)]
+        self.assertEqual(list(market_breakout_episodes(with_gap_before_start)), [])
+        with_gap_after_start = [p for i, p in enumerate(prices[:67]) if i not in range(61, 65)]
+        self.assertEqual([(entries, state) for _, _, entries, state in market_breakout_episodes(with_gap_after_start)],
+                         [({}, 'sampling_gap')])
 
     def test_dip_requires_recovery_and_sustained_distinct_quotes(self):
         self.assertEqual(self.advance_all([(0, 799), (1, 803), (1, 803)]), 'holding')
