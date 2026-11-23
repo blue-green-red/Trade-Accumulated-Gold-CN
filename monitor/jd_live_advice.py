@@ -70,7 +70,7 @@ class LiveAdvice(BaseModel):
     limit_buy_reviews:list[LimitBuyReview]=Field(default_factory=list,max_length=2,description='新版独立评估低位提前买入方案；无可靠候选也说明具体缺口，未知参数null，不强制买入')
     suggested_orders:list[SuggestedOrder]=Field(default_factory=list,max_length=2,description='本轮适合提前设置的条件单建议；互相独立、同时预留资金和克数。无合适机会填[]，不表示已挂单')
     order_management:list[OrderManagement]=Field(default_factory=list,max_length=5,description='对输入可见的已有挂单逐单给keep/cancel/replace建议，绝不直接执行')
-    review_conditions:list[PriceReviewCondition]=Field(default_factory=list,max_length=4,description='使用本银行元/克报价触发AI复评；有效期沿用本条建议，不是下单条件')
+    review_conditions:list[PriceReviewCondition]=Field(default_factory=list,max_length=4,description='用本银行报价触发AI复评；区间买入观察由程序另计时，其他条件沿用建议期限')
 
 class LiveAdviceSet(BaseModel):
     zheshang:Optional[LiveAdvice]=None
@@ -87,7 +87,7 @@ PROMPT="""
 - suggested_orders评估无人盯盘的限价买≤、限价卖≥或组合止盈止损卖出，不凑单；组合止损须对应同价、倾向卖出的假设失效或自选风险限制情景，说明数量作用。已挂保护以本轮pending_orders为准，旧建议不等于已挂；无实际保护须说建议新挂。与已有单及本轮买卖合计占用，不借用待卖收入或别户资金，不重复挂单；休市不保证成交。
 - 各户cash_cny/cash_source以接口优先，现金0不新增买入；即时买入预算未知可留空数量说明，条件买单须有确认预算；卖出不超可卖克数。使用本户有效快照与报价，过期给wait，不把历史样本冒充实时或完整历史。
 - order_management逐笔处理已有单；replace只填修改项，null保留，部分成交默认用确认的剩余量，未知则明确核对；无单填[]，不编造标识。
-- 用recent_bank_quotes的本行近期高低与波动定区间，公开价仅参考。分别评估浅回调回升、突破后回踩；可行才填buy_review及zone，列区间下缘、弱目标、退出价、买价上限、克数及守稳时长。回调的price_cny是入区上缘；突破价可高于回踩买价上限。守稳后复评，跌穿或买入窗口超价则放弃；未采用的路径给理由，可只观察或等待。人工挂单期限独立，无账户输入填null。"""
+- 用recent_bank_quotes的本行高低与波动定回调区及突破价。分别评估浅回调、突破后回踩；可行才填buy_review及zone，列区间下缘、弱目标、退出价、上限、克数与守稳时长。回调price_cny是入区上缘；突破价可高于回踩买价上限。未采用的路径写原因，等待时由程序另观察本行高位，无须重复设置。区间观察与当前建议分开计时，人工委托期限独立。无账户输入填null。"""
 
 
 def prompt_for(context):
@@ -157,6 +157,8 @@ def save(conn,analyst,view_id,advice,inputs,now=None,invalidation_note=None):
         annotate(value,source)
         value['input_protection']=protection_state(source)
         value['checks']=warnings
+        from .jd_live_buy_watch import set_watch
+        set_watch(conn,bank,analyst,value,source,now,minimums.get(bank))
         value['validation_version']=1
         conn.execute('INSERT OR IGNORE INTO jd_live_advice(bank,analyst,view_id,created_at,expires_at,snapshot_revision,advice_json) VALUES(?,?,?,?,?,?,?)',
             (bank,analyst,view_id,now.isoformat(),(now+timedelta(minutes=value['valid_for_minutes'])).isoformat(),source['revision'],json.dumps(value,ensure_ascii=False)))

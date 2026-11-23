@@ -262,7 +262,8 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
                 path_current_state(entry,row,conn)
                 from .jd_live_conditions import condition_state,management_state
                 for item in entry.get('order_management',[]):item['state']=management_state(row,entry,item,now)
-                for condition in entry.get('review_conditions',[]):condition['monitoring']=condition_state(conn,row,entry,condition,now)
+                for condition in entry.get('review_conditions',[]):
+                    condition['monitoring']=condition_state(conn,row,entry,condition,now,latest=not seen.get(r[1]))
                 target.append(entry)
                 seen[r[1]]=seen.get(r[1],0)+1
             from .participation_review import live as participation_review
@@ -327,6 +328,8 @@ def model_input(conn,now=None):
                             break
                 brief['order_management']=[{k:o.get(k) for k in ('order_key','action','replacement','state')} for o in value.get('order_management',[])]
                 brief['review_conditions']=[{k:o[k] for k in ('condition','price_cny','quote_side','order_key','reason','buy_review') if k in o and (k!='buy_review' or o[k] is not None)} for o in value.get('review_conditions',[]) if not o.get('checks')] if counts[name]==1 else []
+                if counts[name]==1 and value.get('buy_watch'):
+                    brief['buy_watch_expires_at']=value['buy_watch']['expires_at']
                 if value.get('suggested_orders'):
                     brief['suggested_orders']=[{k:o.get(k) for k in ('kind','grams','price_cny','loss_price_cny','expires_at','reason','execution_progress')} for o in value['suggested_orders']]
                 previous.append(brief)

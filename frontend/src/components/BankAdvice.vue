@@ -96,12 +96,13 @@ const itemState = (item) =>
     ? partState.value
     : item.state || "review_required";
 const conditionState = (c) =>
-  partState.value !== "current"
+  partState.value !== "current" && !c.monitoring?.expires_at
     ? partState.value
     : !props.quoteFresh
       ? "data_unavailable"
       : c.monitoring?.status;
 const conditionHeading = (c) => {
+  if (c.bank_breakout) return `突破 ${num(c.price_cny)} 元/克后等回踩`;
   const floor = c.buy_review?.zone?.floor_cny;
   if (floor != null) {
     return c.condition === "at_or_above"
@@ -411,8 +412,7 @@ const proposalState = (order) => {
         本轮未设置价格复评条件，沿用其他事件和周期调度。
       </div>
       <div v-else class="sub">
-        达到条件仅排队重新分析，不自动撤改或下单。条件有效至
-        {{ fmtTs(advice.expires_at) }}。
+        达到观察条件会排队重新分析。
       </div>
       <div
         v-for="(c, i) in advice.review_conditions || []"
@@ -438,6 +438,10 @@ const proposalState = (order) => {
           }}
         </div>
         <div class="live-advice-reason">{{ c.reason }}</div>
+        <div v-if="c.bank_breakout" class="sub">
+          突破后回踩 {{ num(c.price_cny) }}–{{ num(c.bank_breakout.retest_ceiling_cny) }}
+          元/克，守住 {{ num(c.price_cny) }} 元/克满 {{ c.bank_breakout.hold_minutes }} 分钟后复评。
+        </div>
         <div v-if="c.buy_review?.zone && !c.checks?.length" class="sub">
           <template v-if="c.condition === 'at_or_above'">
             回踩观察区 {{ num(c.buy_review.zone.floor_cny) }}–{{ num(c.price_cny) }}
@@ -462,6 +466,9 @@ const proposalState = (order) => {
         </div>
         <div v-if="c.monitoring?.triggered_at" class="live-quote-time">
           触发时间 {{ fmtTs(c.monitoring.triggered_at) }}
+        </div>
+        <div class="sub">
+          观察截止 {{ fmtTs(c.monitoring?.expires_at || advice.expires_at) }}
         </div>
       </div>
     </div>

@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from monitor.ai_events import enqueue, read
+from monitor.ai_events import acknowledge, enqueue, read
 from monitor.jd_live_buy_audit import evaluate
-from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, valid_route
-from monitor.jd_live_conditions import monitor_prices, validate_structure
+from monitor.jd_live_buy_watch import advance, pending_events, quote_context, record, request, set_watch, valid_route
+from monitor.jd_live_conditions import condition_state, monitor_prices, validate_structure
+from monitor.jd_live_expiry import request_expiry_review
 from monitor.jd_live_readonly import ensure_schema
 from monitor.store import Store
 
@@ -78,6 +79,85 @@ class BuyWatchTests(unittest.TestCase):
                                          condition=condition), 'confirmed')
         self.assertEqual(self.advance_all([(0, 809), (1, 797), (2, 803), (4, 804)],
                                          condition=condition), 'pullback_lost')
+
+    def test_bank_high_requires_breakout_then_a_held_retest(self):
+        condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
+                     'bank_breakout': {'retest_ceiling_cny': 806, 'hold_minutes': 3}}
+        self.assertIsNone(self.advance_all([(0, 805), (3, 805)], condition=condition))
+        self.assertEqual(self.advance_all([(0, 807), (2, 806.5), (4, 807)], condition=condition), 'touched')
+        self.assertEqual(self.advance_all([(0, 807), (2, 805.5), (4, 806), (5, 806.5)],
+                                         condition=condition), 'confirmed')
+        self.assertEqual(self.advance_all([(0, 807), (2, 804.99), (4, 806), (5, 806.5)],
+                                         condition=condition), 'pullback_lost')
+
+    def test_watch_survives_action_expiry_and_an_unchanged_advice(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
+                      'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
+            account = {'bank': 'zheshang', 'connected': True, 'revision': 'v1'}
+
+            def publish(id, minute):
+                now = point(minute, 801)[0]
+                deadline = now + timedelta(minutes=15)
+                value = {'action': 'wait', 'valid_for_minutes': 15, 'review_conditions': [zoned_route()]}
+                with store.conn:
+                    set_watch(store.conn, 'zheshang', 'codex', value, source, now, 10)
+                    store.conn.execute('INSERT INTO jd_live_advice VALUES(?,?,?,?,?,?,?,?)',
+                                       (id, 'zheshang', 'codex', id, now.isoformat(), deadline.isoformat(),
+                                        'v1', json.dumps(value)))
+                return {**value, 'id': id, 'analyst': 'codex', 'status': 'current', 'action_status': 'current',
+                        'snapshot_revision': 'v1', 'created_at': now.isoformat(), 'expires_at': deadline.isoformat()}
+
+            first = publish(1, 0)
+            first.update(status='expired', action_status='expired')
+            quote = point(16, 799)
+            account['quote'] = {'status': 'fresh', 'quoted_at': quote[0].isoformat(), 'buy_price_cny': 799}
+            request(store, account, first, quote[1], quote)
+            observed = condition_state(store.conn, account, first, first['review_conditions'][0], quote[1])
+            self.assertEqual((observed['status'], observed['confirmation_stage']), ('monitoring', 'touched'))
+            second = publish(2, 17)
+            self.assertEqual(second['buy_watch'], first['buy_watch'])
+            for minute in (17, 18, 19):
+                quote = point(minute, 804)
+                request(store, account, second, quote[1], quote)
+            pending = read(store.conn, 'codex')['pending']
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]['data']['plan_id'], first['buy_watch']['id'])
+            with store.conn:
+                acknowledge(store.conn, 'codex', [pending[0]['id']])
+            third = publish(3, 20)
+            self.assertEqual(third['buy_watch'], first['buy_watch'])
+            for minute in (20, 21, 23):
+                quote = point(minute, 804)
+                request(store, account, third, quote[1], quote)
+            self.assertEqual(read(store.conn, 'codex')['pending'], [])
+
+    def test_observation_expiry_suppresses_the_legacy_advice_expiry(self):
+        with TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / 'test.db')
+            self.addCleanup(store.conn.close)
+            ensure_schema(store.conn)
+            action_deadline = START + timedelta(minutes=15)
+            watch_deadline = START + timedelta(hours=1)
+            advice = {'id': 1, 'analyst': 'codex', 'action': 'wait', 'schema_version': 6, 'status': 'expired',
+                      'created_at': START.isoformat(), 'snapshot_revision': 'v1',
+                      'buy_watch': {'id': 'one-plan', 'expires_at': watch_deadline.isoformat()}}
+            with store.conn:
+                store.conn.execute('INSERT INTO jd_live_advice VALUES(1,?,?,?,?,?,?,?)',
+                                   ('zheshang', 'codex', 1, START.isoformat(), action_deadline.isoformat(),
+                                    'v1', json.dumps(advice)))
+            account = {'bank': 'zheshang', 'revision': 'v1'}
+            request_expiry_review(store, account, advice, action_deadline)
+            self.assertEqual(read(store.conn, 'codex')['pending'], [])
+            enqueue(store.conn, 'codex', '旧版建议到期', 0, 'live-expired:legacy', {'advice_id': 1})
+            self.assertEqual(pending_events(store.conn, 'codex', action_deadline), [])
+            request_expiry_review(store, account, advice, watch_deadline)
+            request_expiry_review(store, account, advice, watch_deadline)
+            events = read(store.conn, 'codex')['pending']
+            self.assertEqual([e['id'] for e in events], ['live-watch-expired:codex:zheshang:one-plan'])
 
     def test_new_route_requires_recent_bank_context_and_calculates_with_fee(self):
         condition = zoned_route('at_or_above')

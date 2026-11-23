@@ -32,6 +32,9 @@ def follow_up(value):
         if c['condition']=='at_or_below' and c['price_cny']==boundary and not c.get('order_key'):
             scope='现有' if path.get('exit_scope')=='plan' else '本批'
             reason=f'暂停加仓，核对挂单后按退出方案处理{scope}持仓'
+        elif rule := c.get('bank_breakout'):
+            trigger=f"突破{c['price_cny']:g}元/克后回踩"
+            reason=f"守住本行高位满{rule['hold_minutes']}分钟后复评"
         elif review := c.get('buy_review'):
             if zone := review.get('zone'):
                 interval=f"{zone['floor_cny']:g}–{c['price_cny']:g}元/克"
@@ -51,6 +54,8 @@ def follow_up(value):
     if not lines:lines.append('下一次操作前，先更新账户并重新分析。')
     if path.get('manual_resolution_required'):
         lines.append('先确认旧买单已撤销或修改，再考虑新买单。')
+    if watch := value.get('buy_watch'):
+        lines.append(f"加仓观察截止{time_text(watch['expires_at'])}。")
     lines.append('到价只重新分析，不自动买卖；成交后更新账户并核对止盈止损数量。')
     return '之后怎么做：\n'+'\n'.join(lines) if lines else ''
 

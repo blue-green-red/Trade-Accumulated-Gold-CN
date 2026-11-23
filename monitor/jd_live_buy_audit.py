@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 
 from .config import Settings
-from .jd_live_buy_watch import MAX_GAP, advance, utc_text, valid_route
+from .jd_live_buy_watch import MAX_GAP, advance, extended, utc_text, valid_route
 from .jd_live_conditions import stamp
 from .participation_audit import horizon_at, readonly
 from .trade_costs import number
@@ -56,19 +56,25 @@ def entries(value, published, expires, quotes, now):
     if not routes or blocking_checks(value):
         return immediate, unavailable('no_valid_buy_review')
 
+    watch_end = stamp((value.get('buy_watch') or {}).get('expires_at'))
+    deadlines = [watch_end if watch_end and extended(route) else expires for route in routes]
+    last_deadline = max(deadlines)
+    actionable = [p for p in quotes if published <= p[0] <= p[1] < last_deadline]
     states = [{} for _ in routes]
     too_expensive = False
     for point in actionable:
         for i, route in enumerate(routes):
+            if point[1] >= deadlines[i]:
+                continue
             previous = states[i]
             states[i] = advance(previous, route, point[0], point[2])
             if states[i].get('stage') == 'confirmed' and previous.get('stage') != 'confirmed':
                 if point[2] * GRAMS <= cash:
                     return immediate, point
                 too_expensive = True
-    if now < expires:
+    if now < last_deadline:
         return immediate, unavailable('pending')
-    if not complete_sampling(published, expires, actionable):
+    if not complete_sampling(published, last_deadline, actionable):
         return immediate, unavailable('confirmation_quotes_missing')
     return immediate, unavailable('insufficient_input_cash' if too_expensive else 'no_confirmation')
 
@@ -136,8 +142,16 @@ def report(conn, bank, model, limit, now):
                             'WHERE bank=? AND quoted_at>=? AND quoted_at<=? ORDER BY quoted_at',
                             (bank, utc_text(published), utc_text(now))).fetchall()
         points = [(stamp(q), stamp(o), buy, sell) for q, o, buy, sell in rows if stamp(o) <= now]
+        value = json.loads(raw)
+        watch = value.get('buy_watch')
+        if watch:
+            replacement = conn.execute("SELECT created_at FROM jd_live_advice WHERE bank=? AND analyst=? "
+                                       "AND id>? AND COALESCE(json_extract(advice_json,'$.buy_watch.id'),'')!=? "
+                                       "ORDER BY id LIMIT 1", (bank, model, advice_id, watch['id'])).fetchone()
+            if replacement:
+                watch['expires_at'] = utc_text(min(stamp(watch['expires_at']), stamp(replacement[0])))
         cases.append({'advice_id': advice_id, 'published_at': published.isoformat(),
-                      'horizons': evaluate(json.loads(raw), published, end, points, now)})
+                      'horizons': evaluate(value, published, end, points, now)})
     return {'bank': bank, 'model': model, 'as_of': now.isoformat(), 'grams': GRAMS, 'cases': cases}
 
 

@@ -4,6 +4,7 @@ import json
 
 from .ai_events import read,write
 from .controls import control
+from .jd_live_conditions import stamp
 from .jd_live_feedback import plan_signature
 from .jd_live_semantics import plan_terms,same_plan
 
@@ -27,6 +28,19 @@ def request_expiry_review(store,account,advice,now):
         if switch.get('changed_at') and advice['created_at']<=switch['changed_at']:return
         latest=conn.execute('SELECT MAX(id) FROM jd_live_advice WHERE bank=? AND analyst=?',(bank,model)).fetchone()[0]
         if latest!=advice['id']:return
+        from .jd_live_buy_watch import observation_only
+        observation=advice.get('buy_watch')
+        if observation and observation_only(advice):
+            if now<stamp(observation['expires_at']):return
+            event_id=f'live-watch-expired:{model}:{bank}:{observation["id"]}'
+            events=read(conn,model)
+            if event_id not in events['covered'] and not any(e['id']==event_id for e in events['pending']):
+                events['pending'].append({'id':event_id,'reason':f'真实账户观察到期复评：{PRODUCTS[bank][1]}',
+                    'min_gap_minutes':0,'observed_at':now.isoformat(),
+                    'data':{'bank':bank,'snapshot_revision':account['revision'],'advice_id':advice['id'],
+                            'plan_id':observation['id']}})
+                write(conn,model,events)
+            return
         key=f'live-expiry-review:{model}:{bank}:{switch["generation"]}'
         row=conn.execute('SELECT value FROM state WHERE key=?',(key,)).fetchone()
         watch=json.loads(row[0]) if row else {}

@@ -1,11 +1,14 @@
 """Staged, read-only buy reviews over timestamped bank quotes."""
 import json
+from hashlib import sha256
 from datetime import timedelta, timezone
+from statistics import median
 
 from .jd_live_conditions import condition_key, stamp
 from .trade_costs import number
 
 MAX_GAP = timedelta(minutes=3)
+WATCH_WINDOW = timedelta(hours=1)
 QUOTE_SCHEMA = """CREATE TABLE IF NOT EXISTS jd_live_quote_samples (
     bank TEXT NOT NULL, quoted_at TEXT NOT NULL, observed_at TEXT NOT NULL,
     buy_price_cny REAL NOT NULL, sell_price_cny REAL NOT NULL,
@@ -91,6 +94,121 @@ def valid_route(condition, minimum=None):
     return recovery <= trigger <= cap
 
 
+def extended(condition):
+    return bool(condition.get('bank_breakout') or (condition.get('buy_review') or {}).get('zone'))
+
+
+def observation_only(advice):
+    return advice['action'] in ('wait', 'hold') and not any(
+        o['action'] in ('cancel', 'replace') for o in advice.get('order_management', []))
+
+
+def eligible(condition, minimum=None):
+    return (not condition.get('checks') and bool(condition.get('bank_breakout'))) or valid_route(condition, minimum)
+
+
+def active_window(advice, account):
+    from .jd_live_semantics import blocking_checks
+    if (not account.get('connected') or advice.get('snapshot_revision') != account.get('revision')
+            or advice.get('_path_pause') or blocking_checks(advice)):
+        return False
+    path = advice.get('position_path') or {}
+    boundary = path.get('boundary_price_cny')
+    return (not path.get('checks') and not path.get('manual_resolution_required')
+            and (boundary is None or number((account.get('quote') or {}).get('sell_price_cny')) is not None))
+
+
+def watch_id(advice):
+    return (advice.get('buy_watch') or {}).get('id', advice['id'])
+
+
+def watch_deadline(advice, condition):
+    watch = advice.get('buy_watch') if extended(condition) else None
+    return stamp((watch or {}).get('expires_at') or advice.get('expires_at'))
+
+
+def set_watch(conn, bank, analyst, value, source, now, minimum):
+    """Save a bounded observation plan and retain its origin across identical advice."""
+    from .controls import control
+    from .trading_hours import trading_session
+    session = trading_session(now)
+    if (not session['is_open'] or source.get('status') != 'fresh'
+            or (source.get('quote') or {}).get('status') != 'fresh'):
+        return
+    generation = control(conn, analyst)['generation']
+    old = conn.execute('SELECT snapshot_revision,advice_json FROM jd_live_advice WHERE bank=? AND analyst=? '
+                       'ORDER BY id DESC LIMIT 1', (bank, analyst)).fetchone()
+    previous = json.loads(old[1]) if old and old[0] == source['revision'] else {}
+    prior_watch = previous.get('buy_watch') or {}
+    if prior_watch.get('generation') != generation:
+        previous, prior_watch = {}, {}
+    conditions = value['review_conditions']
+    evidence = source.get('recent_bank_quotes') or {}
+    invalidated = (value.get('reassessment') or {}).get('thesis_status') == 'invalidated'
+    if invalidated:
+        return
+    if (value['action'] in ('wait', 'hold') and evidence.get('status') == 'available' and len(conditions) < 4
+            and not any(c['condition'] == 'at_or_above' and valid_route(c, minimum) for c in conditions)):
+        prior = next((c for c in previous.get('review_conditions', []) if c.get('bank_breakout')), None)
+        if prior and stamp(prior_watch.get('expires_at')) > now:
+            conditions.append(prior)
+        else:
+            windows = evidence['buy_price_windows_15m']
+            high = max(window['high'] for window in windows)
+            # Use observed 15-minute ranges for the retest tolerance around the bank high.
+            tolerance = max(0.01, round(median(w['high'] - w['low'] for w in windows) / 2, 2))
+            conditions.append({'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': high,
+                'bank_breakout': {'retest_ceiling_cny': round(high + tolerance, 2), 'hold_minutes': 3},
+                'reason': '本行买价突破近期高位并回踩守稳后，按当时的报价重新评估。', 'checks': []})
+        generated = conditions[-1]
+        conditions[:] = [c for c in conditions[:-1] if c.get('buy_review') or condition_key(c) != condition_key(generated)]
+        conditions.append(generated)
+    terms = []
+    for c in conditions:
+        if not extended(c) or not eligible(c, minimum):
+            continue
+        review = c.get('buy_review') or {}
+        zone = review.get('zone') or {}
+        terms.append([condition_key(c), *[review.get(k) for k in ('grams', 'recovery_price_cny',
+                      'hold_minutes', 'max_buy_price_cny')], *[zone.get(k) for k in ('floor_cny', 'weak_target_cny',
+                      'risk_exit_cny')], c.get('bank_breakout')])
+    if not terms:
+        return
+    terms.sort(key=lambda item: item[0])
+    path = value.get('position_path') or {}
+    fingerprint = sha256(json.dumps([value['action'], path.get('boundary_price_cny'), terms],
+                                    sort_keys=True).encode()).hexdigest()[:24]
+    if prior_watch.get('signature') == fingerprint:
+        value['buy_watch'] = prior_watch
+        return
+    duration = max(WATCH_WINDOW, timedelta(minutes=value['valid_for_minutes']))
+    close = stamp(session.get('close_at')) or now + duration
+    value['buy_watch'] = {'id': f'{generation}-{fingerprint}-{int(now.timestamp()*1_000_000)}', 'signature': fingerprint,
+                          'starts_at': utc_text(now),
+                          'expires_at': utc_text(min(now + duration, close)),
+                          'generation': generation}
+
+
+def advance_breakout(state, condition, at, buy):
+    threshold = condition['price_cny']
+    stage = state.get('stage')
+    if not stage:
+        if buy > threshold:
+            return {**state, 'stage': 'touched', 'peak': buy, 'touched_at': utc_text(at)}
+        return state
+    if buy < threshold:
+        return {**state, 'stage': 'pullback_lost', 'hold_since': None}
+    rule = condition['bank_breakout']
+    if stage == 'touched':
+        if buy > rule['retest_ceiling_cny'] or buy >= state['peak']:
+            return {**state, 'peak': max(state['peak'], buy)}
+        return {**state, 'stage': 'holding', 'hold_since': utc_text(at)}
+    since = stamp(state.get('hold_since'))
+    if at - since >= timedelta(minutes=rule['hold_minutes']):
+        return {**state, 'stage': 'confirmed', 'confirmed_at': utc_text(at)}
+    return state
+
+
 def advance(state, condition, at, buy):
     """Require ordered quotes with no stale gap across the setup and its hold."""
     previous_at = stamp(state.get('last_at'))
@@ -99,6 +217,8 @@ def advance(state, condition, at, buy):
     if previous_at and at - previous_at > MAX_GAP:
         state = {}
     state = {**state, 'last_at': utc_text(at), 'last_price_cny': buy}
+    if condition.get('bank_breakout'):
+        return advance_breakout(state, condition, at, buy)
     review = condition['buy_review']
     trigger = condition['price_cny']
     recovery = review['recovery_price_cny']
@@ -147,15 +267,36 @@ def advance(state, condition, at, buy):
 def pending_events(conn, model, now):
     """Ignore old collector touch events and confirmations from superseded advice."""
     from .ai_events import read, write
+    from .jd_live_readonly import accounts
 
     def obsolete(event):
         event_id, data = event['id'], event.get('data') or {}
-        if event_id.startswith('live-price:') and data.get('buy_review'):
-            return True
-        if event_id.startswith('live-buy-confirmed:'):
-            latest = conn.execute('SELECT id,expires_at FROM jd_live_advice WHERE bank=? AND analyst=? '
+        if event_id.startswith('live-price:'):
+            if data.get('buy_review'):
+                return True
+            if data.get('advice_id') and data.get('condition_key'):
+                row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
+                if row:
+                    return any((c.get('bank_breakout') or c.get('buy_review')) and
+                               condition_key(c) == data['condition_key']
+                               for c in json.loads(row[0]).get('review_conditions', []))
+        if event_id.startswith('live-expired:') and data.get('advice_id'):
+            row = conn.execute('SELECT advice_json FROM jd_live_advice WHERE id=?', (data['advice_id'],)).fetchone()
+            old = json.loads(row[0]) if row else {}
+            return bool(old.get('buy_watch') and observation_only(old))
+        if event_id.startswith(('live-buy-confirmed:', 'live-watch-expired:')):
+            latest = conn.execute('SELECT id,expires_at,advice_json,snapshot_revision FROM jd_live_advice WHERE bank=? AND analyst=? '
                                   'ORDER BY id DESC LIMIT 1', (data.get('bank'), model)).fetchone()
-            return not latest or latest[0] != data.get('advice_id') or now >= stamp(latest[1])
+            if not latest:
+                return True
+            watch = json.loads(latest[2]).get('buy_watch') or {}
+            if data.get('plan_id'):
+                if (watch.get('id') != data['plan_id']
+                        or event_id.startswith('live-buy-confirmed:') and now >= stamp(watch['expires_at'])):
+                    return True
+                current = accounts(conn, now, include_advice=False, selected_bank=data['bank'])
+                return not current or current[0].get('revision') != latest[3]
+            return latest[0] != data.get('advice_id') or now >= stamp(latest[1])
         return False
 
     pending = read(conn, model)['pending']
@@ -177,13 +318,19 @@ def request(store, account, advice, now, point):
     from .jd_live_conditions import read_watch
     from .jd_live_readonly import PRODUCTS
 
-    at, observed, buy, _ = point
-    created, expires = stamp(advice.get('created_at')), stamp(advice.get('expires_at'))
-    if (advice.get('action_status') != 'current' or advice.get('_path_pause')
-            or not created or not expires or not created <= at <= observed < expires):
+    at, observed, buy, sell = point
+    watch = advice.get('buy_watch') or {}
+    created = stamp(watch.get('starts_at') or advice.get('created_at'))
+    boundary = (advice.get('position_path') or {}).get('boundary_price_cny')
+    boundary_hit = watch and boundary is not None and sell <= boundary
+    if (not created or not created <= at <= observed
+            or not (active_window(advice, account) or boundary_hit)):
         return
     bank, model = account['bank'], advice['analyst']
-    routes = [c for c in advice.get('review_conditions', []) if valid_route(c, account.get('minimum_buy_grams'))]
+    routes = [c for c in advice.get('review_conditions', [])
+              if eligible(c, account.get('minimum_buy_grams'))
+              and (watch and extended(c) or advice.get('action_status') == 'current')
+              and (deadline := watch_deadline(advice, c)) and observed < deadline]
     if not routes:
         return
     conn = store.conn
@@ -191,7 +338,8 @@ def request(store, account, advice, now, point):
         conn.execute('BEGIN IMMEDIATE')
         switch = control(conn, model)
         changed = stamp(switch.get('changed_at'))
-        if not active(conn, model) or (changed and created <= changed):
+        if (not active(conn, model) or (changed and created <= changed)
+                or (watch and watch['generation'] != switch['generation'])):
             return
         latest = conn.execute('SELECT id FROM jd_live_advice WHERE bank=? AND analyst=? ORDER BY id DESC LIMIT 1',
                               (bank, model)).fetchone()
@@ -199,19 +347,28 @@ def request(store, account, advice, now, point):
             return
         key = f'live-buy-watch:{model}:{bank}'
         current = read_watch(conn, key)
-        if current.get('advice_id') != advice['id'] or current.get('generation') != switch['generation']:
-            current = {'advice_id': advice['id'], 'generation': switch['generation'], 'routes': {}}
+        identity = watch_id(advice)
+        if current.get('plan_id', current.get('advice_id')) != identity or current.get('generation') != switch['generation']:
+            current = {'advice_id': advice['id'], 'plan_id': identity, 'generation': switch['generation'], 'routes': {}}
+        if current.get('invalidated_at'):
+            return
+        if boundary_hit:
+            current['invalidated_at'] = utc_text(at)
+            routes = []
         updated = {}
         confirmed = []
         for condition in routes:
             fingerprint = condition_key(condition)
             previous = current['routes'].get(fingerprint, {})
             step = advance(previous, condition, at, buy)
-            review = condition['buy_review']
+            review = condition.get('buy_review')
             if previous.get('stage') == 'confirmed' and at > stamp(previous['last_at']):
-                if buy > review['max_buy_price_cny']:
+                if condition.get('bank_breakout') and buy < condition['price_cny']:
+                    step = {**previous, 'stage': 'pullback_lost', 'last_at': utc_text(at),
+                            'last_price_cny': buy, 'confirmed_at': None}
+                elif review and buy > review['max_buy_price_cny']:
                     step = {**previous, 'stage': 'above_cap', 'last_at': utc_text(at), 'last_price_cny': buy}
-                elif review.get('zone') and buy < review['recovery_price_cny']:
+                elif review and review.get('zone') and buy < review['recovery_price_cny']:
                     step = {**previous, 'stage': 'retest', 'last_at': utc_text(at),
                             'last_price_cny': buy, 'hold_since': None, 'confirmed_at': None}
                     if buy < review['zone']['floor_cny']:
@@ -221,11 +378,12 @@ def request(store, account, advice, now, point):
                 confirmed.append({'condition_key': fingerprint, 'condition': condition['condition'],
                                   'threshold_cny': condition['price_cny'], 'touched_at': step['touched_at'],
                                   'hold_since': step['hold_since'], 'confirmed_at': step['confirmed_at'],
-                                  'price_cny': buy, 'buy_review': condition['buy_review']})
-        if updated == current['routes']:
+                                  'price_cny': buy,
+                                  **({'buy_review': review} if review else {'bank_breakout': condition['bank_breakout']})})
+        if updated == current['routes'] and not current.get('invalidated_at'):
             return
         current['routes'] = updated
-        event_id = f'live-buy-confirmed:{model}:{bank}:{advice["id"]}'
+        event_id = f'live-buy-confirmed:{model}:{bank}:{identity}'
         events = read(conn, model)
         existing = next((e for e in events['pending'] if e['id'] == event_id), None)
         if existing:
@@ -239,10 +397,11 @@ def request(store, account, advice, now, point):
                 write(conn, model, events)
         elif confirmed and event_id not in events['covered']:
             events['pending'].append({'id': event_id,
-                'reason': f'真实账户买入候选已企稳，重新评估：{PRODUCTS[bank][1]}',
+                'reason': f'真实账户观察条件已企稳，重新评估：{PRODUCTS[bank][1]}',
                 'min_gap_minutes': 0, 'observed_at': now.isoformat(),
                 'data': {'bank': bank, 'advice_id': advice['id'], 'price_cny': buy,
-                         'quoted_at': utc_text(at), 'routes': confirmed}})
+                         'quoted_at': utc_text(at), 'routes': confirmed,
+                         **({'plan_id': watch['id']} if watch else {})}})
             write(conn, model, events)
         conn.execute('INSERT INTO state(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) '
                      'DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',

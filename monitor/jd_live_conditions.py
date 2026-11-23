@@ -71,7 +71,7 @@ def validate_structure(value,source,now,minimum_buy_grams=None):
                 checks.append('买入复评须使用本行买价，且不关联已有挂单')
             if buy_review['max_buy_price_cny'] < buy_review['recovery_price_cny']:
                 checks.append('买价上限不能低于企稳观察价')
-            if buy_review['hold_minutes'] >= value['valid_for_minutes']:
+            if not buy_review.get('zone') and buy_review['hold_minutes'] >= value['valid_for_minutes']:
                 checks.append('企稳观察时长须短于本轮有效期')
             if minimum_buy_grams is not None and buy_review['grams'] < minimum_buy_grams:
                 checks.append(f'买入复评数量须至少{minimum_buy_grams:g}克')
@@ -122,7 +122,7 @@ def read_watch(conn,key):
     return json.loads(row[0]) if row else {}
 
 
-def condition_state(conn,account,advice,condition,now):
+def condition_state(conn,account,advice,condition,now,latest=True):
     """Derived display status, including historical triggers; never schedules work from a GET."""
     from .jd_live_readonly import age
     from .trading_hours import trading_session
@@ -136,7 +136,16 @@ def condition_state(conn,account,advice,condition,now):
             and not condition.get('order_key') and not condition.get('buy_review')):
         result['status']='review_required';return result
     boundary_review=advice.get('_path_pause') and advice.get('lifecycle_status')=='current' and condition['condition']=='at_or_below' and condition['price_cny']==path_boundary and not condition.get('order_key')
-    if advice.get('action_status',advice['status'])!='current' and not boundary_review:result['status']=advice.get('action_status',advice['status']);return result
+    from .jd_live_buy_watch import active_window, eligible, extended, watch_deadline, watch_id
+    independent=latest and advice.get('buy_watch') and extended(condition)
+    if independent:
+        result['expires_at']=watch_deadline(advice,condition).isoformat()
+        if now>=watch_deadline(advice,condition):result['status']='expired';return result
+        if not active_window(advice,account):
+            result['status']=advice.get('action_status') if advice.get('action_status') in ('account_changed','data_unavailable') else 'review_required'
+            return result
+    if not independent and advice.get('action_status',advice['status'])!='current' and not boundary_review:
+        result['status']=advice.get('action_status',advice['status']);return result
     if condition.get('checks'):result['status']='review_required';return result
     if not trading_session(now)['is_open']:result['status']='market_closed';return result
     quote=account.get('quote') or {}
@@ -153,12 +162,14 @@ def condition_state(conn,account,advice,condition,now):
             result['status']='order_inactive';return result
     from .ai_events import read
     pending=read(conn,advice['analyst'])['pending']
-    if condition.get('buy_review'):
-        from .jd_live_buy_watch import valid_route
+    if condition.get('buy_review') or condition.get('bank_breakout'):
         current=read_watch(conn,f'live-buy-watch:{advice["analyst"]}:{account["bank"]}')
-        stage=current.get('routes',{}).get(result['condition_key'],{}) if current.get('advice_id')==advice['id'] else {}
-        event_id=f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{advice["id"]}'
-        status='monitoring' if valid_route(condition,account.get('minimum_buy_grams')) else 'review_required'
+        identity=watch_id(advice)
+        stage=current.get('routes',{}).get(result['condition_key'],{}) if latest and current.get('plan_id',current.get('advice_id'))==identity else {}
+        event_id=f'live-buy-confirmed:{advice["analyst"]}:{account["bank"]}:{identity}'
+        status='monitoring' if eligible(condition,account.get('minimum_buy_grams')) else 'review_required'
+        if current.get('plan_id')==identity and current.get('invalidated_at'):
+            status='review_required'
         if stage.get('stage')=='above_cap':status='price_limit_exceeded'
         if stage.get('stage')=='pullback_lost':status='pullback_lost'
         if stage.get('stage')=='confirmed':
@@ -188,7 +199,7 @@ def monitor_prices(store,account,advice,now):
     from .controls import active,control
     from .jd_live_readonly import PRODUCTS
     for condition in advice.get('review_conditions',[]):
-        if condition.get('buy_review'):continue
+        if condition.get('buy_review') or condition.get('bank_breakout'):continue
         state=condition_state(store.conn,account,advice,condition,now)
         if state['status'] not in ('monitoring','latched','queued','reviewed'):continue
         quote=account['quote'];price=quote.get(condition['quote_side']+'_price_cny')

@@ -191,7 +191,7 @@ def privacy_ok(content, context):
                  "stop_price", "target_price", "risk_exit_cny", "stop_loss_cny", "take_profit_cny", "total_grams", "grams",
                  "gold_value_cny", "gross_assets_cny", "net_assets_cny", "risk_budget_cny", "gold_down_1pct_net_loss_cny",
                  "entry_price_cny", "target_price_cny", "boundary_price_cny", "input_grams", "budget_cny",
-                 "floor_cny", "weak_target_cny", "recovery_price_cny", "max_buy_price_cny",
+                 "floor_cny", "weak_target_cny", "recovery_price_cny", "max_buy_price_cny", "retest_ceiling_cny",
                  "available_cash_cny", "reference_amount_cny", "reference_quote_cny", "input_participation_cash_cny"}
     def private_numbers(value):
         if isinstance(value, dict):

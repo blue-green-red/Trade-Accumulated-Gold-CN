@@ -223,9 +223,9 @@ class BankMoveReviewTests(unittest.TestCase):
         self.assertIn('追加须用最新报价、仓位和独立依据',PROMPT)
         self.assertIn('比较一次参与、分批、等待在先涨、再跌和失效时的扣费净值',COMPARISON_PROMPT)
         self.assertIn('不要求确认底部、趋势反转或多项利好同时出现',PROMPT)
-        self.assertIn('用recent_bank_quotes的本行近期高低与波动定区间',PROMPT)
-        self.assertIn('分别评估浅回调回升、突破后回踩',PROMPT)
-        self.assertIn('未采用的路径给理由，可只观察或等待',PROMPT)
+        self.assertIn('用recent_bank_quotes的本行高低与波动定回调区及突破价',PROMPT)
+        self.assertIn('分别评估浅回调、突破后回踩',PROMPT)
+        self.assertIn('未采用的路径写原因',PROMPT)
         self.assertIn('不强制交易',PROMPT)
 
     def test_international_and_two_bank_triggers_are_covered_by_one_model_call(self):
