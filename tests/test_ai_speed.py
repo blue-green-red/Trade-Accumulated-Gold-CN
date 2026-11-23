@@ -143,6 +143,8 @@ class SpeedTests(unittest.TestCase):
         original = self.a._run_process
         notice = json.dumps({'type': 'error', 'message':
             'Reconnecting... 2/5 (stream disconnected before completion: tls handshake eof)'}) + '\n'
+        notice += json.dumps({'type': 'error', 'message':
+            'Reconnecting... waiting for network (Connection failed: error sending request)'}) + '\n'
 
         def process(cmd, **kwargs):
             consume = kwargs['on_stdout']
@@ -153,7 +155,7 @@ class SpeedTests(unittest.TestCase):
 
         self.a._run_process = process
         result = self.a.analyze(self.ctx, 'test', run_id='reconnect')
-        self.assertEqual(result['_performance']['reconnect_events'], 1)
+        self.assertEqual(result['_performance']['reconnect_events'], 2)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual([row[0] for row in self.store.conn.execute('SELECT status FROM ai_runs')], ['completed'])
 

@@ -8,7 +8,6 @@ import subprocess
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
 import tempfile
 import time
@@ -90,7 +89,7 @@ class Events:
                         if delta<0:raise RuntimeError('Codex usage counters regressed')
                         self.usage[key]=self.usage.get(key,0)+delta
                 self.total_usage=dict(u)
-            if kind=='error' and re.match(r'^Reconnecting\.\.\. [0-9]+/[0-9]+(?:\s|$)', str(event.get('message') or '')):
+            if kind=='error' and str(event.get('message') or '').startswith('Reconnecting... '):
                 # The CLI is already recovering this stream. Wait for its terminal result.
                 self.reconnect_events+=1
                 continue
