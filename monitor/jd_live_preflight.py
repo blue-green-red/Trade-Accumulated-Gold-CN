@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 import time
 
-from .jd_live_readonly import accounts, age
+from .jd_live_readonly import ELECTRONIC_ACCOUNT_SOURCES, accounts, age
 from .jd_live_sync import request_refresh
 
 MAX_INPUT_AGE = 120
@@ -22,7 +22,7 @@ def missing_inputs(conn, now=None):
         times = a.get('component_times') or {}
         if not a['connected'] or not 0 <= age(times.get('account') or a.get('fetched_at'), now) <= MAX_INPUT_AGE:
             needs.append('account')
-        if a.get('cash_cny') is None or (a.get('cash_source') == 'jd_electronic_account_api' and
+        if a.get('cash_cny') is None or (a.get('cash_source') in ELECTRONIC_ACCOUNT_SOURCES and
                 (a.get('coverage', {}).get('cash_balance') != 'available' or
                  not 0 <= age(times.get('cash_balance'), now) <= MAX_INPUT_AGE)):
             needs.append('cash')

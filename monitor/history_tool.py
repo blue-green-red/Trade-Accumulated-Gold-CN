@@ -3,6 +3,7 @@
 Standalone entry point deliberately avoids importing project settings or reading .env.
 """
 import argparse
+from contextlib import closing
 from datetime import datetime,timezone
 import json
 from pathlib import Path
@@ -70,7 +71,7 @@ class HistoryReader:
         where='account IN ('+','.join('?' for _ in accounts)+') AND julianday('+clock+')<=julianday(?)'
         values=[*accounts,end.isoformat()]
         if start:where+=' AND julianday('+clock+')>=julianday(?)';values.append(start.isoformat())
-        with sqlite3.connect(self.db.as_uri()+'?mode=ro',uri=True,timeout=3) as conn:
+        with closing(sqlite3.connect(self.db.as_uri()+'?mode=ro',uri=True,timeout=3)) as conn:
             conn.row_factory=sqlite3.Row;conn.execute('PRAGMA query_only=ON')
             query_start=time.monotonic()
             conn.set_progress_handler(lambda: 1 if time.monotonic()-query_start>2 else 0,10000)
@@ -113,6 +114,8 @@ def serve(reader,source=sys.stdin,target=sys.stdout,page_reader=None):
 
 
 if __name__=='__main__':
+    sys.stdin.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8', newline='\n')
     parser=argparse.ArgumentParser();parser.add_argument('--db',required=True);parser.add_argument('--model',choices=('claude','codex'),required=True)
     parser.add_argument('--as-of',required=True);parser.add_argument('--max-queries',type=int,default=6);parser.add_argument('--audit')
     parser.add_argument('--max-page-fetches',type=int,default=0);parser.add_argument('--page-audit');parser.add_argument('--page-cache')

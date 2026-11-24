@@ -409,3 +409,29 @@ export async function refreshLive() {
     await loadPage("strategies", { force: true });
   });
 }
+
+export async function openDesktopReview(bank, action) {
+  let result;
+  await runAction("desktop-review", async () => {
+    const signal = AbortSignal.timeout(40000);
+    const { value } = await requestJSON("/api/desktop-review", {
+      method: "POST",
+      body: { bank, action },
+      signal,
+    });
+    const url = "/api/desktop-review?id=" + encodeURIComponent(value.id);
+    while (!signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const { value: status } = await requestJSON(url, { signal });
+      if (status.status === "opened") {
+        result = status;
+        return;
+      }
+      if (status.status === "unverified")
+        throw new Error("未能确认页面已打开。请在京东返回对应银行的积存金首页后重试。");
+      if (status.status === "expired") break;
+    }
+    throw new Error("打开请求已超时，请检查京东客户端和本地连接层。");
+  });
+  return result;
+}

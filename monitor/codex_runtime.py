@@ -1,9 +1,8 @@
 """Stable, bounded Codex sessions and observable CLI execution; no trading side effects."""
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime
 import hashlib
-import fcntl
 import subprocess
 import json
 import os
@@ -14,6 +13,7 @@ import time
 
 from .config import BJ
 from .controls import control,active
+from .runtime_resources import _release, _take
 from .store import utc_now
 from .ai_inputs import compact_context,news_key
 
@@ -39,14 +39,19 @@ def workspace(settings,analyst,optimized):
         with tempfile.TemporaryDirectory(prefix='gold-ai-codex-') as name: yield Path(name)
         return
     namespace=hashlib.sha256(str(settings.db_path.resolve()).encode()).hexdigest()[:16]
-    root=Path(tempfile.gettempdir())/f'gold-ai-runtime-{os.getuid()}-{namespace}'
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    owner = str(uid) if uid is not None else "windows"
+    root=Path(tempfile.gettempdir())/f'gold-ai-runtime-{owner}-{namespace}'
     if root.is_symlink(): raise ValueError('AI runtime directory must not be a symlink')
     root.mkdir(mode=0o700,exist_ok=True)
-    if root.stat().st_uid!=os.getuid(): raise ValueError('AI runtime directory owner mismatch')
-    os.chmod(root,0o700)
+    if uid is not None:
+        if root.stat().st_uid != uid: raise ValueError('AI runtime directory owner mismatch')
+        os.chmod(root,0o700)
     work=root/analyst
     if work.is_symlink(): raise ValueError('AI workspace must not be a symlink')
-    work.mkdir(mode=0o700,exist_ok=True);os.chmod(work,0o700)
+    work.mkdir(mode=0o700,exist_ok=True)
+    if uid is not None:
+        os.chmod(work,0o700)
     yield work
 
 
@@ -111,22 +116,27 @@ def choose_session(previous,fingerprint,generation,settings,now):
 @contextmanager
 def serial_execution(analyst):
     """Serialize CLI jobs across the daemon and isolated benchmarks on low-RAM hosts."""
-    path=Path(tempfile.gettempdir())/f'gold-codex-{os.getuid()}.lock'
-    fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    owner = str(uid) if uid is not None else "windows"
+    path=Path(tempfile.gettempdir())/f'gold-codex-{owner}.lock'
+    if path.is_symlink():
+        raise ValueError("Codex lock must not be a symbolic link")
+    fd=os.open(path,os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0),0o600)
     start=time.monotonic()
+    acquired = False
     try:
-        if os.fstat(fd).st_uid!=os.getuid(): raise ValueError('Codex lock owner mismatch')
-        while True:
-            try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);break
-            except BlockingIOError:
-                if time.monotonic()-start>900:raise TimeoutError('Codex queue timeout')
-                if hasattr(analyst,'store'):
-                    with sqlite3.connect(analyst.settings.db_path) as conn:
-                        if not active(conn,analyst.analyst,getattr(analyst,'_generation',None)):raise RuntimeError('模型已暂停')
-                time.sleep(.1)
+        if uid is not None and os.fstat(fd).st_uid != uid: raise ValueError('Codex lock owner mismatch')
+        while not (acquired := _take(fd)):
+            if time.monotonic()-start>900:raise TimeoutError('Codex queue timeout')
+            if hasattr(analyst,'store'):
+                with closing(sqlite3.connect(analyst.settings.db_path)) as conn:
+                    if not active(conn,analyst.analyst,getattr(analyst,'_generation',None)):raise RuntimeError('模型已暂停')
+            time.sleep(.1)
         yield round(time.monotonic()-start,3)
     finally:
-        fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
+        if acquired:
+            _release(fd)
+        os.close(fd)
 
 
 def run(analyst,context,usage):
@@ -158,9 +168,10 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
     generation=getattr(analyst,'_generation',0)
     previous={}
     if not persistent and hasattr(analyst,'store'):
-        with sqlite3.connect(settings.db_path,timeout=10) as conn:write_state(conn,key,{})
+        with closing(sqlite3.connect(settings.db_path,timeout=10)) as conn, conn:
+            write_state(conn,key,{})
     if persistent:
-        with sqlite3.connect(settings.db_path,timeout=10) as conn:
+        with closing(sqlite3.connect(settings.db_path,timeout=10)) as conn:
             generation=control(conn,name)['generation'];previous=read_state(conn,key)
     schema=frozen_request['schema'] if frozen_request else strict_schema(analyst.result_type(context).model_json_schema())
     from .jd_live_advice import prompt_for as live_advice_prompt
@@ -188,13 +199,14 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
                  'prompt_chars':len(prompt),'prepare_seconds':round(time.monotonic()-prepare_clock,4),'session_turn':session.get('turns',0)+1 if session else 1}
     usage['performance']=performance
     if getattr(analyst,'_active_run_id',None) and hasattr(analyst,'store'):
-        with sqlite3.connect(settings.db_path,timeout=10) as conn:
+        with closing(sqlite3.connect(settings.db_path,timeout=10)) as conn, conn:
             write_state(conn,'ai_model_input:'+analyst._active_run_id+':'+name,packed)
     try:
         with workspace(settings,name,optimized) as work:
             schema_path=work/'schema.json';out_path=work/'out.json'
             text=dumps(schema)
-            if not schema_path.exists() or schema_path.read_text()!=text:schema_path.write_text(text)
+            if not schema_path.exists() or schema_path.read_text(encoding="utf-8")!=text:
+                schema_path.write_text(text, encoding="utf-8")
             out_path.unlink(missing_ok=True)  # never parse the previous round's output
             cmd=[settings.codex_cli,*(['--search'] if settings.ai_max_searches>0 else []),'exec',
                  '-s','read-only','--ignore-user-config','--ignore-rules','--color','never','-C',str(work)]
@@ -215,20 +227,21 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
             with history_session(analyst,context,usage) as history:
                 if history:cmd+=history['codex']
                 if session:cmd+=[session['id']]
-                cmd.append(prompt)
+                cmd.append("-")
                 from net_proxy import model_environment
-                env=model_environment({k:v for k,v in os.environ.items() if k!='CLAWX_JR_API_KEY'})
+                private_keys = {"CLAWX_JR_API_KEY", "PUSHPLUS_TOKEN", "SERVERCHAN_SENDKEY", "GOLD_WEB_PASSWORD"}
+                env=model_environment({k:v for k,v in os.environ.items() if k not in private_keys})
                 env.setdefault('HOME',os.path.expanduser('~'))
-                proc=analyst._run_process(cmd,cwd=str(work),env=env,stdin=subprocess.DEVNULL,
-                    capture_output=True,text=True,timeout=CODEX_TIMEOUT_SECONDS,on_stdout=events.feed)
+                proc=analyst._run_process(cmd,cwd=str(work),env=env,stdin=subprocess.PIPE,input_text=prompt,
+                    capture_output=True,text=True,encoding="utf-8",timeout=CODEX_TIMEOUT_SECONDS,on_stdout=events.feed)
             record(usage,"cli_response",{"stdout":proc.stdout,"stderr":proc.stderr,"returncode":proc.returncode})
             events.feed(proc.stdout,final=True)
             if proc.returncode!=0 or not out_path.exists():raise RuntimeError(f'Codex exit {proc.returncode}: no valid final output')
-            raw_output=out_path.read_text()
+            raw_output=out_path.read_text(encoding="utf-8")
             record(usage,"structured_response",raw_output)
             parsed=analyst.result_type(context).model_validate_json(raw_output)
         if persistent:
-            with sqlite3.connect(settings.db_path,timeout=10) as conn:
+            with closing(sqlite3.connect(settings.db_path,timeout=10)) as conn, conn:
                 if active(conn,name,generation) and events.thread:
                     write_state(conn,key,{'id':events.thread,'fingerprint':fingerprint,'generation':generation,
                         'day':now.astimezone(BJ).date().isoformat(),'started_at':session['started_at'] if session else now.isoformat(),
@@ -236,7 +249,8 @@ def run_locked(analyst,context,usage,*,frozen_request=None):
         return parsed.research_notes,[s.model_dump() for s in parsed.sources],parsed
     except Exception:
         if persistent:
-            with sqlite3.connect(settings.db_path,timeout=10) as conn:write_state(conn,key,{})
+            with closing(sqlite3.connect(settings.db_path,timeout=10)) as conn, conn:
+                write_state(conn,key,{})
         raise
     finally:
         performance.update({'cli_seconds':round(time.monotonic()-events.start,3),

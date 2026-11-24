@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,14 @@ from monitor.jd_live_readonly import ensure_schema
 from monitor.store import Store
 
 START = datetime(2026, 11, 16, 2, tzinfo=timezone.utc)
+
+
+@contextmanager
+def temporary_store(name):
+    with TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / name)
+        with closing(store.conn):
+            yield store
 
 
 def route(direction='at_or_below'):
@@ -59,9 +68,7 @@ class BuyWatchTests(unittest.TestCase):
         return [point(minute, moves.get(minute, 800)) for minute in range(130)]
 
     def test_market_breakout_baseline_uses_independent_confirmations_and_paid_exit_side(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'market-breakout.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('market-breakout.db') as store:
             ensure_schema(store.conn)
             for quote in self.market_breakout_points():
                 record(store.conn, 'zheshang', quote)
@@ -106,9 +113,7 @@ class BuyWatchTests(unittest.TestCase):
                          [({}, 'sampling_gap', None)])
 
     def test_market_earlier_high_replays_after_near_failure_and_excludes_late_evidence(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'earlier-breakout.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('earlier-breakout.db') as store:
             ensure_schema(store.conn)
             # Earlier same-bank buy highs were already received before the nearby break.
             for minute, price in ((-120, 802), (-100, 803), (-80, 802)):
@@ -153,9 +158,7 @@ class BuyWatchTests(unittest.TestCase):
     def test_lost_pullback_exposes_recovery_evidence_but_never_confirms_again(self):
         from monitor.jd_live_readonly import review_condition_input
 
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'reclaim.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('reclaim.db') as store:
             ensure_schema(store.conn)
             condition = zoned_route()
             expires = (START + timedelta(minutes=30)).isoformat()
@@ -245,9 +248,7 @@ class BuyWatchTests(unittest.TestCase):
         self.assertEqual(self.advance_all(prices, condition=condition), 'holding')
 
     def test_bank_watch_can_rearm_after_a_failed_confirmation_without_duplicate_analysis(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             expires = (START + timedelta(minutes=30)).isoformat()
             condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
@@ -277,9 +278,7 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(observe([(9, 804.9), (10, 806.3), (11, 806.5), (13, 806.9)]), [])
 
     def test_continuous_quotes_keep_confirmation_but_a_gap_removes_the_pending_event(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             expires = (START + timedelta(minutes=30)).isoformat()
             condition = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 805,
@@ -300,8 +299,8 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(read(store.conn, 'codex')['pending'], [])
 
     def test_program_breakout_can_coexist_with_a_buy_retest_at_the_same_level(self):
-        with TemporaryDirectory() as tmp:
-            with Store(Path(tmp) / 'test.db').conn as conn:
+        with temporary_store('test.db') as store:
+            with store.conn as conn:
                 self.addCleanup(conn.close)
                 ensure_schema(conn)
                 source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
@@ -315,9 +314,7 @@ class BuyWatchTests(unittest.TestCase):
         self.assertTrue(conditions[1]['bank_breakout']['companion'])
 
     def test_full_model_conditions_leave_room_for_an_early_continuation_review(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
                       'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
@@ -348,9 +345,7 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(advice['action'], 'hold')
 
     def test_watch_survives_action_expiry_and_an_unchanged_advice(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
                       'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
@@ -393,9 +388,7 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(read(store.conn, 'codex')['pending'], [])
 
     def test_observation_expiry_suppresses_the_legacy_advice_expiry(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             action_deadline = START + timedelta(minutes=15)
             watch_deadline = START + timedelta(hours=1)
@@ -417,9 +410,7 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual([e['id'] for e in events], ['live-watch-expired:codex:zheshang:one-plan'])
 
     def test_same_plan_reopens_after_expiry_without_another_timer_review(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             source = {'status': 'fresh', 'revision': 'v1', 'quote': {'status': 'fresh'},
                       'recent_bank_quotes': {'status': 'available', 'buy_price_windows_15m': [{'low': 801, 'high': 805}]}}
@@ -473,8 +464,8 @@ class BuyWatchTests(unittest.TestCase):
         self.assertTrue(validate_structure(value, source, START, minimum_buy_grams=10))
 
     def test_recent_context_uses_only_its_bank_and_keeps_current_verified_quote(self):
-        with TemporaryDirectory() as tmp:
-            with Store(Path(tmp) / 'test.db').conn as conn:
+        with temporary_store('test.db') as store:
+            with store.conn as conn:
                 self.addCleanup(conn.close)
                 ensure_schema(conn)
                 for minute, price, sell in [(-60, 700, 902), (-16, 790, 789), (-3, 799, 798), (-1, 802, 801.5), (1, 900, 899)]:
@@ -497,9 +488,7 @@ class BuyWatchTests(unittest.TestCase):
         self.assertNotIn('sampled_sell_scenarios', no_fee)
 
     def test_earlier_bank_ranges_keep_sampling_coverage_and_side(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'price-ranges.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('price-ranges.db') as store:
             ensure_schema(store.conn)
             anchor = START + timedelta(hours=4)
             now = anchor + timedelta(seconds=15)
@@ -537,9 +526,7 @@ class BuyWatchTests(unittest.TestCase):
     def test_nearest_archived_bank_high_adds_evidence_without_counting_as_live_confirmation(self):
         from monitor.jd_live_buy_watch import utc_text
 
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'archived-high.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('archived-high.db') as store:
             ensure_schema(store.conn)
             now = START + timedelta(minutes=22)
 
@@ -582,9 +569,7 @@ class BuyWatchTests(unittest.TestCase):
                 self.assertEqual(store.conn.execute("SELECT COUNT(*) FROM jd_live_quote_samples").fetchone()[0], 3)
 
     def test_live_event_is_one_per_advice_and_removed_on_an_above_cap_quote(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             expires = (START + timedelta(minutes=30)).isoformat()
             conditions = [route(), route('at_or_above')]
@@ -625,9 +610,7 @@ class BuyWatchTests(unittest.TestCase):
             self.assertEqual(read(store.conn, 'codex')['pending'], [])
 
     def test_legacy_collector_touch_cannot_schedule_a_buy_review(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'test.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('test.db') as store:
             ensure_schema(store.conn)
             enqueue(store.conn, 'codex', '旧版触价', 0, 'live-price:legacy', {'buy_review': route()['buy_review']})
             enqueue(store.conn, 'codex', '卖出触价', 0, 'live-price:exit')
@@ -638,9 +621,7 @@ class BuyWatchTests(unittest.TestCase):
 
 class BuyAuditTests(unittest.TestCase):
     def test_delayed_trading_day_marks_use_fresh_quotes_only_and_preserve_the_strict_result(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'delayed.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('delayed.db') as store:
             ensure_schema(store.conn)
             record(store.conn, 'zheshang', (START, START, 800, 800))
             record(store.conn, 'zheshang', point(2, 801))
@@ -755,9 +736,7 @@ class BuyAuditTests(unittest.TestCase):
                     self.assertEqual(datetime.fromisoformat(row['confirmation']['quoted_at']), point(8, 804)[0])
 
     def test_plain_buy_status_reports_distance_without_using_quotes_after_replacement(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'plain-observations.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('plain-observations.db') as store:
             ensure_schema(store.conn)
             plain = {'condition': 'at_or_below', 'quote_side': 'buy', 'price_cny': 800}
             upper = {'condition': 'at_or_above', 'quote_side': 'buy', 'price_cny': 810}
@@ -844,9 +823,7 @@ class BuyAuditTests(unittest.TestCase):
         self.assertEqual(row['suppressed_touches'], [suppressed])
 
     def test_report_replays_renewed_pullbacks_in_disjoint_windows(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'renewed-windows.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('renewed-windows.db') as store:
             ensure_schema(store.conn)
 
             def at(minute):
@@ -971,9 +948,7 @@ class BuyAuditTests(unittest.TestCase):
             self.assertNotIn('net_cny', branch['horizons'][0]['confirmed_10g'])
 
     def test_actual_branch_marks_both_timings_on_same_day_quote_and_drawdown(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'horizon.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('horizon.db') as store:
             ensure_schema(store.conn)
             confirmed = datetime(2026, 11, 20, 18, 24, tzinfo=timezone.utc)
             published = confirmed + timedelta(minutes=1)
@@ -997,9 +972,7 @@ class BuyAuditTests(unittest.TestCase):
             self.assertEqual(missing['after_analysis_10g']['status'], 'pending')
 
     def test_retest_replay_reads_only_quotes_received_during_analysis(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'retest-prices.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('retest-prices.db') as store:
             ensure_schema(store.conn)
             route = {'confirmation_mode': 'retest', 'threshold_cny': 805,
                      'bank_breakout': {'retest_ceiling_cny': 806}}
@@ -1027,9 +1000,7 @@ class BuyAuditTests(unittest.TestCase):
             self.assertTrue(retest_price_evidence(route, START, path)['sampled_above_retest_zone_during_analysis'])
 
     def test_late_old_bank_quote_cannot_rewrite_first_price_or_start_a_pullback(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'quote-receipt-order.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('quote-receipt-order.db') as store:
             ensure_schema(store.conn)
             old = START + timedelta(seconds=30)
             late = (old, START + timedelta(minutes=2, seconds=30), 799, 798)
@@ -1062,9 +1033,7 @@ class BuyAuditTests(unittest.TestCase):
     def test_review_replay_fills_gaps_with_time_verified_archived_bank_quotes(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
 
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'archived-quotes.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('archived-quotes.db') as store:
             ensure_schema(store.conn)
             ensure_ai_schema(store)
 
@@ -1121,9 +1090,7 @@ class BuyAuditTests(unittest.TestCase):
                              (verified, 'bank_quote_tape'))
 
     def test_intrawindow_payoff_separates_prepublication_recovery_from_available_prices(self):
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'intrawindow.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('intrawindow.db') as store:
             ensure_schema(store.conn)
             published = START + timedelta(minutes=2)
             for minute, buy, sell in ((0, 800, 800), (1, 806, 806), (2, 807, 804), (3, 803, 803),
@@ -1151,9 +1118,7 @@ class BuyAuditTests(unittest.TestCase):
 
     def test_report_counts_actual_review_branches_and_never_implies_a_fill(self):
         from monitor.ai import ensure_schema as ensure_ai_schema
-        with TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / 'review.db')
-            self.addCleanup(store.conn.close)
+        with temporary_store('review.db') as store:
             ensure_schema(store.conn)
             ensure_ai_schema(store)
             started = START + timedelta(seconds=30)

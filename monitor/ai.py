@@ -26,6 +26,7 @@ import tempfile
 import sqlite3
 import time
 import signal
+from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
@@ -552,13 +553,14 @@ class AIAnalyst:
         """Cancel the CLI process group when its switch changes, including child processes."""
         timeout = kwargs.pop("timeout")
         on_stdout=kwargs.pop("on_stdout",None)
+        input_text = kwargs.pop("input_text", None)
         kwargs.pop("capture_output", None)
-        with sqlite3.connect(str(self.settings.db_path), timeout=10) as conn:
+        with closing(sqlite3.connect(str(self.settings.db_path), timeout=10)) as conn:
             generation = getattr(self, "_generation", control(conn, self.analyst)["generation"])
             if not active(conn, self.analyst, generation):
                 raise RuntimeError("模型已暂停")
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True, **kwargs)
+                                    start_new_session=os.name != "nt", **kwargs)
             deadline = time.monotonic() + timeout
             try:
                 while True:
@@ -567,25 +569,36 @@ class AIAnalyst:
                     if time.monotonic() >= deadline:
                         raise subprocess.TimeoutExpired(cmd, timeout)
                     try:
-                        stdout, stderr = proc.communicate(timeout=min(1, max(.01, deadline - time.monotonic())))
+                        # After a timeout communicate continues sending the original input.
+                        current_input, input_text = input_text, None
+                        stdout, stderr = proc.communicate(input=current_input, timeout=min(1, max(.01, deadline - time.monotonic())))
                         if on_stdout: on_stdout(stdout,final=True)
                         return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
                     except subprocess.TimeoutExpired as exc:
                         if on_stdout and exc.stdout: on_stdout(exc.stdout)
             finally:
                 if proc.poll() is None:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                    try:
-                        proc.communicate(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        proc.communicate()
+                    if os.name == "nt":
+                        try:
+                            subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                            proc.communicate(timeout=3)
+                        except (OSError, subprocess.TimeoutExpired):
+                            proc.kill()
+                            proc.wait(timeout=3)
+                    else:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        try:
+                            proc.communicate(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                            proc.communicate()
 
     # ── 金十快讯初筛（低成本：短提示、低推理强度、不联网） ───────────────────
     def triage(self, flashes: List[Dict[str, Any]], last_view: Optional[Dict[str, Any]], price: Optional[float],
                known: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """known：上次分析时已经提供给 AI 的重要快讯（用于识别重复/追踪报道）。"""
-        with sqlite3.connect(str(self.settings.db_path), timeout=10) as conn:
+        with closing(sqlite3.connect(str(self.settings.db_path), timeout=10)) as conn:
             self._generation = control(conn, self.analyst)["generation"]
             if not active(conn, self.analyst, self._generation):
                 raise RuntimeError("模型已暂停")
@@ -839,7 +852,7 @@ class AIAnalyst:
         return response.parsed_output
 
     def _check_active(self):
-        with sqlite3.connect(str(self.settings.db_path), timeout=10) as conn:
+        with closing(sqlite3.connect(str(self.settings.db_path), timeout=10)) as conn:
             if not active(conn, self.analyst, self._generation):
                 raise RuntimeError("模型已暂停，取消分析")
 

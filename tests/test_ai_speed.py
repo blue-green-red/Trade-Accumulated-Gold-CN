@@ -87,7 +87,7 @@ class SpeedTests(unittest.TestCase):
         self.assertEqual(second['cached'],800);self.assertEqual(second['input'],1000)
         self.assertEqual(second['output'],120)  # reasoning is included, not added again
         self.assertEqual(second['performance']['session_turn'],2)
-        self.assertIn('previously_provided',b[0][-1])
+        self.assertIn('previously_provided',b[1]['input_text'])
         self.assertLess(second['performance']['input_chars_after'],second['performance']['input_chars_before'])
 
     def test_switch_generation_resets_session(self):
@@ -176,8 +176,9 @@ class SpeedTests(unittest.TestCase):
              'context':self.ctx,'schema':response().model_json_schema()}
         run_frozen(self.a,req,{})
         cmd=self.calls[0][0]
-        self.assertEqual(cmd[-1],req['system']+'\n\n'+req['user'])
-        self.assertEqual(json.loads(Path(cmd[cmd.index('--output-schema')+1]).read_text()),req['schema'])
+        self.assertEqual(cmd[-1],'-')
+        self.assertEqual(self.calls[0][1]['input_text'],req['system']+'\n\n'+req['user'])
+        self.assertEqual(json.loads(Path(cmd[cmd.index('--output-schema')+1]).read_text(encoding='utf-8')),req['schema'])
         self.assertIn('--ephemeral',cmd);self.assertNotIn('resume',cmd)
         for value in ('mcp_servers={}','features.apps=false','features.shell_tool=false','features.unified_exec=false',
                       'features.multi_agent=false','web_search="disabled"'):

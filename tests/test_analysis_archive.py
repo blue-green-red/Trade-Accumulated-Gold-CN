@@ -33,12 +33,12 @@ class AnalysisArchiveTests(unittest.TestCase):
         self.assertNotIn('event_coverage',first['model_context'])
         self.assertNotIn('event_coverage',first['request']['context'])
         self.assertEqual(first['request']['context']['trigger_events'],f.ctx['trigger_events'])
-        self.assertEqual(first['request']['prompt'],f.calls[0][0][-1])
-        self.assertEqual(first['request']['schema'],json.loads(Path(f.calls[0][0][f.calls[0][0].index('--output-schema')+1]).read_text()))
+        self.assertEqual(first['request']['prompt'],f.calls[0][1]['input_text'])
+        self.assertEqual(first['request']['schema'],json.loads(Path(f.calls[0][0][f.calls[0][0].index('--output-schema')+1]).read_text(encoding='utf-8')))
         second=dict(self.artifacts(rows[1]['id']))
         self.assertEqual(second['request']['mode'],'resume')
         self.assertEqual(second['request']['parent_archive_id'],rows[0]['id'])
-        self.assertEqual(second['request']['prompt'],f.calls[1][0][-1])
+        self.assertEqual(second['request']['prompt'],f.calls[1][1]['input_text'])
         self.assertIn('model_output',first);self.assertIn('runtime_event',first)
         self.assertIn('tool_definition',first)
 
@@ -80,7 +80,8 @@ class AnalysisArchiveTests(unittest.TestCase):
         self.assertEqual(export(f.settings.db_path,output,'codex'),1)
         item=json.loads(output.read_text());self.assertTrue(item['execution_link_valid'])
         self.assertEqual(item['status'],'completed')
-        self.assertEqual(output.stat().st_mode & 0o777,0o600)
+        if os.name != 'nt':
+            self.assertEqual(output.stat().st_mode & 0o777,0o600)
         with self.assertRaises(FileExistsError):export(f.settings.db_path,output)
         # A later reset must not silently join a historical archive to reused view IDs.
         f.store.conn.execute("update ai_views set started_at='2099-01-01T00:00:00+00:00'");f.store.conn.commit()

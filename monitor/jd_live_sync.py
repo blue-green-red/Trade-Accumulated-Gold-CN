@@ -1,4 +1,4 @@
-"""Small read-only collector. Browser cookies stay in RAM; credentials never enter SQLite or model input."""
+"""Read-only account collection and local desktop navigation."""
 import asyncio
 from datetime import datetime,timezone
 import json
@@ -314,10 +314,30 @@ def sync_once(store,client,groups=None):
 
 def run(once=False):
     from .config import Settings
-    settings=Settings();store=Store(settings.db_path);ensure_schema(store.conn);client=ReadonlyClient()
+    settings = Settings()
+    source = settings.jd_live_source
+    if source not in ('web', 'desktop'):
+        raise ValueError('GOLD_JD_LIVE_SOURCE must be web or desktop')
+    if source == 'desktop' and os.name != 'nt':
+        raise ValueError('Desktop collection requires Windows')
+    store=Store(settings.db_path);ensure_schema(store.conn)
+    client = ReadonlyClient() if source == 'web' else None
+    desktop = None
+    prefill = None
+    next_prefill = 0
     interval=max(60,float(os.environ.get('GOLD_JD_LIVE_REFRESH_SECONDS','300')))
     intervals={'quote':max(60,float(os.environ.get('GOLD_JD_LIVE_QUOTE_SECONDS','60'))),
                'core':interval,'orders':interval,'history':max(interval,float(os.environ.get('GOLD_JD_LIVE_HISTORY_SECONDS','1800')))}
+    if source == 'desktop':
+        from .jd_desktop import DesktopReader, process_review, sync_desktop
+        from .jd_desktop_prefill import STATE_KEY as PREFILL_STATE, arm as arm_prefill, poll as poll_prefill
+        interval = max(15, float(os.environ.get('GOLD_JD_DESKTOP_SECONDS', '60')))
+        intervals = {'core': interval, 'orders': max(interval, 300)}
+        if not once and settings.ai_trading_mode == 'live_only' and 'codex' in settings.ai_analysts:
+            if os.environ.get('GOLD_JD_DESKTOP_AUTO_PREPARE') == '1':
+                prefill = arm_prefill(store)
+        if not once and prefill is None and store.get_state(PREFILL_STATE):
+            store.set_state(PREFILL_STATE, {})
     due_at={k:0 for k in intervals};last_request=None;stopping=False;failures=0;was_open=None
     def stop(*_):
         nonlocal stopping
@@ -325,20 +345,37 @@ def run(once=False):
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
     try:
         while not stopping:
+            if desktop is not None and not once and process_review(store.conn, desktop):
+                time.sleep(2)
+                continue
+            if desktop is not None and prefill is not None and time.monotonic() >= next_prefill:
+                try:
+                    poll_prefill(store, desktop, prefill)
+                except sqlite3.Error:
+                    log.exception("Desktop prefill could not read or persist state")
+                next_prefill = time.monotonic() + 5
             request=store.get_state('jd_live_refresh',{});wanted=request.get('requested_at')
             manual=wanted and wanted!=last_request
             groups=set(request.get('components') or intervals) if manual else {k for k in intervals if time.monotonic()>=due_at[k]}
             from .trading_hours import trading_session
             opened=trading_session()['is_open']
-            if opened and was_open is False:groups.update(('core','orders','quote'))
+            if source == 'web' and opened and was_open is False:groups.update(('core','orders','quote'))
             was_open=opened
-            if not opened and not manual:
+            if source == 'web' and not opened and not manual:
                 groups.discard('quote')
                 if 'core' in groups:groups.update(('orders',))
             if groups:
                 status='completed'
-                store.set_state('jd_live_sync_status',{'status':'running','at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval,'intervals':intervals,'components':sorted(groups)})
-                try:status=sync_once(store,client,groups)
+                sync_info = {'source': source, 'interval_seconds': interval,
+                             'intervals': intervals, 'components': sorted(groups)}
+                store.set_state('jd_live_sync_status',{**sync_info,'status':'running','at':datetime.now(timezone.utc).isoformat()})
+                try:
+                    if source == 'desktop':
+                        if desktop is None:
+                            desktop = DesktopReader()
+                        status = sync_desktop(store, desktop, refresh_panels=manual or 'orders' in groups)
+                    else:
+                        status=sync_once(store,client,groups)
                 except BrowserBusy:status='waiting_for_resources'
                 except PermissionError:
                     status='login_required'
@@ -349,17 +386,20 @@ def run(once=False):
                     for bank in enabled_banks(store.conn):record_failure(store.conn,bank,'unavailable')
                 last_request=wanted
                 failures=failures+1 if status in ('login_required','unavailable') else 0
-                store.set_state('jd_live_sync_status',{'status':status,'at':datetime.now(timezone.utc).isoformat(),'interval_seconds':interval,'intervals':intervals,'components':sorted(groups)})
+                store.set_state('jd_live_sync_status',{**sync_info,'status':status,'at':datetime.now(timezone.utc).isoformat()})
                 if manual and store.get_state('jd_live_refresh',{}).get('requested_at')==wanted:
                     store.set_state('jd_live_refresh',{**request,'status':status,'finished_at':datetime.now(timezone.utc).isoformat()})
-                for kind in groups:due_at[kind]=time.monotonic()+(60 if status=='waiting_for_resources' else intervals[kind] if trading_session()['is_open'] or manual else max(1800,intervals[kind]))
-                if failures:
+                for kind in groups.intersection(intervals):due_at[kind]=time.monotonic()+(60 if status=='waiting_for_resources' else intervals[kind] if source == 'desktop' or trading_session()['is_open'] or manual else max(1800,intervals[kind]))
+                if failures and source == 'web':
                     retry_delay=min(1800,300*2**min(failures-1,3))
                     due_at={k:max(t,time.monotonic()+retry_delay) for k,t in due_at.items()}
                 if once:break
             if once:break
-            time.sleep(5)
-    finally:client.close();store.conn.close()
+            time.sleep(2 if source == 'desktop' else 5)
+    finally:
+        if client is not None:
+            client.close()
+        store.conn.close()
 
 if __name__=='__main__':
     import argparse

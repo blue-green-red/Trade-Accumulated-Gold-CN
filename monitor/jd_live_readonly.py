@@ -10,6 +10,8 @@ PRODUCTS={'zheshang':('1961543816','浙商积存金','indexDataStd'),'minsheng':
 STALE_SECONDS=1800
 CONTROL_KEY='jd_live_banks'
 BUY_MINIMUMS_KEY = 'jd_live_buy_minimums'
+ELECTRONIC_ACCOUNT_SOURCES = ('jd_electronic_account_api', 'jd_desktop_gold_account')
+DESKTOP_CASH_MAX_AGE = 360
 
 
 def buy_minimums(conn):
@@ -110,6 +112,12 @@ def declared_cash_context(snapshot, declared_at, anchor, invalidated_at):
     return valid, revision
 
 
+def desktop_cash_stale(snapshot, now):
+    return snapshot.get('cash_source') == 'jd_desktop_gold_account' and not (
+        0 <= age(snapshot.get('component_times', {}).get('cash_balance'), now) <= DESKTOP_CASH_MAX_AGE
+    )
+
+
 def review_context_current(conn, account, advice):
     """Check the latest advice, its model generation and the verified bank revision."""
     from .controls import control
@@ -133,7 +141,9 @@ def review_context_current(conn, account, advice):
     revision = row[2]
     if row[4] is not None:
         snapshot = {**json.loads(row[4]), 'revision': revision}
-        if snapshot.get('cash_source') != 'jd_electronic_account_api' or snapshot.get('cash_cny') is None:
+        if (snapshot.get('cash_source') not in ELECTRONIC_ACCOUNT_SOURCES
+                or snapshot.get('cash_cny') is None
+                or desktop_cash_stale(snapshot, datetime.now(timezone.utc))):
             _, revision = declared_cash_context(snapshot, *row[5:])
     return row[1] == revision == account.get('revision', revision)
 
@@ -143,7 +153,7 @@ def declare_full_position(conn,bank,at=None):
     row=conn.execute('SELECT data_json FROM jd_live_snapshots WHERE bank=?',(bank,)).fetchone()
     if not row:raise ValueError('Verified account snapshot required')
     at=at or datetime.now(timezone.utc).isoformat()
-    data=json.loads(row[0]);invalidated=at if data.get('cash_cny',0) and data.get('cash_source')=='jd_electronic_account_api' else None
+    data=json.loads(row[0]);invalidated=at if data.get('cash_cny') and data.get('cash_source') in ELECTRONIC_ACCOUNT_SOURCES else None
     with conn:conn.execute('INSERT INTO jd_live_cash_declarations VALUES(?,0,?,?,?) ON CONFLICT(bank) DO UPDATE SET cash_cny=0,declared_at=excluded.declared_at,anchor=excluded.anchor,invalidated_at=excluded.invalidated_at',
                            (bank,at,cash_anchor(data),invalidated))
 
@@ -177,7 +187,7 @@ def record_success(conn,bank,data,at=None):
                      (bank,at,revision,json.dumps(data,ensure_ascii=False)))
         conn.execute("UPDATE jd_live_readonly SET checked_at=?,public_status='fresh' WHERE bank=?",(at,bank))
         conn.execute('UPDATE jd_live_cash_declarations SET invalidated_at=? WHERE bank=? AND anchor!=? AND invalidated_at IS NULL',(at,bank,cash_anchor(data)))
-        if data.get('cash_source')=='jd_electronic_account_api' and (data.get('cash_cny') or 0)>0:
+        if data.get('cash_source') in ELECTRONIC_ACCOUNT_SOURCES and (data.get('cash_cny') or 0)>0:
             conn.execute('UPDATE jd_live_cash_declarations SET invalidated_at=? WHERE bank=? AND invalidated_at IS NULL',(at,bank))
 
 
@@ -225,10 +235,15 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
         if row.get('quote'):
             q=row['quote'];q_age=age(q.get('quoted_at'),now)
             q['status']='fresh' if fresh and -30<=q_age<=180 else 'historical'
-        row['holding_pnl_cny']=None
-        if row.get('quote') and row.get('average_cost_cny') is not None and row.get('total_grams') is not None:
-            row['holding_pnl_cny']=round((row['quote']['sell_price_cny']-row['average_cost_cny'])*row['total_grams'],2)
-        row['holding_pnl_basis']='bank_sell_quote_minus_average_cost_before_sell_fee'
+        if snap.get('source') == 'desktop':
+            row['holding_pnl_basis'] = 'jd_desktop_display'
+            if fresh:
+                row['message'] = '已读取京东金融桌面版的积存金页面。'
+        else:
+            row['holding_pnl_cny']=None
+            if row.get('quote') and row.get('average_cost_cny') is not None and row.get('total_grams') is not None:
+                row['holding_pnl_cny']=round((row['quote']['sell_price_cny']-row['average_cost_cny'])*row['total_grams'],2)
+            row['holding_pnl_basis']='bank_sell_quote_minus_average_cost_before_sell_fee'
         row['advice']=[];row['advice_history']=[]
         if bank in minimums:
             row['minimum_buy_grams'] = minimums[bank]
@@ -252,7 +267,9 @@ def accounts(conn,now=None,include_advice=True,selected_bank=None):
         row['order_history']=list(combined.values())
         declaration=declarations.get(bank)
         row.update(cash_source=snap.get('cash_source','unknown'),cash_declared_at=None,position_pct=None)
-        api_cash=row['cash_source']=='jd_electronic_account_api' and row.get('cash_cny') is not None
+        if row['cash_source'] == 'jd_desktop_gold_account' and (not fresh or desktop_cash_stale(row, now)):
+            row.update(cash_cny=None, cash_source='unknown')
+        api_cash=row['cash_source'] in ELECTRONIC_ACCOUNT_SOURCES and row.get('cash_cny') is not None
         if declaration and not api_cash:
             row['cash_declared_at']=declaration[2]
             valid,row['revision']=declared_cash_context(snap,*declaration[2:])

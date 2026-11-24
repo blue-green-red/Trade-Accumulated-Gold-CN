@@ -5,3 +5,5 @@ playwright>=1.40   # 安装后还需执行: python -m playwright install chromiu
 yfinance>=0.2      # 仅 scripts/test_yf_spot.py 探活脚本使用
 anthropic>=1.14   # monitor/ai.py：AI 消息面分析（需 ANTHROPIC_API_KEY）
 pydantic>=2.0     # AI 结构化判断校验（CLI 后端也需要）
+tzdata; platform_system == "Windows"
+comtypes>=1.4.10; platform_system == "Windows"

@@ -1,5 +1,6 @@
 """Compressed, append-only application-visible analysis traces and streaming JSONL export."""
 import argparse
+from contextlib import closing
 import gzip
 import hashlib
 import json
@@ -59,7 +60,7 @@ class AnalysisArchive:
               'search_budget':settings.ai_max_searches,'history_budget':settings.ai_history_max_queries,
               'page_fetch_budget':settings.ai_page_fetch_max_calls if settings.ai_max_searches>0 else 0,
               'source_hashes':hashes,'visibility':'application-visible only; provider-internal prompts/state and unreturned search documents are unavailable'}
-        with sqlite3.connect(self.db,timeout=10) as c:
+        with closing(sqlite3.connect(self.db,timeout=10)) as c, c:
             c.executescript(SCHEMA)
             self.id=c.execute('INSERT INTO ai_analysis_archives(analyst,run_id,backend,model,started_at,status,metadata) VALUES(?,?,?,?,?,?,?)',
                 (analyst.analyst,run_id,analyst.backend,analyst.model,now(),'running',encode(self.clean(meta))[0])).lastrowid
@@ -76,13 +77,13 @@ class AnalysisArchive:
 
     def add(self,kind,value):
         payload,digest=encode(self.clean(value))
-        with sqlite3.connect(self.db,timeout=10) as c:
+        with closing(sqlite3.connect(self.db,timeout=10)) as c, c:
             c.execute('INSERT INTO ai_analysis_artifacts(archive_id,ts,kind,sha256,payload) VALUES(?,?,?,?,?)',
                       (self.id,now(),kind,digest,payload))
 
     def finish(self,status,**result):
         self.add('outcome',{'status':status,**result})
-        with sqlite3.connect(self.db,timeout=10) as c:
+        with closing(sqlite3.connect(self.db,timeout=10)) as c, c:
             c.execute('UPDATE ai_analysis_archives SET status=?,completed_at=?,view_id=? WHERE id=?',
                       (status,now(),result.get('view_id'),self.id))
 
@@ -98,7 +99,9 @@ def export(db,output,analyst=None):
     fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
     count=0
     try:
-        with os.fdopen(fd,'w',encoding='utf-8') as out, sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True) as c:
+        with os.fdopen(fd,'w',encoding='utf-8') as out, closing(
+            sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)
+        ) as c:
             c.row_factory=sqlite3.Row
             # One read transaction keeps archives, outcomes and execution labels consistent.
             c.execute('BEGIN')

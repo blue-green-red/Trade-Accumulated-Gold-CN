@@ -533,6 +533,17 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return hmac.compare_digest(given.encode(), self.password.encode())
 
+    def _desktop_review_enabled(self):
+        try:
+            host = urlsplit("//" + self.headers.get("Host", ""))
+            return (os.name == "nt" and self.settings.jd_live_source == "desktop"
+                    and ipaddress.ip_address(self.server.server_address[0]).is_loopback
+                    and ipaddress.ip_address(self.client_address[0]).is_loopback
+                    and not host.username and not host.password
+                    and host.hostname in ("127.0.0.1", "localhost", "::1"))
+        except ValueError:
+            return False
+
     def _send(self, code: int, body: bytes, content_type: str, extra: Optional[Dict[str, str]] = None) -> None:
         headers = dict(extra or {})
         accepted = self.headers.get("Accept-Encoding", "")
@@ -580,6 +591,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.headers.get("Content-Type", "").split(";")[0] != "application/json" or
                 (origin and urlsplit(origin).netloc != self.headers.get("Host"))):
             self._send(403, b"invalid request origin", "text/plain")
+            return
+        if self.path == "/api/desktop-review":
+            if not self._desktop_review_enabled():
+                self._send(404, b'{"error":"desktop review unavailable"}', "application/json")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 256:
+                    raise ValueError("请求无效")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict) or set(data) != {"bank", "action"}:
+                    raise ValueError("请求无效")
+                from .jd_desktop import request_review
+                with closing(sqlite3.connect(str(self.settings.db_path), timeout=5)) as conn:
+                    result = request_review(conn, data["bank"], data["action"])
+                self._send(202, json.dumps(result).encode(), "application/json")
+            except (ValueError, RuntimeError) as exc:
+                self._send(409 if isinstance(exc, RuntimeError) else 400,
+                           json.dumps({"error": str(exc)}).encode(), "application/json")
+            except sqlite3.Error:
+                self._send(503, b'{"error":"desktop review unavailable"}', "application/json")
             return
         if self.path == "/api/notifications":
             try:
@@ -670,7 +702,22 @@ class Handler(BaseHTTPRequestHandler):
                        {"WWW-Authenticate": 'Basic realm="gold-monitor", charset="UTF-8"'})
             return
         path = self.path.split("?", 1)[0]
-        if path in ("/", "/index.html"):
+        if path == "/api/desktop-review":
+            if not self._desktop_review_enabled():
+                self._send(404, b'{"error":"desktop review unavailable"}', "application/json")
+                return
+            try:
+                from .jd_desktop import review_state
+                with closing(connect(self.settings.db_path)) as conn:
+                    result = review_state(conn)
+                request_id = parse_qs(urlsplit(self.path).query).get("id", [None])
+                if result.get("id") and request_id == [result["id"]]:
+                    self._send(200, json.dumps(result).encode(), "application/json")
+                else:
+                    self._send(404, b'{"error":"review request unavailable"}', "application/json")
+            except sqlite3.Error:
+                self._send(503, b'{"error":"desktop review unavailable"}', "application/json")
+        elif path in ("/", "/index.html"):
             self._static_response(dashboard_html(self.settings,self.static_root), "text/html; charset=utf-8", immutable=False)
         elif path.startswith('/assets/'):
             root = (self.static_root or STATIC).resolve()

@@ -1,9 +1,9 @@
 <script setup>
-import { computed, defineAsyncComponent } from "vue";
+import { computed, defineAsyncComponent, ref } from "vue";
 import Card from "./Card.vue";
 import LiveRiskSummary from "./LiveRiskSummary.vue";
 const BankAdvice = defineAsyncComponent(() => import("./BankAdvice.vue"));
-import { pending, actionErrors, refreshLive } from "../composables/dashboard";
+import { pending, actionErrors, openDesktopReview } from "../composables/dashboard";
 import {
   num,
   money,
@@ -19,6 +19,39 @@ const props = defineProps({
   section: { type: String, default: "holdings" },
 });
 const rows = computed(() => props.data.live_readonly || []);
+const desktopActions = {
+  holdings: [["market_buy", "打开买入"], ["market_sell", "打开卖出"]],
+  orders: [["limit_buy", "限价买入"], ["limit_sell", "限价卖出"],
+    ["take_profit_stop_loss", "止盈止损"], ["pending_orders", "查看待成交 / 撤单核对"]],
+};
+const reviewBank = ref("");
+const reviewMessage = ref("");
+const prefillLabels = {
+  watching: "等待新的 AI 即时买卖建议",
+  no_trade: "最新建议无需即时买卖",
+  advice_unavailable: "最新建议未通过预填校验",
+  account_unavailable: "等待账户和待成交数据",
+  waiting_desktop: "等待京东显示对应银行的积存金首页",
+  preparing: "正在填写京东克重",
+  quantity_unavailable: "克重与京东当前规则不符",
+  cash_unavailable: "京东余额或预计支付待核对",
+  price_unmet: "京东显示价未满足建议的价格条件",
+  market_closed: "京东交易时段未开启",
+  coupon_required: "请先在京东核对卖出优惠",
+  unverified: "京东输入未通过读回校验",
+};
+async function openReview(bank, action, label) {
+  reviewBank.value = bank;
+  reviewMessage.value = "正在打开京东页面…";
+  const opened = await openDesktopReview(bank, action);
+  const coupon = {
+    applied: "已勾选手续费优惠。",
+    none: "当前无可用优惠。",
+    needs_review: "请核对优惠选项。",
+  }[opened?.coupon] || "";
+  const unit = opened?.unit === "grams" ? "当前单位为克重。" : "";
+  reviewMessage.value = opened ? `已打开${label.replace(/^打开/, "")}。${unit}${coupon}请切换到京东金融核对。` : "";
+}
 const states = {
   fresh: "已同步",
   stale: "账户快照待更新",
@@ -81,7 +114,9 @@ const orderDataNote = (a) => {
   );
 };
 const cashSource = (a) =>
-  a.cash_source === "jd_electronic_account_api"
+  a.cash_source === "jd_desktop_gold_account"
+    ? "京东金融桌面版 · 买金专户"
+    : a.cash_source === "jd_electronic_account_api"
     ? "银行黄金电子户接口 · 不含绑定银行卡"
     : a.cash_source === "user_declared_full_position"
       ? "用户确认当前满仓 · " + fmtTs(a.cash_declared_at)
@@ -118,6 +153,35 @@ const cashSource = (a) =>
           }}</span>
         </header>
         <div class="live-bank-body">
+          <div
+            v-if="data.desktop_prefill && ['holdings', 'advice'].includes(section)"
+            class="notice"
+            role="status"
+          >
+            <strong>AI 买卖预填</strong>
+            <div v-if="data.desktop_prefill.status === 'prepared'">
+              上次预填{{ actions[data.desktop_prefill.action] }}
+              {{ data.desktop_prefill.grams }} 克 · {{ fmtTs(data.desktop_prefill.at) }}。
+              请在京东核对并确认。
+            </div>
+            <div v-else>{{ prefillLabels[data.desktop_prefill.status] }}</div>
+          </div>
+          <div
+            v-if="data.live_readonly_sync?.source === 'desktop' && desktopActions[section]"
+            class="live-orders"
+          >
+            <div class="live-section-heading">京东金融 · 操作入口</div>
+            <button
+              v-for="[action, label] in desktopActions[section]"
+              :key="action"
+              class="link-btn"
+              :disabled="pending['desktop-review']"
+              @click="openReview(a.bank, action, label)"
+            >{{ label }}</button>
+            <div class="sub" role="status" v-if="reviewBank === a.bank">
+              {{ actionErrors['desktop-review'] || reviewMessage }}
+            </div>
+          </div>
           <div class="live-snapshot">
             账户采集 {{ fmtTs(a.fetched_at) }} · 北京时间
           </div>
@@ -173,7 +237,9 @@ const cashSource = (a) =>
                 <div class="live-metric-note">{{ cashSource(a) }}</div>
               </div>
               <div class="live-metric">
-                <div class="live-metric-label">浮动盈亏估算</div>
+                <div class="live-metric-label">
+                  {{ a.source === "desktop" ? "持仓收益" : "浮动盈亏估算" }}
+                </div>
                 <div
                   class="live-metric-value"
                   :class="
@@ -186,7 +252,10 @@ const cashSource = (a) =>
                 >
                   {{ money(a.holding_pnl_cny, true) }}
                 </div>
-                <div class="live-metric-note">
+                <div v-if="a.source === 'desktop'" class="live-metric-note">
+                  京东金融桌面版显示值
+                </div>
+                <div v-else class="live-metric-note">
                   未扣卖费 ·
                   {{
                     quoteCurrent(a) ? "按银行金价" : "按历史金价估算或缺报价"
@@ -194,7 +263,16 @@ const cashSource = (a) =>
                 </div>
               </div>
             </div>
-            <div class="live-quote">
+            <div v-if="a.source === 'desktop'" class="live-quote">
+              <div class="live-section-heading">桌面显示价 · 元/克</div>
+              <div class="live-quote-price">
+                <strong>{{ num(a.display_price?.price_cny) }}</strong>
+              </div>
+              <div class="live-quote-time">
+                {{ a.display_price ? "读取时刻 " + fmtTs(a.display_price.observed_at) + " · 报价时刻未知" : "未读到桌面显示价" }}
+              </div>
+            </div>
+            <div v-else class="live-quote">
               <div class="live-section-heading">
                 <span>银行金价 · 元/克</span
                 ><span

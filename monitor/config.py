@@ -52,6 +52,7 @@ def _env_float(name: str, default: float) -> float:
 class Settings:
     web_min_password_length: int = max(8, int(_env_float("GOLD_WEB_MIN_PASSWORD_LENGTH", 12)))
     db_path: Path = Path(os.environ.get("GOLD_MONITOR_DB", ROOT / "monitor" / "data" / "monitor.db"))
+    jd_live_source: str = os.environ.get("GOLD_JD_LIVE_SOURCE", "web")
     tick_seconds: float = _env_float("GOLD_MONITOR_TICK_SECONDS", 60)
     bank_refresh_minutes: float = _env_float("GOLD_MONITOR_BANK_REFRESH_MINUTES", 20)
     fx_refresh_minutes: float = _env_float("GOLD_MONITOR_FX_REFRESH_MINUTES", 15)

@@ -646,8 +646,9 @@ class Monitor:
                 if not self.ai_running():
                     from .ai_runtime import recover as recover_runtime
                     recover_runtime(self.store,self.analysts)
-                from .jd_login_watch import poll as login_watch
-                self.dispatch(login_watch(self.store,self.settings))
+                if self.settings.jd_live_source == 'web':
+                    from .jd_login_watch import poll as login_watch
+                    self.dispatch(login_watch(self.store,self.settings))
             except Exception:
                 log.exception('京东登录检查失败，下一轮重试')
             try:

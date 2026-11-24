@@ -11,7 +11,7 @@ from .model_visibility import hidden_models
 
 LIVE_FIELDS = ('bank','name','status','connected','fetched_at','checked_at','message','official_url',
                'total_grams','sellable_grams','frozen_grams','cash_cny','cash_source','cash_declared_at',
-               'average_cost_cny','holding_pnl_cny','holding_pnl_basis','quote','sell_fee_rate','pending_order_count',
+               'average_cost_cny','holding_pnl_cny','holding_pnl_basis','quote','display_price','source','sell_fee_rate','pending_order_count',
                'risk_profile','position_pct','account_risk','protection_state','component_times','coverage','order_submission_enabled')
 PORTFOLIO_FIELDS = ('key','model','analyst','name','start_mode','started','started_at','budget','value','return',
                     'cash','grams','position_pct','paused','realized_pnl','unrealized_pnl','pnl_breakdown')
@@ -95,6 +95,11 @@ def scoped_data(conn,settings,result,page,view,snap,quote,valuation,price):
             result.update(account_view='live',bank_view=section,live_account=value)
             result['live_readonly_sync']=get_state(conn,'jd_live_sync_status') or {}
             result['live_readonly_refresh']=get_state(conn,'jd_live_refresh') or {}
+            if getattr(settings, 'jd_live_source', 'web') == 'desktop':
+                from .jd_desktop_prefill import STATE_KEY
+                prefill = get_state(conn, STATE_KEY) or {}
+                if prefill.get('armed_at'):
+                    result['desktop_prefill'] = prefill.get('banks', {}).get(bank) or {'status': 'watching'}
             return True
         if view.startswith('simulation/'):
             key=view.removeprefix('simulation/')

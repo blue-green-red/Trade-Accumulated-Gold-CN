@@ -25,7 +25,8 @@ def session(analyst,context,usage):
     with tempfile.TemporaryDirectory(prefix='gold-history-') as work:
         audit=Path(work)/'queries.jsonl';audit.touch(mode=0o600)
         page_audit=Path(work)/'pages.jsonl';page_audit.touch(mode=0o600)
-        args=['-I',str(Path(__file__).with_name('history_tool.py').resolve()),'--db',str(analyst.settings.db_path.resolve()),'--model',analyst.analyst,
+        # Isolated mode ignores PYTHONUTF8. JSON-RPC still requires UTF-8 on Windows.
+        args=['-I','-X','utf8',str(Path(__file__).with_name('history_tool.py').resolve()),'--db',str(analyst.settings.db_path.resolve()),'--model',analyst.analyst,
               '--as-of',context.get('snapshot_at') or utc_now().isoformat(),'--max-queries',str(analyst.settings.ai_history_max_queries if history_on else 0),'--audit',str(audit),
               '--max-page-fetches',str(page_max),'--page-audit',str(page_audit),'--page-cache',str(analyst.settings.db_path.resolve().parent/'public-page-cache')]
         config={'command':sys.executable,'args':args}
@@ -44,7 +45,7 @@ def session(analyst,context,usage):
                    'definitions':definitions,'claude_names':['mcp__account_history__'+t['name'] for t in definitions]}
         finally:
             records=[]
-            for line in audit.read_text().splitlines():
+            for line in audit.read_text(encoding='utf-8').splitlines():
                 if not line.strip():continue
                 try:records.append(json.loads(line))
                 except ValueError:usage.setdefault('performance',{})['history_audit_incomplete']=True
@@ -54,7 +55,7 @@ def session(analyst,context,usage):
             usage.setdefault('performance',{})['history_queries']=len(records)
             usage['performance']['history_rows']=sum(len(r.get('result',{}).get('items',[])) for r in records)
             pages=[]
-            for line in page_audit.read_text().splitlines():
+            for line in page_audit.read_text(encoding='utf-8').splitlines():
                 try:pages.append(json.loads(line))
                 except ValueError:usage['performance']['page_audit_incomplete']=True
             for entry in pages:record(usage,'public_page_fetch',entry)

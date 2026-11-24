@@ -1,15 +1,37 @@
 """Cross-process exclusion between model execution and temporary cookie-recovery Chrome."""
 from contextlib import contextmanager
-import fcntl
 import os
 import json
 import socket
 from datetime import datetime,timezone
 
+if os.name == 'nt':
+    import errno
+    import msvcrt
+else:
+    import fcntl
+
 
 def _take(fd):
+    if os.name == 'nt':
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError as exc:
+            if exc.errno == errno.EACCES:
+                return False
+            raise
     try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);return True
     except BlockingIOError:return False
+
+
+def _release(fd):
+    if os.name == 'nt':
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(fd,fcntl.LOCK_UN)
 
 
 def _legacy_interactive(db_path):
@@ -33,11 +55,11 @@ def slot(db_path,*,model=False):
             guard=os.open(str(path)+'.interactive',os.O_CREAT|os.O_RDWR,0o600)
             try:
                 if not _take(guard) or _legacy_interactive(db_path):
-                    fcntl.flock(fd,fcntl.LOCK_UN);acquired=False
+                    _release(fd);acquired=False
             finally:os.close(guard)
         yield acquired
     finally:
-        if acquired:fcntl.flock(fd,fcntl.LOCK_UN)
+        if acquired:_release(fd)
         os.close(fd)
 
 
@@ -60,5 +82,5 @@ def interactive_slot(db_path,*,hold_startup=False):
     finally:
         release_startup()
         if guard is not None:
-            if acquired:fcntl.flock(guard,fcntl.LOCK_UN)
+            if acquired:_release(guard)
             os.close(guard)

@@ -2,9 +2,21 @@
 
 程序持续采集黄金行情、宏观指标、日历和快讯，按价格变化与事件触发AI分析。同一轮输出市场研究、启用真实账户的操作建议，以及不含私人账户信息的公众分析和11档仓位推荐。规模比较分开现仓与新增扣费收益/损失，并说明相邻规模多买部分的额外得失及事实依据；目标仓位和可承受预算不代替买入优势。目标价区分当轮证据与假设，说明期限内实现路径，并检验有依据的较弱反弹及邻近退出情景，不能只用几乎相同目标比较；允许有据沿用原价，缺替代依据直说。未来24小时有重要事件时，一次参与、部分参与及公布后再定须明确首选、相对理由和切换条件，保留提前买入、分批或等待的自主选择。复用reason/price_basis，不增加输出字段、模型请求、通知段落或执行规则。
 
-当前模式为 `live_only`：只读同步浙商账户，所有真实买卖、挂单和撤改均由本人确认操作，程序不提交真实订单。Claude与Codex可独立开关，低配机器串行调用模型。
+默认模式为 `live_only`。Linux 服务端通过京东网页会话同步已启用账户。Windows 本机通过京东金融桌面端同步，可选开启 AI 建议克重预填。真实买卖、挂单和撤改由本人在京东确认。Claude 和 Codex 可独立开关，模型串行运行。
 
 [当前仓库](https://github.com/blue-green-red/Trade-Accumulated-Gold-CN) · [快速开始](#快速开始) · [核心配置](#核心配置) · [网页看板](#网页看板) · [独立 Skill](docs/legacy-skill.md) · [历史模拟实验](docs/simulation-archive.md)
+
+## 运行方式与共用代码
+
+| | Linux 服务端 | Windows 本机 |
+|---|---|---|
+| 启动入口 | [systemd 服务](#systemd-常驻部署) | [PowerShell 启动脚本](#windows-本机) |
+| 京东账户来源 | `GOLD_JD_LIVE_SOURCE=web`，使用已登录的京东网页会话 | `GOLD_JD_LIVE_SOURCE=desktop`，读取已登录的京东金融桌面端 |
+| 看板 | Python 后端提供构建后的 Vue 页面，可接 HTTPS 反向代理 | Vue 开发服务 `127.0.0.1:5173`，代理至本机 Python 后端 `127.0.0.1:18080` |
+| 运行数据 | 由 `GOLD_MONITOR_DB` 指定，默认 `monitor/data/monitor.db` | 启动脚本使用 `monitor/data/desktop/monitor.db` |
+| 交易准备 | 展示建议，由本人打开京东操作 | 可打开桌面表单，并为有效即时买卖建议预填克重 |
+
+两种方式共用三个 Python 进程入口。行情采集、模型调度、建议校验和通知由 `monitor` 处理。看板与 API 由 `monitor.web` 提供，页面都来自 `frontend/`。`monitor.jd_live_sync` 按所选数据源读取账户，两种数据源共用 `monitor.jd_live_readonly` 的快照、SQLite 表和建议读取。平台差异集中在启动器、京东账户来源和进程锁。两边各自使用本机的 SQLite 文件，凭据从各自的 `.env` 或进程环境读取。
 
 ## 当前运行范围
 
@@ -15,7 +27,7 @@
 | 公众版 | 同轮生成公共形势分析和0%至100%共11档仓位推荐，不额外调用模型，不引用私人账户 |
 | 数据采集 | 程序通过接口与网页获取并缓存，不消耗大模型token；仅模型连接使用代理 |
 | 通知 | 真实建议、行情摘要、京东登录维护分别订阅；微信显示AI，私人前端保留模型名 |
-| 登录维护 | 每小时检查京东登录，确认失效后开启限时入口并提醒 |
+| 登录维护 | Linux 网页会话可自动检查并提供限时登录入口，Windows 在京东金融客户端登录 |
 | 前端 | Vue分页面按需加载与缓存，真实账户、行情、AI研究、通知和系统状态 |
 | 训练与复盘 | 保存完整分析输入输出和只读取数记录，历史实验数据保留 |
 
@@ -205,15 +217,7 @@ PushPlus分析摘要与真实账户通知共用HTML分区卡片：顶部仅一�
 
 `notification_outbox` 持久化本次已订阅事件的发送任务。明确失败在约60秒、180秒后重试，总共最多3次尝试、最长15分钟；重试前核对通知开关、模型开关、真实建议有效性及账户版本。受理成功不重发，关闭通知不补发旧事件；读取超时、连接中断或发送中进程退出等结果不明的情况标为“受理结果待核对”，避免自动重复发送。前端可查看重试次数、下次尝试时间及停止状态。
 
-```bash
-# 安装依赖后，安装并启动独立只读采集服务
-python3 -m pip install -r requirements.txt
-cp deploy/gold-jd-sync.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now gold-jd-sync
-# 单次只读检查，不打印账户金额或凭据
-python3 -m monitor.jd_live_sync --once
-```
+Linux 部署见 [systemd 常驻部署](#systemd-常驻部署)。在对应虚拟环境中运行 `python -m monitor.jd_live_sync --once` 可做单次只读采集检查。
 
 开市期间 `GOLD_JD_LIVE_QUOTE_SECONDS` 默认60秒，`GOLD_JD_LIVE_REFRESH_SECONDS` 默认300秒（持仓、现金与委托），`GOLD_JD_LIVE_HISTORY_SECONDS` 默认1800秒（批次与清仓样本）；最低60秒，历史不快于账户轮询。账户变化时提前更新历史样本；休市报价暂停、账户检查降至至少30分钟，开盘立即补齐账户、委托和报价。手动刷新合并30秒内的重复请求并读取全量。这些只读接口不使用ClawX密钥，与京东参考数据每天10次的额度独立，也不消耗模型Token。数据读取、手动刷新、建议通知均不创建、修改或撤销真实订单。公开参考 [jd-gold-price](https://github.com/cyanlis/jd-gold-price) 提供持仓查询实现，其交易接口只是待验证猜测；[jdgold](https://github.com/xuqingyuan0902-dot/jdgold) 的账户OAuth后端契约尚未确认，买卖部分为模拟比赛，均不能当作真实下单能力。
 
@@ -261,6 +265,18 @@ SSH模式需保持终端连接，用本机浏览器访问 `http://127.0.0.1:1455
 执行 `systemctl stop gold-jd-readonly` 或关闭Chrome会结束临时远程访问，已保存的京东登录配置仍可供 `gold-jd-sync` 按需恢复；会话是否有效由京东服务端决定，失效后需要本人重新登录。浏览器配置保存在被Git忽略的 `monitor/data/jd-remote-browser/chrome-profile`（目录700），不导出Cookie、不进入模型输入或网页接口，不启用浏览器密码保存。远程诊断只记录脱敏字段结构，不包含持仓金额；实际同步状态以账户页和采集服务为准。正常同步时账户页不展示电脑助手或重新登录引导，只在会话失效/尚未建立时提示开启临时远程浏览器登录。
 
 浏览器导航前先安装与本地助手相同的只读查询白名单，并绕过已保存的Service Worker缓存代理，再开放远程入口；拦截器进程、Chrome或任一组件退出时整个会话停止。没有真实下单能力。需要更新白名单时先停止会话，修改并重新测试后再启动。
+
+### Windows 桌面采集与预填
+
+安装与启动见 [Windows 本机](#windows-本机)。桌面采集运行在已登录的 Windows 用户会话中。
+
+同步器每分钟读取持仓，每五分钟或手动刷新时打开买入余额和待成交页面取数，再返回积存金页。余额限买金专户。界面空白、正在加载、字段改版或出现未识别的条件单条目时，相应数据保持未知。当前显示价没有供应商报价时间，以参考价展示。
+
+本地看板的真实账户详情可打开京东买入、卖出、限价买入、限价卖出、止盈止损和待成交页面。在京东打开目标银行的积存金首页，再点击看板入口。看板的买入入口使用克重模式。待成交入口用于查看或核对要撤回的订单。
+
+卖出面板默认显示「暂不使用」且只有一张可识别的手续费优惠时，连接层自动勾选并核对页面结果。存在多张或优惠状态无法判断时，可在京东面板核对选择。
+
+预填只处理启动后发布并通过共用校验的 Codex 即时买卖建议。京东显示对应银行的积存金首页时，连接层打开表单，核对价格条件并填写、读回原建议克重。买入建议须有新鲜且可核验的本行买价。桌面显示价缺少供应商报价时间时仍以参考价展示，买入建议会显示待核对。本人在京东核对表单、点击买入或卖出并输入密码。预填进度见本地账户页。
 
 ### 本地助手备用方式
 
@@ -380,38 +396,56 @@ AI 分析频率与数据采集频率分开；行情每分钟更新不代表每�
 
 ## 快速开始
 
-当前运行环境为 Linux、Python 3.10。先准备可用的数据源网络连接；AI 后端按下面的配置选择。
+先克隆仓库，再按平台安装。两个平台使用同一份 `requirements.txt`、`.env.example` 和 Vue 源码。
 
 ```bash
 git clone https://github.com/blue-green-red/Trade-Accumulated-Gold-CN.git
 cd Trade-Accumulated-Gold-CN
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-cp .env.example .env
-chmod 600 .env
 ```
 
-编辑 `.env`，填写需要的密钥、网页密码和推送配置。`claude` / `codex` CLI 应安装并完成登录，且能被运行服务的用户找到；程序检测命令是否存在，但可执行文件存在不等于鉴权已成功。CLI 非默认路径时，可设置 `GOLD_CLAUDE_CLI` / `GOLD_CODEX_CLI` 的绝对路径。
+### 共用配置
+
+首次安装时用 `.env.example` 创建 `.env`。在其中配置模型 CLI、网页密码与可选的 `PUSHPLUS_TOKEN` 或 `SERVERCHAN_SENDKEY`。CLI 由运行程序的用户完成登录。可通过 `GOLD_CLAUDE_CLI`、`GOLD_CODEX_CLI` 设置绝对路径，通过 `GOLD_CODEX_MODEL` 选择 Codex 模型。通知内容取决于看板订阅。
 
 | 模型 | 后端选择 |
 |---|---|
-| Claude | `GOLD_AI_BACKEND=auto`：有 `ANTHROPIC_API_KEY` 使用 API，否则尝试本机 Claude Code；也可指定 `api` 或 `claude_code` |
-| Codex | 使用本机已登录的 `codex` CLI，路径可通过 `GOLD_CODEX_CLI` 指定 |
+| Claude | `GOLD_AI_BACKEND=auto` 根据 `ANTHROPIC_API_KEY` 选择 API 或本机 Claude Code，也可指定 `api` 或 `claude_code` |
+| Codex | 本机已登录的 Codex CLI |
 
-没有可用后端的模型不进行分析。京东参考密钥可选，缺失时标为未配置；不影响独立的京东成交报价。通知可选，未配置 PushPlus/Server酱时仅记录日志。
+### Linux 服务端
 
-分别启动监控与网页进程：
+使用 Python 3.10 或更新版本。在仓库根目录安装依赖，首次安装时创建配置。
 
 ```bash
-# 终端一
-python3 -m monitor --dry-run
-
-# 终端二，同样激活虚拟环境
-python3 -m monitor.web
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+chmod 600 .env
 ```
 
-默认网页为 `http://127.0.0.1:8080`。`--dry-run` 只关闭通知推送，仍会请求行情、调度AI和推进模拟账户。首次运行会创建数据库和表；在网页 AI 页检查模型状态与开关，在账户页查看开账结果。
+在三终端各执行一条命令进行前台检查。网页默认位于 `http://127.0.0.1:8080/`，公众页面位于 `/public/`。
+
+```bash
+.venv/bin/python -m monitor --dry-run
+.venv/bin/python -m monitor.web
+.venv/bin/python -m monitor.jd_live_sync
+```
+
+`--dry-run` 关闭通知发送，仍会采集行情并运行启用的模型。常驻运行改用 [systemd](#systemd-常驻部署)。京东网页会话首次登录或续期见 [临时远程只读浏览器](#ecs临时远程只读浏览器1455)。
+
+### Windows 本机
+
+安装 Python、Node.js 和京东金融桌面程序。在已登录的 Windows 用户会话打开浙商积存金首页，然后在 PowerShell 中执行。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -X utf8 -m pip install -r requirements.txt
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+npm --prefix frontend ci
+.\scripts\start_desktop.ps1 -Bank zheshang
+```
+
+默认启动采集、共用后端和本地 Vue 看板。使用 `-EnableAI` 开启 Codex 分析，搭配 `-EnableAutoPrepare` 开启克重预填。配置推送渠道后可加入 `-EnableNotifications` 开启微信发送。看板位于 [127.0.0.1:5173](http://127.0.0.1:5173/)，公众页位于 [127.0.0.1:18080/public/](http://127.0.0.1:18080/public/)。进程日志和数据库位于 `monitor/data/desktop/`。采集字段与预填校验见 [Windows 桌面采集与预填](#windows-桌面采集与预填)。
 
 ### 有效期与前端状态
 
@@ -607,15 +641,13 @@ GOLD_WEB_MIN_PASSWORD_LENGTH=12
 
 ### systemd 常驻部署
 
-模板默认使用 `/root/Trade-Accumulated-Gold-CN` 和 `/usr/bin/python3`。部署到其他目录或使用虚拟环境时，**先修改两个服务的 `WorkingDirectory` 和 `ExecStart`**，并按服务用户调整 `HOME`，确认其可访问 CLI 登录凭据。
+三个服务对应 [Linux 前台命令](#linux-服务端)。模板默认使用 `/root/Trade-Accumulated-Gold-CN` 和 `/usr/bin/python3`。安装后先核对每个服务的 `WorkingDirectory`，采用快速开始的虚拟环境时，把 `ExecStart` 的解释器换为该项目的 `.venv/bin/python` 绝对路径。模型使用对应服务用户的 CLI 登录状态。
 
 ```bash
-sudo cp deploy/gold-monitor.service /etc/systemd/system/
-sudo cp deploy/gold-web.service /etc/systemd/system/
-# 编辑服务路径及 Python 解释器后执行
+sudo install -m 644 deploy/gold-{monitor,web,jd-sync}.service /etc/systemd/system/
+# 按上文编辑安装后的服务文件，再启动
 sudo systemctl daemon-reload
-sudo systemctl enable --now gold-monitor
-sudo systemctl enable --now gold-web
+sudo systemctl enable --now gold-monitor gold-web gold-jd-sync
 ```
 
 模板提供重启策略和内存限制：监控900MB、网页150MB。内存限制并不保证任何配置下都不会耗尽内存，应结合模型进程和服务日志观察。
@@ -821,6 +853,10 @@ monitor/
 ├── macro_cache.py       # 宏观行情与经济日历缓存
 ├── jd_research.py       # 京东参考采集、预算、退避与请求账本
 ├── jd_live_preflight.py # 分析前真实账户刷新检查与有界等待
+├── jd_live_sync.py      # 两种账户采集方式的共用进程入口
+├── jd_live_readonly.py  # 共用账户快照、SQLite 表与建议状态
+├── jd_desktop.py        # Windows 京东金融桌面适配器
+├── jd_desktop_prefill.py # Windows 即时买卖表单预填
 ├── runtime_resources.py # 模型和Cookie恢复浏览器的进程间排他锁
 ├── ai.py                # Claude/Codex 后端、结构化输出及分析记录
 ├── ai_inputs.py         # 保留账户与触发事实的输入精简
@@ -854,6 +890,7 @@ scripts/benchmark_mobile_pages.py
                         # 子页只读查询和响应字节数对比
 
 deploy/                 # systemd 服务模板
+scripts/start_desktop.ps1 # Windows 本机启动器
 tests/                  # 离线回归与浏览器集成测试
 docs/legacy-skill.md     # 独立分析 Skill 的安装与使用
 .claude/skills/gold-analysis/
